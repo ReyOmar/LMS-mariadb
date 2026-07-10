@@ -313,8 +313,9 @@ export default function LoginPage() {
           </div>
         )}
 
-        {successMsg && view === 'SETUP_PASSWORD' && (
-          <div className="mb-6 p-3 bg-emerald-500/10 border border-emerald-500/20 rounded-xl text-emerald-600 text-sm font-semibold max-w-full text-center">
+        {successMsg && (view === 'SETUP_PASSWORD' || view === 'REQUEST_ACCESS') && (
+          <div className="mb-6 p-3 bg-emerald-500/10 border border-emerald-500/20 rounded-xl text-emerald-600 text-sm font-semibold max-w-full text-center animate-in fade-in slide-in-from-top-2 duration-300 flex items-center justify-center gap-2">
+            <CheckCircle2 className="h-4 w-4 shrink-0" />
             {successMsg}
           </div>
         )}
@@ -542,9 +543,17 @@ export default function LoginPage() {
                       type="button"
                       onClick={handleSendVerification}
                       disabled={codeSending}
-                      className="text-xs text-primary font-bold hover:underline"
+                      className="text-xs text-primary font-bold hover:underline inline-flex items-center gap-1.5 transition-all"
                     >
-                      Reenviar código
+                      {codeSending ? (
+                        <>
+                          <Loader2 className="h-3 w-3 animate-spin" /> Reenviando...
+                        </>
+                      ) : (
+                        <>
+                          <Send className="h-3 w-3" /> Reenviar código
+                        </>
+                      )}
                     </button>
                   )}
                 </div>
