@@ -12,6 +12,7 @@ export class MailService implements OnModuleInit {
   private fromName: string;
   private appUrl: string;
   private enabled: boolean = false;
+  private brevoApiKey: string | null = null;
 
   constructor(
     private configService: ConfigService,
@@ -24,13 +25,22 @@ export class MailService implements OnModuleInit {
   }
 
   async onModuleInit() {
+    // Priority 1: Brevo HTTP API (works on Render free tier — SMTP ports are blocked)
+    const brevoKey = this.configService.get<string>('BREVO_API_KEY');
+    if (brevoKey) {
+      this.brevoApiKey = brevoKey;
+      this.enabled = true;
+      this.logger.log('Mail service [BREVO HTTP API]: Enabled ✅');
+      return;
+    }
+
+    // Priority 2: SMTP (for local dev or hosts that allow SMTP)
     const smtpHost = this.configService.get<string>('SMTP_HOST');
     const smtpPort = this.configService.get<string>('SMTP_PORT');
     const smtpUser = this.configService.get<string>('SMTP_USER');
     const smtpPass = this.configService.get<string>('SMTP_PASS');
 
     if (smtpHost && smtpUser && smtpPass) {
-      // Production SMTP
       this.transporter = nodemailer.createTransport({
         host: smtpHost,
         port: parseInt(smtpPort || '587', 10),
@@ -38,9 +48,9 @@ export class MailService implements OnModuleInit {
         auth: { user: smtpUser, pass: smtpPass },
       });
       this.enabled = true;
-      this.logger.log(`Mail service [PRODUCTION]: ${smtpHost}:${smtpPort}`);
+      this.logger.log(`Mail service [SMTP]: ${smtpHost}:${smtpPort}`);
     } else {
-      // Development fallback: Ethereal (catches all emails, provides preview URL)
+      // Fallback: Ethereal (dev mode)
       try {
         const testAccount = await nodemailer.createTestAccount();
         this.transporter = nodemailer.createTransport({
@@ -57,7 +67,7 @@ export class MailService implements OnModuleInit {
         );
       } catch (err) {
         this.logger.warn(
-          'Mail service DISABLED — Could not create Ethereal account. Set SMTP_HOST, SMTP_USER, SMTP_PASS in .env for production.',
+          'Mail service DISABLED — Set BREVO_API_KEY (recommended) or SMTP_HOST/USER/PASS.',
         );
       }
     }
@@ -81,11 +91,10 @@ export class MailService implements OnModuleInit {
   }
 
   /**
-   * Send an email with retry logic. Returns silently if mail is not configured.
-   * Retries up to 3 times with exponential backoff (1s, 2s, 4s).
+   * Send an email via Brevo HTTP API or SMTP with retry logic.
    */
   async sendMail(to: string, subject: string, html: string): Promise<boolean> {
-    if (!this.enabled || !this.transporter) {
+    if (!this.enabled) {
       this.logger.debug(`[MOCK] Email to ${to}: ${subject}`);
       return false;
     }
@@ -93,22 +102,25 @@ export class MailService implements OnModuleInit {
     const MAX_RETRIES = 3;
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
       try {
-        const info = await this.transporter.sendMail({
-          from: `"${this.fromName}" <${this.fromAddress}>`,
-          to,
-          subject,
-          html,
-        });
-        this.logger.log(`Email sent to ${to}: ${subject}`);
-        // Show preview URL for Ethereal (dev mode)
-        const previewUrl = nodemailer.getTestMessageUrl(info);
-        if (previewUrl) {
-          this.logger.debug(`Preview: ${previewUrl}`);
+        if (this.brevoApiKey) {
+          await this.sendViaBrevoApi(to, subject, html);
+        } else if (this.transporter) {
+          const info = await this.transporter.sendMail({
+            from: `"${this.fromName}" <${this.fromAddress}>`,
+            to,
+            subject,
+            html,
+          });
+          const previewUrl = nodemailer.getTestMessageUrl(info);
+          if (previewUrl) {
+            this.logger.debug(`Preview: ${previewUrl}`);
+          }
         }
+        this.logger.log(`Email sent to ${to}: ${subject}`);
         return true;
       } catch (err) {
         if (attempt < MAX_RETRIES) {
-          const delay = Math.pow(2, attempt - 1) * 1000; // 1s, 2s, 4s
+          const delay = Math.pow(2, attempt - 1) * 1000;
           this.logger.warn(`Email to ${to} failed (attempt ${attempt}/${MAX_RETRIES}), retrying in ${delay}ms...`);
           await new Promise((resolve) => setTimeout(resolve, delay));
         } else {
@@ -117,6 +129,31 @@ export class MailService implements OnModuleInit {
       }
     }
     return false;
+  }
+
+  /**
+   * Send email via Brevo's transactional email HTTP API (port 443, never blocked).
+   */
+  private async sendViaBrevoApi(to: string, subject: string, html: string): Promise<void> {
+    const response = await fetch('https://api.brevo.com/v3/smtp/email', {
+      method: 'POST',
+      headers: {
+        'api-key': this.brevoApiKey!,
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+      },
+      body: JSON.stringify({
+        sender: { name: this.fromName, email: this.fromAddress },
+        to: [{ email: to }],
+        subject,
+        htmlContent: html,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorBody = await response.text();
+      throw new Error(`Brevo API ${response.status}: ${errorBody}`);
+    }
   }
 
   // ─── TEMPLATE RENDERING ──────────────────────────────────
