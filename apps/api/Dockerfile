@@ -38,9 +38,14 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
 COPY --from=builder /app/node_modules/@prisma ./node_modules/@prisma
 
+# Copy Prisma CLI for db push at startup
+COPY --from=builder /app/node_modules/prisma ./node_modules/prisma
+COPY --from=builder /app/node_modules/.bin/prisma ./node_modules/.bin/prisma
+
 # Copy built application
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/prisma ./prisma
+COPY prisma.config.ts ./
 COPY package.json ./
 
 # Create uploads directory (ephemeral on Render free tier)
@@ -51,4 +56,5 @@ USER nestjs
 # Render injects PORT automatically; fallback to 3200 for local Docker
 EXPOSE ${PORT:-3200}
 
-CMD ["node", "dist/main.js"]
+# Create tables on startup (no-op if already exist), then start app
+CMD ["sh", "-c", "npx prisma db push --skip-generate && node dist/main.js"]
