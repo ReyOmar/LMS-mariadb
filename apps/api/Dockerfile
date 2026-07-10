@@ -56,5 +56,5 @@ USER nestjs
 # Render injects PORT automatically; fallback to 3200 for local Docker
 EXPOSE ${PORT:-3200}
 
-# Create tables on startup (no-op if already exist), then start app
-CMD ["sh", "-c", "npx prisma db push && node dist/main.js"]
+# Create tables, seed admin if empty, then start app
+CMD ["sh", "-c", "npx prisma db push && node prisma/prod-seed.js && node dist/main.js"]
