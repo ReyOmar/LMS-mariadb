@@ -57,4 +57,4 @@ USER nestjs
 EXPOSE ${PORT:-3200}
 
 # Create tables on startup (no-op if already exist), then start app
-CMD ["sh", "-c", "npx prisma db push --skip-generate && node dist/main.js"]
+CMD ["sh", "-c", "npx prisma db push && node dist/main.js"]
