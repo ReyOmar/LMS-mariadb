@@ -49,7 +49,7 @@ export class HealthController {
         heapTotal: `${(mem.heapTotal / 1024 / 1024).toFixed(1)} MB`,
       },
       environment: process.env.NODE_ENV || 'development',
-      storage: this.configService.get('R2_ENDPOINT') ? 'cloudflare-r2' : 'local',
+      storage: this.configService.get('R2_ACCOUNT_ID') ? 'cloudflare-r2' : 'local',
       version: process.env.npm_package_version || '1.0.0',
     };
   }

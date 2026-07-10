@@ -3,7 +3,7 @@ generator client {
 }
 
 datasource db {
-  provider = "mysql"
+  provider = "postgresql"
 }
 
 // ── SISTEMA DE AUTENTICACIÓN INDEPENDIENTE ──
@@ -218,7 +218,7 @@ model lms_recursos {
   contenido_html        String?            @db.Text
   url_archivo           String?
   url_referencia        String?               // URL externa opcional para recursos adicionales
-  archivo_adjunto       String?               @db.LongText // Base64 del archivo adjunto (PDF, Word, PPT, etc.)
+  archivo_adjunto       String?               @db.Text // Base64 del archivo adjunto (PDF, Word, PPT, etc.)
   archivo_adjunto_nombre String?              // Nombre original del archivo adjunto
   archivo_max_size_mb   Int?                  // Límite de peso de archivo en MB (admin y estudiante)
   quiz_config           String?               @db.Text // JSON: { intentos_permitidos, tiempo_minutos, preguntas: [...] }

@@ -1,5 +1,6 @@
 # ══════════════════════════════════════════════════════════
 # LMS API — Multi-stage Dockerfile (NestJS + Fastify + SWC)
+# Optimized for Render free tier
 # ══════════════════════════════════════════════════════════
 
 # ── Stage 1: Install dependencies ─────────────────────────
@@ -41,14 +42,12 @@ COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/prisma ./prisma
 COPY package.json ./
 
-# Create uploads directory
+# Create uploads directory (ephemeral on Render free tier)
 RUN mkdir -p uploads/certificados && chown -R nestjs:nodejs uploads
 
 USER nestjs
 
-EXPOSE 3200
-
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD wget -qO- http://localhost:3200/api/health || exit 1
+# Render injects PORT automatically; fallback to 3200 for local Docker
+EXPOSE ${PORT:-3200}
 
 CMD ["node", "dist/main.js"]

@@ -11,7 +11,7 @@
     "build:api": "dotenv -e .env -- npm run build --prefix apps/api",
     "build:client": "dotenv -e .env -- npm run build --prefix apps/client",
     "build": "concurrently --success all -n api,client -c green,cyan \"npm run build:api\" \"npm run build:client\"",
-    "start:api": "dotenv -e .env -- npm run start:prod --prefix apps/api",
+    "start:api": "dotenv -e .env -- npm run start --prefix apps/api",
     "start:client": "dotenv -e .env -- npm run start --prefix apps/client",
     "start": "concurrently -k -n api,client -c green,cyan \"npm run start:api\" \"npm run start:client\"",
     "db:generate": "cd apps/api && npx prisma generate",

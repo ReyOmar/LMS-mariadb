@@ -5,11 +5,20 @@ dist
 *.log
 .env
 
-# Database and Uploads
+# Database
 apps/api/prisma/*.db
 *.sqlite
+
+# Uploads (ephemeral on Render, persistent with R2)
 apps/api/uploads/
 
 # Generated code (regenerate with: npx prisma generate)
 generated/
 
+# Build artifacts
+*.tsbuildinfo
+.turbo
+
+# IDE
+.vscode/
+.idea/

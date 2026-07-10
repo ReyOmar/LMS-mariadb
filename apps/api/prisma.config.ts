@@ -8,6 +8,6 @@ export default defineConfig({
     seed: "npx ts-node prisma/seed.ts",
   },
   datasource: {
-    url: process.env.DATABASE_URL || "mysql://lms_user:lms_password@localhost:3307/lms_db",
+    url: process.env.DATABASE_URL || "postgresql://lms_user:lms_password@localhost:5432/lms_db",
   },
 });

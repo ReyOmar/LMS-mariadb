@@ -1,147 +1,130 @@
 # 🎓 LMS PESV Education
 
-Sistema de Gestión de Aprendizaje (LMS) profesional para capacitación empresarial en Seguridad Vial (PESV).
+Sistema de Gestión de Aprendizaje (LMS) para capacitación en Seguridad Vial (PESV).
 
 ## Arquitectura
 
 ```
-M-dulo-LMS/
-├── apps/
-│   ├── api/          # Backend — NestJS + Fastify + Prisma + WebSockets
-│   └── client/       # Frontend — Next.js 15 + React 19 + TailwindCSS v4
-├── .env              # Variables de entorno (NO versionar)
-├── docker-compose.yml
-└── package.json      # Scripts del monorepo
+apps/
+├── api/          NestJS + Fastify + Prisma (PostgreSQL)
+└── client/       Next.js 15 (React 19, TailwindCSS 4)
 ```
 
-### Tech Stack
+## Requisitos
 
-| Capa | Tecnología |
-|------|-----------|
-| **Backend** | NestJS 11, Fastify, Prisma ORM 7, WebSockets (ws) |
-| **Frontend** | Next.js 15, React 19, TailwindCSS v4, Recharts |
-| **Base de Datos** | MySQL / MariaDB |
-| **Autenticación** | JWT (HS256), bcryptjs, Guards + Roles |
-| **Archivos** | Cloudflare R2 / Almacenamiento local |
-| **Correo** | Nodemailer (SMTP) con plantillas dinámicas |
-| **Certificados** | PDFKit (generación dinámica de PDFs) |
+- **Node.js** 20+
+- **PostgreSQL** 15+ (local para desarrollo, Render para producción)
 
-### Roles del Sistema
+## Desarrollo Local
 
-| Rol | Descripción |
-|-----|------------|
-| **Administrador** | Gestión completa: usuarios, cursos, configuración, certificados |
-| **Profesor/Supervisor** | Calificación de tareas, monitoreo de estudiantes, firma digital |
-| **Estudiante/Capacitado** | Cursos, tareas, quizzes, certificados, mensajería |
+### 1. Configurar base de datos
 
----
-
-## 🚀 Inicio Rápido
-
-### Prerrequisitos
-
-- Node.js ≥ 18
-- Docker & Docker Compose (para la base de datos)
-
-### 1. Instalar dependencias
+Instala PostgreSQL localmente o usa Docker:
 
 ```bash
-npm run init
+docker run -d --name lms-postgres \
+  -e POSTGRES_USER=lms_user \
+  -e POSTGRES_PASSWORD=lms_password \
+  -e POSTGRES_DB=lms_db \
+  -p 5432:5432 \
+  postgres:16-alpine
 ```
 
-### 2. Levantar la base de datos
+### 2. Configurar variables de entorno
 
 ```bash
-docker-compose up -d
+cp .env.example .env
+# Editar .env con tus valores (DATABASE_URL, JWT_SECRET, etc.)
 ```
 
-### 3. Sincronizar schema y seed
+Generar JWT_SECRET seguro:
+```bash
+node -e "console.log(require('crypto').randomBytes(64).toString('hex'))"
+```
+
+### 3. Instalar y ejecutar
 
 ```bash
-# Desde apps/api:
-npx prisma db push
-npx prisma db seed
+npm run init          # Instala dependencias + genera Prisma client
+npm run db:push       # Crea las tablas en PostgreSQL
+npm run db:seed       # Datos iniciales (usuarios, plantillas de correo)
+npm run dev           # API (3200) + Client (3100) en paralelo
 ```
 
-> ⚠️ **El seed genera contraseñas aleatorias**. Se mostrarán en la consola una sola vez. Guárdalas.
+## Despliegue en Render (Free Tier)
 
-### 4. Iniciar en modo desarrollo
+### Opción A: Blueprint automático
 
-```bash
-npm run dev
-```
+1. Conecta tu repositorio en [Render Dashboard](https://dashboard.render.com)
+2. Selecciona **Blueprint** y apunta al archivo `render.yaml`
+3. Render creará automáticamente:
+   - **PostgreSQL** gratuito (1GB)
+   - **API** como Docker web service
+   - **Client** como Docker web service
+4. Configura las variables sensibles manualmente en el Dashboard:
+   - `SMTP_PASS` (clave SMTP de Brevo)
+   - `R2_*` (credenciales de Cloudflare R2, si usas almacenamiento cloud)
 
-- **API**: http://localhost:3200/api
-- **Frontend**: http://localhost:3100
-- **Swagger** (solo dev): http://localhost:3200/docs
+### Opción B: Deploy manual
 
----
+1. Crea una base de datos PostgreSQL en Render (plan Free)
+2. Crea un Web Service para la API:
+   - **Docker**, apuntando a `apps/api/Dockerfile`
+   - Variables de entorno: `DATABASE_URL`, `JWT_SECRET`, `CORS_ORIGIN`, `SMTP_*`
+3. Crea un Web Service para el Client:
+   - **Docker**, apuntando a `apps/client/Dockerfile`
+   - Build arg: `NEXT_PUBLIC_API_URL=https://tu-api.onrender.com/api`
 
-## 📋 Scripts Disponibles
+### Variables de Entorno Requeridas (API)
+
+| Variable | Descripción |
+|---|---|
+| `DATABASE_URL` | Connection string de PostgreSQL |
+| `JWT_SECRET` | Secret para tokens JWT (mín 16 chars) |
+| `CORS_ORIGIN` | URL del frontend (sin trailing slash) |
+| `APP_URL` | URL pública del frontend (para emails) |
+| `SMTP_HOST` | `smtp-relay.brevo.com` |
+| `SMTP_PORT` | `587` |
+| `SMTP_USER` | Login SMTP de Brevo |
+| `SMTP_PASS` | Clave SMTP de Brevo |
+| `SMTP_FROM` | Email remitente |
+
+### Variables de Entorno Requeridas (Client)
+
+| Variable | Descripción |
+|---|---|
+| `NEXT_PUBLIC_API_URL` | URL pública de la API (build-time) |
+
+## Limitaciones del Free Tier
+
+- Los servicios se **duermen tras 15 min** de inactividad (primer request tarda ~30s)
+- PostgreSQL tiene **1GB** de almacenamiento
+- El almacenamiento local de archivos es **efímero** (se pierde al reiniciar)
+  - Configura **Cloudflare R2** para almacenamiento persistente de archivos
+
+## Scripts Disponibles
 
 | Script | Descripción |
-|--------|------------|
-| `npm run dev` | Inicia API + Client en modo desarrollo |
-| `npm run build` | Build de producción de ambos |
-| `npm run start` | Inicia ambos en producción |
-| `npm run typecheck` | Verificación TypeScript de ambos |
-| `npm run db:push` | Sincroniza schema con la DB |
-| `npm run db:seed` | Ejecuta el seed (solo desarrollo) |
-| `npm run db:generate` | Regenera el cliente Prisma |
+|---|---|
+| `npm run dev` | Desarrollo: API + Client con hot reload |
+| `npm run build` | Build de producción (API + Client) |
+| `npm run start` | Inicia en modo producción |
+| `npm run db:push` | Sincroniza schema con la base de datos |
+| `npm run db:seed` | Datos iniciales |
+| `npm run db:generate` | Regenera Prisma Client |
+| `npm run typecheck` | Verificación de tipos TypeScript |
+| `npm test` | Ejecuta tests (API) |
 
----
+## Correos Electrónicos
 
-## 🔒 Seguridad
+El sistema usa **Brevo** (ex-Sendinblue) como servicio SMTP. Las plantillas de correo son editables desde el panel de administración del LMS.
 
-- **JWT** con secreto mínimo de 16 caracteres, validado al arranque
-- **Guards globales**: `JwtAuthGuard` → `RolesGuard` → `ThrottlerGuard`
-- **Helmet** para headers de seguridad (X-Frame-Options, HSTS, etc.)
-- **Rate Limiting** global con `@nestjs/throttler`
-- **Validación de DTOs** con `class-validator` + `whitelist: true`
-- **Token Revocation** en logout y eliminación de usuarios
-- **bcrypt** para hashing de contraseñas (salt rounds: 10)
-- **CORS** configurable por entorno
-
----
-
-## 🏗️ Producción
-
-1. Copiar `.env.production.example` a `.env` y completar las variables
-2. Generar un JWT_SECRET seguro:
-   ```bash
-   node -e "console.log(require('crypto').randomBytes(64).toString('hex'))"
-   ```
-3. Build y deploy:
-   ```bash
-   npm run build
-   npm run start
-   ```
-
----
-
-## 📊 Escala de Calificación
-
-El sistema usa escala **0.0 a 5.0** por defecto:
-- **Nota mínima de aprobación**: 3.0 (configurable por curso)
-- Los quizzes se auto-califican
-- Las tareas se califican manualmente por el supervisor
-
----
-
-## 📡 Comunicación en Tiempo Real
-
-WebSocket events principales:
-
-| Evento | Descripción |
-|--------|------------|
-| `dashboard:refresh` | Refrescar datos de dashboard |
-| `submission:graded` | Entrega calificada |
-| `notification:new` | Nueva notificación |
-| `course:lock` / `course:unlock` | Bloqueo de edición de curso |
-| `config:updated` | Configuración de plataforma actualizada |
-
----
-
-## 📝 Licencia
-
-Proyecto privado — Todos los derechos reservados.
+Eventos de correo configurados:
+- Recuperación de contraseña
+- Bienvenida a usuario aprobado
+- Calificación recibida
+- Entrega rechazada
+- Matrícula en curso
+- Certificado generado
+- Recordatorio de inactividad
+- Y más...

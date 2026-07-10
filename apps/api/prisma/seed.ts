@@ -1,6 +1,4 @@
-// Prisma TS Server Refresh Trigger
 import { PrismaClient, lms_rol_usuario } from '@prisma/client';
-import { PrismaMariaDb } from '@prisma/adapter-mariadb';
 import * as bcrypt from 'bcryptjs';
 import * as crypto from 'crypto';
 
@@ -13,15 +11,7 @@ if (process.env.NODE_ENV === 'production') {
 // Generate strong random passwords for seed users
 const generatePassword = () => crypto.randomBytes(6).toString('base64url'); // ~8 chars, URL-safe
 
-// Parse DATABASE_URL: mysql://user:password@host:port/database
-function parseDbUrl(url: string) {
-  const match = url.match(/mysql:\/\/([^:]+):([^@]+)@([^:]+):(\d+)\/(.+)/);
-  if (!match) throw new Error(`Invalid DATABASE_URL: ${url}`);
-  return { user: match[1], password: match[2], host: match[3], port: parseInt(match[4], 10), database: match[5] };
-}
-const dbConfig = parseDbUrl(process.env.DATABASE_URL || 'mysql://lms_user:lms_password@localhost:3307/lms_db');
-const adapter = new PrismaMariaDb({ ...dbConfig, connectionLimit: 5 });
-const prisma = new PrismaClient({ adapter });
+const prisma = new PrismaClient();
 
 async function main() {
   console.log('Seeding database with secure credentials...');

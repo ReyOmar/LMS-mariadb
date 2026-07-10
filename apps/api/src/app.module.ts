@@ -28,7 +28,8 @@ import { LmsEventListener } from './common/listeners/lms-event.listener';
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
-      envFilePath: ['../../.env'],
+      envFilePath: process.env.NODE_ENV === 'production' ? [] : ['../../.env'],
+      ignoreEnvFile: process.env.NODE_ENV === 'production',
     }),
 
     // JWT — available globally for signing/verifying tokens

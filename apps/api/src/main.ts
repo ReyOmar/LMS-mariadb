@@ -80,12 +80,12 @@ async function bootstrap() {
   const configService = app.get(ConfigService);
 
   // ── Security: Validate JWT_SECRET at startup ──
+  const logger = new Logger('Bootstrap');
   const jwtSecret = configService.get<string>('JWT_SECRET') || '';
   const INSECURE_DEFAULTS = ['change_this_in_production', 'lms-super-secret-key-2026', 'secret', 'jwt_secret'];
   if (!jwtSecret || jwtSecret.length < 16 || INSECURE_DEFAULTS.includes(jwtSecret)) {
-    console.error('\n❌ FATAL: JWT_SECRET is missing, too short (<16 chars), or using an insecure default.');
-    console.error('   Generate a secure one with: node -e "console.log(require(\'crypto\').randomBytes(64).toString(\'hex\'))"');
-    console.error('   Then set it in your .env file.\n');
+    logger.error('FATAL: JWT_SECRET is missing, too short (<16 chars), or using an insecure default.');
+    logger.error('Generate a secure one with: node -e "console.log(require(\'crypto\').randomBytes(64).toString(\'hex\'))"');
     process.exit(1);
   }
   
@@ -125,8 +125,8 @@ async function bootstrap() {
   // Enable graceful shutdown hooks (Prisma disconnect, cron cleanup, WS close)
   app.enableShutdownHooks();
 
-  const port = process.env.APP_PORT || 3200;
+  const port = process.env.PORT || process.env.APP_PORT || 3200;
   await app.listen(port, '0.0.0.0');
-  console.log(`LMS API running on http://localhost:${port}/api`);
+  logger.log(`LMS API running on port ${port}`);
 }
 bootstrap();

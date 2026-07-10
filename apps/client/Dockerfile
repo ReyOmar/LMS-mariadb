@@ -1,5 +1,6 @@
 # ══════════════════════════════════════════════════════════
 # LMS Client — Multi-stage Dockerfile (Next.js 15)
+# Optimized for Render free tier
 # ══════════════════════════════════════════════════════════
 
 # ── Stage 1: Install dependencies ─────────────────────────
@@ -13,7 +14,7 @@ FROM node:20-alpine AS builder
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY package.json package-lock.json ./
-COPY next.config.mjs tsconfig.json ./
+COPY next.config.mjs tsconfig.json postcss.config.mjs ./
 COPY src ./src
 COPY public ./public
 
@@ -39,9 +40,7 @@ COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 
 USER nextjs
 
-EXPOSE 3000
-
-ENV PORT=3000
+# Render injects PORT automatically
 ENV HOSTNAME="0.0.0.0"
 
 CMD ["node", "server.js"]

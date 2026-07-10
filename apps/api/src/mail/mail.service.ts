@@ -1,4 +1,3 @@
-// Prisma TS Server Refresh Trigger
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as nodemailer from 'nodemailer';
