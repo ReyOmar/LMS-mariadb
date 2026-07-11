@@ -15,8 +15,8 @@
     "start:client": "dotenv -e .env -- npm run start --prefix apps/client",
     "start": "concurrently -k -n api,client -c green,cyan \"npm run start:api\" \"npm run start:client\"",
     "db:generate": "cd apps/api && npx prisma generate",
-    "db:push": "dotenv -e .env -- npx prisma db push --schema=apps/api/prisma/schema.prisma",
-    "db:seed": "dotenv -e .env -- npx prisma db seed --schema=apps/api/prisma/schema.prisma",
+    "db:push": "cd apps/api && dotenv -e ../../.env -- npx prisma db push",
+    "db:seed": "cd apps/api && dotenv -e ../../.env -- npx prisma db seed",
     "typecheck": "concurrently --success all \"cd apps/api && npx tsc --noEmit\" \"cd apps/client && npx tsc --noEmit\"",
     "test": "cd apps/api && npm test",
     "prepare": "husky"

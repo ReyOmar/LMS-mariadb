@@ -1,4 +1,5 @@
 import { PrismaClient, lms_rol_usuario } from '@prisma/client';
+import { PrismaMariaDb } from '@prisma/adapter-mariadb';
 import * as bcrypt from 'bcryptjs';
 import * as crypto from 'crypto';
 
@@ -11,7 +12,15 @@ if (process.env.NODE_ENV === 'production') {
 // Generate strong random passwords for seed users
 const generatePassword = () => crypto.randomBytes(6).toString('base64url'); // ~8 chars, URL-safe
 
-const prisma = new PrismaClient();
+const dbUrl = new URL(process.env.DATABASE_URL!);
+const adapter = new PrismaMariaDb({
+  host: dbUrl.hostname || '127.0.0.1',
+  port: dbUrl.port ? parseInt(dbUrl.port) : 3306,
+  user: decodeURIComponent(dbUrl.username) || 'root',
+  password: decodeURIComponent(dbUrl.password) || '',
+  database: dbUrl.pathname.replace(/^\//, '') || 'lms_db',
+});
+const prisma = new PrismaClient({ adapter });
 
 async function main() {
   console.log('Seeding database with secure credentials...');
