@@ -1,0 +1,10 @@
+# LMS PESV Education — robots.txt
+# Only allow indexing of public pages (login, landing, certificate verification)
+
+User-agent: *
+Allow: /
+Disallow: /dashboard/
+Disallow: /api/
+Disallow: /cursos/*/tareas/
+
+Sitemap: https://your-domain.com/sitemap.xml
