@@ -72,7 +72,7 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
     const apiBaseUrl = getEnv().apiUrl;
     const token = localStorage.getItem('lms_token');
 
-    let wsUrl = apiBaseUrl.replace(/^http/, 'ws').replace('/api', '') + '/ws';
+    let wsUrl = apiBaseUrl.replace(/^http/, 'ws').replace(/\/api\/?$/, '') + '/ws';
     if (token) {
       wsUrl += '?token=' + token;
     }
