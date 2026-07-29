@@ -1,12 +1,8 @@
 /**
  * Runtime environment validation for the client.
  * Validates that required environment variables are set and have valid formats.
- * Called once at app startup to fail fast with clear error messages.
+ * Automatically infers production API URL when deployed if build-time env defaults to localhost.
  */
-
-const requiredVars = [
-  'NEXT_PUBLIC_API_URL',
-] as const;
 
 function validateUrl(value: string, name: string): void {
   try {
@@ -20,20 +16,29 @@ function validateUrl(value: string, name: string): void {
 }
 
 export function validateEnv(): { apiUrl: string } {
-  const missing = requiredVars.filter(
-    (key) => !process.env[key]
-  );
+  let apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3200/api';
 
-  if (missing.length > 0) {
-    console.warn(
-      `⚠️ Missing environment variables: ${missing.join(', ')}. ` +
-      `Using default values. Set them in .env for production.`
-    );
+  if (typeof window !== 'undefined') {
+    const isLocalhost =
+      window.location.hostname === 'localhost' ||
+      window.location.hostname === '127.0.0.1';
+
+    // If running in browser in production but build-time env hardcoded localhost
+    if (!isLocalhost && (apiUrl.includes('localhost') || apiUrl.includes('127.0.0.1'))) {
+      const protocol = window.location.protocol;
+      const hostname = window.location.hostname;
+
+      if (hostname.startsWith('lms.')) {
+        apiUrl = `${protocol}//${hostname.replace(/^lms\./, 'api-lms.')}/api`;
+      } else if (hostname.startsWith('lms-')) {
+        apiUrl = `${protocol}//${hostname.replace(/^lms-/, 'api-lms-')}/api`;
+      } else {
+        apiUrl = `${protocol}//api.${hostname}/api`;
+      }
+    }
   }
 
-  const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3200/api';
-
-  // Validate URL format (catches typos, dead tunnels, etc.)
+  // Validate URL format
   validateUrl(apiUrl, 'NEXT_PUBLIC_API_URL');
 
   return { apiUrl };
@@ -43,6 +48,9 @@ export function validateEnv(): { apiUrl: string } {
 let _env: ReturnType<typeof validateEnv> | null = null;
 
 export function getEnv() {
+  if (typeof window !== 'undefined') {
+    return validateEnv();
+  }
   if (!_env) {
     _env = validateEnv();
   }
