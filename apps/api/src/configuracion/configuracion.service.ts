@@ -41,39 +41,59 @@ export class ConfiguracionService implements OnModuleInit {
     private readonly realtime: RealtimeService,
   ) {}
 
+  /**
+   * Prepara la configuración de las sedes al arrancar.
+   *
+   * Un fallo aquí **no impide arrancar**: si la base de datos todavía no responde, la
+   * aplicación levanta igualmente, `/api/health` informa del problema y la configuración se
+   * crea en cuanto alguien la pida (`cargarConfiguracion`). Abortar el arranque dejaría el
+   * proceso en un ciclo de reinicios sin que nadie pudiera consultar qué está pasando.
+   */
   async onModuleInit(): Promise<void> {
-    await this.asegurarConfiguracionDeCadaSede();
+    try {
+      await this.asegurarConfiguracionDeCadaSede();
+    } catch (error) {
+      this.logger.error(
+        'No se pudo preparar la configuración de las sedes al arrancar. Se reintentará al primer uso.',
+        error,
+      );
+    }
   }
 
   /**
    * Garantiza que cada país operativo tenga su fila.
-   * Se ejecuta al arrancar para que añadir una sede nueva no exija una migración manual.
+   * Añadir una sede nueva no exige una migración: basta con incluirla en `PAISES`.
    */
   private async asegurarConfiguracionDeCadaSede(): Promise<void> {
     for (const pais of PAISES) {
-      const existente = await this.prisma.lms_configuracion.findUnique({ where: { pais }, select: { id: true } });
-      if (existente) continue;
-
-      const meta = METADATOS_PAIS[pais];
-      await this.prisma.lms_configuracion.create({
-        data: {
-          pais,
-          nombre_plataforma: 'PESV Education',
-          zona_horaria: meta.zonaHoraria,
-          mensaje_bienvenida: `Bienvenido a PESV Education ${meta.nombre}`,
-          landing_hero_subtitulo:
-            'Plataforma integral para la gestión del Plan Estratégico de Seguridad Vial. Capacitación, ' +
-            'evaluación y certificación de conductores.',
-          landing_telefono: `${meta.prefijoTelefonico} 000 000 0000`,
-          landing_email: `contacto.${meta.iso.toLowerCase()}@pesveducation.com`,
-          landing_oficina: meta.nombre,
-          landing_oficina_sub: 'Actualiza esta dirección desde el panel de administración',
-          landing_footer_texto:
-            'Plataforma de capacitación y certificación en seguridad vial para empresas de transporte.',
-        },
-      });
-      this.logger.log(`Configuración inicial creada para ${meta.nombre}`);
+      await this.crearConfiguracionSiFalta(pais);
     }
+  }
+
+  /** Crea la fila de una sede si no existe. Idempotente. */
+  private async crearConfiguracionSiFalta(pais: Pais): Promise<void> {
+    const existente = await this.prisma.lms_configuracion.findUnique({ where: { pais }, select: { id: true } });
+    if (existente) return;
+
+    const meta = METADATOS_PAIS[pais];
+    await this.prisma.lms_configuracion.create({
+      data: {
+        pais,
+        nombre_plataforma: 'PESV Education',
+        zona_horaria: meta.zonaHoraria,
+        mensaje_bienvenida: `Bienvenido a PESV Education ${meta.nombre}`,
+        landing_hero_subtitulo:
+          'Plataforma integral para la gestión del Plan Estratégico de Seguridad Vial. Capacitación, ' +
+          'evaluación y certificación de conductores.',
+        landing_telefono: `${meta.prefijoTelefonico} 000 000 0000`,
+        landing_email: `contacto.${meta.iso.toLowerCase()}@pesveducation.com`,
+        landing_oficina: meta.nombre,
+        landing_oficina_sub: 'Actualiza esta dirección desde el panel de administración',
+        landing_footer_texto:
+          'Plataforma de capacitación y certificación en seguridad vial para empresas de transporte.',
+      },
+    });
+    this.logger.log(`Configuración inicial creada para ${meta.nombre}`);
   }
 
   // ── Lectura ──────────────────────────────────────────────────────────────
@@ -155,14 +175,26 @@ export class ConfiguracionService implements OnModuleInit {
     return config.max_archivo_mb;
   }
 
+  /**
+   * Configuración de una sede, creándola si todavía no existe.
+   *
+   * La creación perezosa cubre el caso en que la base de datos no estuviera disponible al
+   * arrancar: la primera petición que necesite la configuración la deja lista, en lugar de
+   * dejar la sede inservible hasta el siguiente reinicio.
+   */
   private async cargarConfiguracion(pais: Pais): Promise<lms_configuracion> {
     const config = await this.prisma.lms_configuracion.findUnique({ where: { pais } });
-    if (!config) {
-      // No debería ocurrir: `onModuleInit` crea la fila. Si pasa, es mejor un error
-      // explícito que devolver valores inventados que acabarían impresos en un certificado.
+    if (config) return config;
+
+    await this.crearConfiguracionSiFalta(pais);
+
+    const creada = await this.prisma.lms_configuracion.findUnique({ where: { pais } });
+    if (!creada) {
+      // Preferible un error explícito a devolver valores inventados, que acabarían
+      // impresos en un certificado.
       throw new NotFoundException(`No hay configuración registrada para ${pais}.`);
     }
-    return config;
+    return creada;
   }
 
   private sinCamposSensibles(config: lms_configuracion): ConfiguracionPublica {
@@ -204,10 +236,7 @@ export class ConfiguracionService implements OnModuleInit {
    * configuración ya quedó correcta y sólo sobra un archivo huérfano, que el mantenimiento
    * periódico recogerá.
    */
-  private async borrarArchivosReemplazados(
-    actual: lms_configuracion,
-    dto: UpdateConfiguracionDto,
-  ): Promise<void> {
+  private async borrarArchivosReemplazados(actual: lms_configuracion, dto: UpdateConfiguracionDto): Promise<void> {
     for (const campo of CAMPOS_DE_ARCHIVO) {
       const anterior = actual[campo];
       const nuevo = dto[campo];

@@ -1,15 +1,33 @@
+# Base de datos para desarrollo local.
+#
+# Se usa MariaDB y no MySQL porque es el motor del alojamiento en cPanel, y la API se
+# conecta con el adaptador `@prisma/adapter-mariadb`. Desarrollar contra el mismo motor
+# evita diferencias de collation y de tipos que sólo aparecerían en producción.
+#
+#   docker compose up -d
+#
+# Los datos persisten en el volumen `datos_mariadb`. Para empezar de cero:
+#   docker compose down -v
+
 services:
   db:
-    image: mysql:8.0
-    container_name: lms-mysql-db
-    restart: always
+    image: mariadb:11.4
+    container_name: lms-mariadb
+    restart: unless-stopped
     environment:
-      MYSQL_ROOT_PASSWORD: password
-      MYSQL_DATABASE: lms_db
+      MARIADB_ROOT_PASSWORD: root
+      MARIADB_DATABASE: lms_db
+      MARIADB_USER: lms_user
+      MARIADB_PASSWORD: lms_password
     ports:
-      - "3306:3306"
+      - '3306:3306'
     volumes:
-      - mysql_data:/var/lib/mysql
+      - datos_mariadb:/var/lib/mysql
+    healthcheck:
+      test: ['CMD', 'healthcheck.sh', '--connect', '--innodb_initialized']
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
 volumes:
-  mysql_data:
+  datos_mariadb:

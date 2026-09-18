@@ -309,3 +309,82 @@ Orden elegido para que cada fase deje el sistema en estado funcional:
 | F | Simplificación: lecciones, scheduler, estado de quiz | ARQ-01, ARQ-02, ARQ-03 |
 | G | Cliente: selector de país, escala 0–100, transporte SSE | (nueva funcionalidad) |
 | H | Limpieza, documentación y despliegue | CP-02, CP-03, COD-* |
+
+---
+
+## 9. Resultado
+
+Estado de cada hallazgo tras la refactorización.
+
+### Seguridad
+
+| Id | Hallazgo | Cómo quedó |
+|---|---|---|
+| SEC-01 | Suplantación vía `?usuario_guid=` | Cerrado. El patrón desapareció de los diez endpoints; la identidad sale del token y `@CurrentUser()` falla si no hay sesión en lugar de devolver `undefined` |
+| SEC-02 | Respuestas del cuestionario expuestas | Cerrado. Dos proyecciones del curso; las preguntas se piden al abrir el intento y salen sin `es_correcta` |
+| SEC-03 | Ficha de curso sin matrícula | Cerrado. `getCursoParaEstudiante` exige matrícula y curso publicado |
+| SEC-04 | Calificar entregas ajenas | Cerrado. `cursoDeEntregaQueGestiona` comprueba la propiedad |
+| SEC-05 | Monitoreo de alumnos ajenos | Cerrado. El endpoint ya no acepta `profesor_guid` |
+| SEC-06 | IDOR en certificados | Cerrado. Sólo el titular o un administrador de su sede |
+| SEC-07 | Notificaciones ajenas | Cerrado. El filtro incluye al propietario |
+| SEC-08 | Mensajería sin contacto aceptado | Cerrado. `asegurarContactoAceptado` en envío y lectura |
+| SEC-09 | Archivos públicos | Cerrado. URL firmada con caducidad para entregas, certificados, firmas y material de curso |
+| SEC-10 | SVG servido en línea | Mitigado. Se conserva el formato para los logotipos, pero se sirve con una CSP que impide ejecutar scripts |
+| SEC-11 | Enumeración de usuarios | Cerrado. Un solo mensaje para correo inexistente, contraseña incorrecta y sede equivocada |
+| SEC-12 | Endpoints sin DTO | Cerrado. Todos los cuerpos tienen clase con `class-validator` |
+| SEC-13 | Token en la query del WebSocket | Cerrado. SSE leído con `fetch` y cabecera `Authorization` |
+
+### Corrección
+
+| Id | Hallazgo | Cómo quedó |
+|---|---|---|
+| BUG-01 | Borrado de archivos en uso | Cerrado. Disco y base usan la misma clave `carpeta/nombre` |
+| BUG-02 | Borrar profesor arrastraba sus cursos | Cerrado. Relación `Restrict` y traspaso explícito, con selector en la interfaz |
+| BUG-03 | Certificado sin logotipo | Cerrado. Las imágenes se leen del almacenamiento, no del disco |
+| BUG-04 | Métrica `profesoresActivos` sin sentido | Cerrado. Recuentos con agregados de base de datos |
+| BUG-05 | `rejectRequest` borraba la solicitud | Cerrado. Queda como `RECHAZADA`, con motivo |
+| BUG-06 | `logout` cerraba todas las sesiones | Resuelto de otra forma. Se mantiene una sola sesión por cuenta, pero ahora es explícito y persistente; cerrar sesión libera el registro |
+| BUG-07 | `escala` decorativa | Cerrado. Se retiró la columna y su enum: el sistema tiene una única escala |
+| BUG-08 | Límite de archivo ignorado | Cerrado. Se aplica el del recurso, si no el de la sede, y nunca por encima del tope del servidor |
+| BUG-09 | Verificación de correo sin consumir | Cerrado. Se consume al crear la solicitud y caduca |
+| BUG-10 | `@Max(5)` en el DTO | Cerrado. Los límites salen del dominio |
+
+### Arquitectura
+
+| Id | Hallazgo | Cómo quedó |
+|---|---|---|
+| ARQ-01 | Capa `lms_lecciones` vestigial | Eliminada. Los recursos cuelgan del módulo |
+| ARQ-02 | Republicación por sondeo | Eliminado. `updateCurso` avisa en el momento del cambio |
+| ARQ-03 | Estado obsoleto del quiz | Eliminado. Los intentos se conservan y el reinicio afecta al progreso del módulo, no al contador |
+| ARQ-04 | La nota como texto parseable | Cerrado. Campos propios; se retiró `contenido_texto` |
+| ARQ-05 | Columna `TEXT` para una clave | Cerrado. Columna dimensionada y comentario corregido |
+| ARQ-06 | Dashboards cargando tablas enteras | Cerrado. Agregados en base de datos |
+| ARQ-07 | Difusión indiscriminada | Cerrado. Todo evento exige destino con país y rol |
+| ARQ-08 | Tres fuentes para la URL de la API | Cerrado. Sólo `lib/env.ts` |
+
+### Despliegue y calidad
+
+| Id | Hallazgo | Cómo quedó |
+|---|---|---|
+| CP-01 | WebSockets bloqueados | Resuelto. Tiempo real sobre SSE; no hace falta pedir nada al hosting |
+| CP-02 | Artefactos versionados | Cerrado. `prod/` y el zip fuera del repositorio |
+| CP-03 | README desactualizado | Reescrito, junto con la guía de cPanel y un documento de decisiones |
+| COD-01 | `any` en fronteras | Reducido en la API; el cliente conserva `any` en estructuras de pantalla |
+| COD-02 | Páginas de más de mil líneas | Parcial. Se dividieron login, menú lateral y las pantallas de configuración; el constructor de cursos y el panel de calificaciones siguen siendo grandes |
+| COD-03 | `catch {}` vacíos | Cerrado en los caminos que ocultaban fallos; se conservan donde la operación es prescindible, con el motivo escrito |
+| COD-04 | Comentarios con identificadores muertos | Cerrado |
+| COD-05 | `seedMatriculas` expuesto | Eliminado |
+
+### Lo que queda pendiente
+
+Trabajo identificado y no abordado, para que no se pierda:
+
+1. **`constructor-cursos/page.tsx` y `examiner/calificaciones/page.tsx`** siguen por encima
+   de las mil líneas. Funcionan y están migrados, pero mezclan estado, llamadas y
+   presentación. Dividirlos es la siguiente refactorización natural.
+2. **Sin pruebas de integración.** Las 35 pruebas cubren el dominio puro (escala,
+   cuestionarios, sedes). Las reglas de acceso —que son lo que más importa— se comprueban
+   leyendo el código, no ejecutándolo. Un conjunto de pruebas sobre `CursoAccesoService` con
+   una base de datos de prueba sería la mejor inversión siguiente.
+3. **Tipado del cliente.** `types/models.ts` no refleja las respuestas actuales de la API y
+   varias pantallas siguen usando `any`. Generar los tipos desde la API cerraría la brecha.

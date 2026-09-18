@@ -1,24 +1,33 @@
+# Dependencias
 node_modules
+
+# Artefactos de compilación
 dist
 .next
-.DS_Store
-*.log
-.env
-
-# Database
-apps/api/prisma/*.db
-*.sqlite
-
-# Uploads (ephemeral on Render, persistent with R2)
-apps/api/uploads/
-
-# Generated code (regenerate with: npx prisma generate)
-generated/
-
-# Build artifacts
+apps/client/prod
 *.tsbuildinfo
 .turbo
 
-# IDE
+# Paquetes de despliegue generados
+*.zip
+
+# Entorno: nunca se versiona, ver .env.example
+.env
+.env.*
+!.env.example
+
+# Base de datos local y archivos subidos
+apps/api/uploads/
+apps/api/prisma/*.db
+*.sqlite
+
+# Código generado por Prisma
+generated/
+
+# Registros y temporales del sistema
+*.log
+.DS_Store
+
+# Editores
 .vscode/
 .idea/

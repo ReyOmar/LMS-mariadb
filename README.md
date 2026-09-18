@@ -1,130 +1,154 @@
-# 🎓 LMS PESV Education
+# LMS PESV Education
 
-Sistema de Gestión de Aprendizaje (LMS) para capacitación en Seguridad Vial (PESV).
+Plataforma de capacitación y certificación en seguridad vial (Plan Estratégico de Seguridad
+Vial), con dos sedes independientes: **Colombia** y **México**.
 
-## Arquitectura
+---
+
+## Cómo está organizado
 
 ```
 apps/
-├── api/          NestJS + Fastify + Prisma (PostgreSQL)
-└── client/       Next.js 15 (React 19, TailwindCSS 4)
+├── api/      NestJS 11 + Fastify + Prisma 7 + MariaDB
+└── client/   Next.js 15 (React 19, Tailwind 4)
+docs/
+├── AUDITORIA.md           Estado del proyecto antes de la refactorización
+├── DESPLIEGUE-CPANEL.md   Puesta en producción
+└── DECISIONES.md          Por qué el sistema es como es
 ```
 
-## Requisitos
+---
 
-- **Node.js** 20+
-- **PostgreSQL** 15+ (local para desarrollo, Render para producción)
+## Las tres reglas del sistema
 
-## Desarrollo Local
+Antes de tocar nada conviene conocerlas, porque explican buena parte del código.
 
-### 1. Configurar base de datos
+### 1. Las sedes no se mezclan
 
-Instala PostgreSQL localmente o usa Docker:
+Colombia y México son operaciones separadas. Un usuario pertenece a **una sola sede** y sus
+cursos, alumnos, entregas, certificados, mensajes y textos legales sólo existen dentro de
+ella.
+
+El país viaja dentro del token de sesión y lo inyecta el guard en cada petición. **Ningún
+controlador lo acepta del cliente**, salvo en las dos rutas públicas de la portada, donde
+todavía no hay sesión. La única frontera por la que podrían cruzarse los datos es la
+matrícula, y ahí se comprueba explícitamente que alumno y curso compartan sede.
+
+Ver `apps/api/src/common/domain/pais.ts`.
+
+### 2. Todo se califica sobre 100, y se aprueba con 80
+
+Una sola definición de la escala, en `apps/api/src/common/domain/calificacion.ts` (y su
+espejo en el cliente, `apps/client/src/lib/calificacion.ts`). Cada curso puede subir o bajar
+su propio umbral en `nota_aprobacion`; el valor por defecto es 80.
+
+Ninguna pantalla ni ningún servicio debe escribir la escala a mano.
+
+### 3. La identidad la decide el servidor
+
+Ningún endpoint acepta un identificador de usuario para decidir de quién son los datos: sale
+del token. La propiedad de cursos, recursos y entregas se comprueba en
+`CursoAccesoService`, en un solo sitio.
+
+---
+
+## Desarrollo
+
+### Requisitos
+
+- Node.js 20+
+- MariaDB 10.6+ (o MySQL 8)
+
+### Puesta en marcha
 
 ```bash
-docker run -d --name lms-postgres \
-  -e POSTGRES_USER=lms_user \
-  -e POSTGRES_PASSWORD=lms_password \
-  -e POSTGRES_DB=lms_db \
-  -p 5432:5432 \
-  postgres:16-alpine
-```
+# 1. Base de datos local con Docker (opcional)
+docker compose up -d
 
-### 2. Configurar variables de entorno
-
-```bash
+# 2. Configuración
 cp .env.example .env
-# Editar .env con tus valores (DATABASE_URL, JWT_SECRET, etc.)
+# Rellena DATABASE_URL y genera JWT_SECRET:
+#   node -e "console.log(require('crypto').randomBytes(64).toString('hex'))"
+
+# 3. Dependencias y cliente de Prisma
+npm run init
+
+# 4. Esquema y datos iniciales
+npm run db:push
+npm run db:seed          # imprime las contraseñas una sola vez: anótalas
+
+# 5. Arrancar
+npm run dev              # API en :3200, cliente en :3100
 ```
 
-Generar JWT_SECRET seguro:
-```bash
-node -e "console.log(require('crypto').randomBytes(64).toString('hex'))"
-```
+La semilla crea un administrador por sede (`admin.co@pesv.com` y `admin.mx@pesv.com`) y las
+plantillas de correo. La configuración de cada sede la crea la API al arrancar.
 
-### 3. Instalar y ejecutar
+### Comandos
 
-```bash
-npm run init          # Instala dependencias + genera Prisma client
-npm run db:push       # Crea las tablas en PostgreSQL
-npm run db:seed       # Datos iniciales (usuarios, plantillas de correo)
-npm run dev           # API (3200) + Client (3100) en paralelo
-```
-
-## Despliegue en Render (Free Tier)
-
-### Opción A: Blueprint automático
-
-1. Conecta tu repositorio en [Render Dashboard](https://dashboard.render.com)
-2. Selecciona **Blueprint** y apunta al archivo `render.yaml`
-3. Render creará automáticamente:
-   - **PostgreSQL** gratuito (1GB)
-   - **API** como Docker web service
-   - **Client** como Docker web service
-4. Configura las variables sensibles manualmente en el Dashboard:
-   - `SMTP_PASS` (clave SMTP de Brevo)
-   - `R2_*` (credenciales de Cloudflare R2, si usas almacenamiento cloud)
-
-### Opción B: Deploy manual
-
-1. Crea una base de datos PostgreSQL en Render (plan Free)
-2. Crea un Web Service para la API:
-   - **Docker**, apuntando a `apps/api/Dockerfile`
-   - Variables de entorno: `DATABASE_URL`, `JWT_SECRET`, `CORS_ORIGIN`, `SMTP_*`
-3. Crea un Web Service para el Client:
-   - **Docker**, apuntando a `apps/client/Dockerfile`
-   - Build arg: `NEXT_PUBLIC_API_URL=https://tu-api.onrender.com/api`
-
-### Variables de Entorno Requeridas (API)
-
-| Variable | Descripción |
+| Comando | Qué hace |
 |---|---|
-| `DATABASE_URL` | Connection string de PostgreSQL |
-| `JWT_SECRET` | Secret para tokens JWT (mín 16 chars) |
-| `CORS_ORIGIN` | URL del frontend (sin trailing slash) |
-| `APP_URL` | URL pública del frontend (para emails) |
-| `SMTP_HOST` | `smtp-relay.brevo.com` |
-| `SMTP_PORT` | `587` |
-| `SMTP_USER` | Login SMTP de Brevo |
-| `SMTP_PASS` | Clave SMTP de Brevo |
-| `SMTP_FROM` | Email remitente |
+| `npm run dev` | API y cliente con recarga en caliente |
+| `npm run build` | Compila ambos para producción |
+| `npm run typecheck` | Comprobación de tipos de los dos proyectos |
+| `npm test` | Pruebas de la API |
+| `npm run db:push` | Sincroniza el esquema con la base de datos |
+| `npm run db:seed` | Datos iniciales (idempotente) |
 
-### Variables de Entorno Requeridas (Client)
+---
 
-| Variable | Descripción |
-|---|---|
-| `NEXT_PUBLIC_API_URL` | URL pública de la API (build-time) |
+## Cómo funciona el tiempo real
 
-## Limitaciones del Free Tier
+Sobre **Server-Sent Events**, no WebSocket. El motivo está explicado en
+[docs/DESPLIEGUE-CPANEL.md](docs/DESPLIEGUE-CPANEL.md#1-sobre-los-websockets-ya-no-hacen-falta):
+en cPanel, Apache no propaga la cabecera `Upgrade` y la conexión WebSocket nunca llega a
+establecerse.
 
-- Los servicios se **duermen tras 15 min** de inactividad (primer request tarda ~30s)
-- PostgreSQL tiene **1GB** de almacenamiento
-- El almacenamiento local de archivos es **efímero** (se pierde al reiniciar)
-  - Configura **Cloudflare R2** para almacenamiento persistente de archivos
+El flujo es de servidor a cliente (`GET /api/realtime/stream`). Ningún evento cruza entre
+sedes: todo envío exige un destino con país.
 
-## Scripts Disponibles
+---
 
-| Script | Descripción |
-|---|---|
-| `npm run dev` | Desarrollo: API + Client con hot reload |
-| `npm run build` | Build de producción (API + Client) |
-| `npm run start` | Inicia en modo producción |
-| `npm run db:push` | Sincroniza schema con la base de datos |
-| `npm run db:seed` | Datos iniciales |
-| `npm run db:generate` | Regenera Prisma Client |
-| `npm run typecheck` | Verificación de tipos TypeScript |
-| `npm test` | Ejecuta tests (API) |
+## Almacenamiento de archivos
 
-## Correos Electrónicos
+Dos destinos posibles, con la misma clave (`carpeta/nombre`) en ambos:
 
-El sistema usa **Brevo** (ex-Sendinblue) como servicio SMTP. Las plantillas de correo son editables desde el panel de administración del LMS.
+- **Cloudflare R2**, si están definidas las variables `R2_*`.
+- **Disco local** (`apps/api/uploads`) en caso contrario.
 
-Eventos de correo configurados:
-- Recuperación de contraseña
-- Bienvenida a usuario aprobado
-- Calificación recibida
-- Entrega rechazada
-- Matrícula en curso
-- Certificado generado
-- Recordatorio de inactividad
-- Y más...
+Y dos clases de archivo:
+
+- **Públicos** (`logos/`, `portadas/`, `fondos/`, `avatars/`): material de marca, se sirven
+  sin más.
+- **Reservados** (`entregas/`, `certificados/`, `firmas/`, `recursos/`): sólo con una URL
+  firmada que emite la API y caduca en una hora.
+
+El cliente nunca construye una ruta de descarga reservada; la recibe ya firmada.
+
+---
+
+## Correo
+
+Dos vías, por orden de preferencia:
+
+1. **API HTTP de Brevo** (`BREVO_API_KEY`), por el puerto 443. Es la recomendada en
+   alojamiento compartido, donde los puertos SMTP suelen estar cerrados.
+2. **SMTP** (`SMTP_HOST`, `SMTP_USER`, `SMTP_PASS`).
+
+Sin ninguna de las dos, el sistema funciona igual pero no sale ningún correo: los envíos se
+registran y se descartan.
+
+Las plantillas se editan desde el panel de administración. La marca de cada correo (color,
+logotipo, nombre) se toma de la configuración de la sede del destinatario.
+
+---
+
+## Documentación
+
+- **[docs/AUDITORIA.md](docs/AUDITORIA.md)** — hallazgos del análisis previo, con el
+  identificador que referencian los commits.
+- **[docs/DECISIONES.md](docs/DECISIONES.md)** — las decisiones de diseño y su porqué.
+- **[docs/DESPLIEGUE-CPANEL.md](docs/DESPLIEGUE-CPANEL.md)** — puesta en producción.
+
+Con `NODE_ENV` distinto de `production`, la API publica su documentación interactiva en
+`/docs`.
