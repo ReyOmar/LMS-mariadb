@@ -1,57 +1,52 @@
-import { Controller, Get, Patch, Post, Param, Body, Query } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
+import { SkipThrottle } from '@nestjs/throttler';
 import { EstudiantesService } from './estudiantes.service';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { JwtPayload } from '../common/interfaces/jwt-payload.interface';
-import { Public } from '../common/decorators/public.decorator';
-import { MarcarRecursoDto } from './dto/marcar-recurso.dto';
+import { DiasActivosDto, LatidoDto, MarcarRecursoDto } from './dto/estudiantes.dto';
 
+/**
+ * Todos los endpoints operan sobre el usuario en sesión.
+ * Ninguno acepta un `usuario_guid`: el progreso, las métricas y el tiempo de estudio son
+ * del titular del token y de nadie más.
+ */
 @Controller('estudiantes')
 export class EstudiantesController {
-  constructor(private readonly estudiantesService: EstudiantesService) {}
+  constructor(private readonly estudiantes: EstudiantesService) {}
 
-  @Get('/student/progreso')
-  async getProgresoEstudiante(@CurrentUser() user: JwtPayload, @Query('curso_guid') curso_guid: string, @Query('usuario_guid') usuario_guid?: string) {
-    const guid = usuario_guid || user.sub;
-    return this.estudiantesService.getProgresoEstudiante(guid, curso_guid);
+  @Get('/progreso/:curso_guid')
+  getProgreso(@CurrentUser() user: JwtPayload, @Param('curso_guid') cursoGuid: string) {
+    return this.estudiantes.getProgreso(cursoGuid, user);
   }
 
-  @Post('/student/completar-recurso')
-  async marcarRecursoCompletado(@CurrentUser() user: JwtPayload, @Body() body: MarcarRecursoDto, @Query('usuario_guid') usuario_guid?: string) {
-    const guid = usuario_guid || user.sub;
-    return this.estudiantesService.marcarRecursoCompletado(guid, body.recurso_guid);
+  @Post('/completar-recurso')
+  marcarRecursoCompletado(@CurrentUser() user: JwtPayload, @Body() dto: MarcarRecursoDto) {
+    return this.estudiantes.marcarRecursoCompletado(dto.recurso_guid, user);
   }
 
-  @Get('/student/dias-activos')
-  async getDiasActivos(@CurrentUser() user: JwtPayload, @Query('year') year: string, @Query('month') month: string, @Query('usuario_guid') usuario_guid?: string) {
-    const guid = usuario_guid || user.sub;
-    return this.estudiantesService.getDiasActivos(guid, parseInt(year, 10), parseInt(month, 10));
+  @Get('/metricas')
+  getMetricas(@CurrentUser() user: JwtPayload) {
+    return this.estudiantes.getMetricas(user);
   }
 
-  @Get('/student/notificaciones')
-  async getNotificacionesEstudiante(@CurrentUser() user: JwtPayload, @Query('usuario_guid') usuario_guid?: string) {
-    const guid = usuario_guid || user.sub;
-    return this.estudiantesService.getNotificacionesEstudiante(guid);
+  @Get('/dias-activos')
+  getDiasActivos(@CurrentUser() user: JwtPayload, @Query() dto: DiasActivosDto) {
+    return this.estudiantes.getDiasActivos(user, dto.year, dto.month);
   }
 
-  @Patch('/student/notificaciones/:id/leer')
-  async marcarNotificacionLeida(@Param('id') id: string) {
-    return this.estudiantesService.marcarNotificacionLeida(parseInt(id, 10));
+  @Get('/notas/:curso_guid')
+  getNotas(@CurrentUser() user: JwtPayload, @Param('curso_guid') cursoGuid: string) {
+    return this.estudiantes.getNotasDeCurso(cursoGuid, user);
   }
 
-  @Get('/student/metricas')
-  async getMetricasEstudiante(@CurrentUser() user: JwtPayload, @Query('usuario_guid') usuario_guid?: string) {
-    const guid = usuario_guid || user.sub;
-    return this.estudiantesService.getMetricasEstudiante(guid);
-  }
-
-  @Post('/student/heartbeat')
-  async registrarHeartbeat(
-    @CurrentUser() user: JwtPayload,
-    @Body() body: { curso_guid: string },
-    @Query('usuario_guid') usuario_guid?: string,
-  ) {
-    const guid = usuario_guid || user.sub;
-    return this.estudiantesService.registrarHeartbeat(guid, body.curso_guid);
+  /**
+   * Latido del visor de curso, una vez por minuto mientras la pestaña está visible.
+   * Queda fuera del límite global de peticiones: es tráfico previsible y constante que,
+   * contabilizado, agotaría la cuota del alumno durante una sesión de estudio larga.
+   */
+  @SkipThrottle()
+  @Post('/latido')
+  registrarLatido(@CurrentUser() user: JwtPayload, @Body() dto: LatidoDto) {
+    return this.estudiantes.registrarLatido(dto.curso_guid, user);
   }
 }
-

@@ -1,35 +1,110 @@
+import { Logger, ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
-import {
-  FastifyAdapter,
-  NestFastifyApplication,
-} from '@nestjs/platform-fastify';
-import { AppModule } from './app.module';
-import { ValidationPipe, Logger } from '@nestjs/common';
-import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
+import { FastifyAdapter, NestFastifyApplication } from '@nestjs/platform-fastify';
 import { ConfigService } from '@nestjs/config';
-import { WsAdapter } from '@nestjs/platform-ws';
-import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
+import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import compress from '@fastify/compress';
-import multipart from '@fastify/multipart';
 import helmet from '@fastify/helmet';
+import multipart from '@fastify/multipart';
 import { randomUUID } from 'crypto';
+import { AppModule } from './app.module';
+import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
+import { TAMANO_MAXIMO_BYTES } from './storage/storage.service';
 
-async function bootstrap() {
+/** Tamaño máximo de un cuerpo JSON. Los archivos van por multipart, no por aquí. */
+const LIMITE_JSON_BYTES = 2 * 1024 * 1024;
+
+/** Longitud mínima aceptable para el secreto de firma de los tokens. */
+const LONGITUD_MINIMA_SECRETO = 32;
+
+/** Valores de ejemplo que nunca deben llegar a producción. */
+const SECRETOS_INSEGUROS = ['change_this_in_production', 'lms-super-secret-key-2026', 'secret', 'jwt_secret'];
+
+/** Peticiones más lentas que esto se registran como aviso. */
+const UMBRAL_LENTITUD_MS = 1000;
+
+async function bootstrap(): Promise<void> {
+  const logger = new Logger('Arranque');
+
   const app = await NestFactory.create<NestFastifyApplication>(
     AppModule,
-    new FastifyAdapter({ bodyLimit: 10485760 }) // 10MB for JSON bodies only
+    new FastifyAdapter({ bodyLimit: LIMITE_JSON_BYTES }),
   );
 
-  // Enable gzip/brotli compression for all responses
-  await app.register(compress, { global: true });
+  const config = app.get(ConfigService);
+  validarSecreto(config, logger);
 
-  // Security headers (X-Frame-Options, X-Content-Type-Options, HSTS, etc.)
+  await registrarPlugins(app);
+  configurarTrazas(app);
+
+  app.setGlobalPrefix('api');
+  app.useGlobalFilters(new AllExceptionsFilter());
+  app.useGlobalPipes(
+    new ValidationPipe({
+      // Descarta lo que no declare el DTO y rechaza la petición si trae campos de más:
+      // un campo mal escrito da error en lugar de guardarse a medias sin avisar.
+      whitelist: true,
+      forbidNonWhitelisted: true,
+      transform: true,
+      transformOptions: { enableImplicitConversion: true },
+    }),
+  );
+
+  app.enableCors({
+    origin: origenesPermitidos(config),
+    methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
+    credentials: true,
+  });
+
+  // La documentación describe toda la superficie de la API: sólo fuera de producción.
+  if (process.env.NODE_ENV !== 'production') {
+    const documento = SwaggerModule.createDocument(
+      app,
+      new DocumentBuilder().setTitle('LMS PESV Education').setVersion('2.0').addBearerAuth().build(),
+    );
+    SwaggerModule.setup('docs', app, documento);
+    logger.log('Documentación de la API en /docs');
+  }
+
+  app.enableShutdownHooks();
+
+  const puerto = Number(process.env.PORT ?? process.env.APP_PORT ?? 3200);
+  await app.listen(puerto, '0.0.0.0');
+  logger.log(`API escuchando en el puerto ${puerto}`);
+}
+
+/**
+ * El secreto de firma es lo único que separa un token legítimo de uno falsificado.
+ * Si falta, es corto o es uno de los de ejemplo, el proceso no arranca: seguir con un
+ * secreto adivinable equivale a no tener autenticación.
+ */
+function validarSecreto(config: ConfigService, logger: Logger): void {
+  const secreto = config.get<string>('JWT_SECRET') ?? '';
+
+  if (!secreto || secreto.length < LONGITUD_MINIMA_SECRETO || SECRETOS_INSEGUROS.includes(secreto)) {
+    logger.error(
+      `JWT_SECRET ausente, demasiado corto (mínimo ${LONGITUD_MINIMA_SECRETO} caracteres) o con un valor de ejemplo.`,
+    );
+    logger.error('Genera uno con: node -e "console.log(require(\'crypto\').randomBytes(64).toString(\'hex\'))"');
+    process.exit(1);
+  }
+}
+
+async function registrarPlugins(app: NestFastifyApplication): Promise<void> {
+  await app.register(compress, {
+    global: true,
+    // El flujo de eventos en tiempo real no se comprime: la compresión bufferiza y los
+    // mensajes no llegarían hasta acumular suficiente contenido.
+    customTypes: /^(?!text\/event-stream)(text\/|application\/(json|javascript|xml))/,
+  });
+
   await app.register(helmet, {
     contentSecurityPolicy: {
       directives: {
         defaultSrc: ["'self'"],
         scriptSrc: ["'self'"],
-        styleSrc: ["'self'", "'unsafe-inline'"],  // Swagger UI needs inline styles
+        // Swagger UI necesita estilos en línea.
+        styleSrc: ["'self'", "'unsafe-inline'"],
         imgSrc: ["'self'", 'data:'],
         connectSrc: ["'self'"],
         fontSrc: ["'self'"],
@@ -39,94 +114,62 @@ async function bootstrap() {
         formAction: ["'self'"],
       },
     },
-    crossOriginEmbedderPolicy: false, // Allow embedding resources (images, fonts)
-    crossOriginResourcePolicy: false,  // Allow cross-origin <img>/<video> from frontend (different port/domain)
+    // El cliente vive en otro origen y necesita incrustar imágenes servidas por la API.
+    crossOriginEmbedderPolicy: false,
+    crossOriginResourcePolicy: false,
   });
 
-  // Enable multipart/form-data for file uploads (50MB limit)
   await app.register(multipart, {
-    limits: {
-      fileSize: 50 * 1024 * 1024, // 50MB max file size
-      files: 1, // Max 1 file per request
-    },
+    limits: { fileSize: TAMANO_MAXIMO_BYTES, files: 1 },
   });
-
-  // ── Request ID + Logging ──
-  const httpLogger = new Logger('HTTP');
-  const fastify = app.getHttpAdapter().getInstance();
-  fastify.addHook('onRequest', (request: any, reply: any, done: () => void) => {
-    request.id = request.headers['x-request-id'] || randomUUID();
-    reply.header('X-Request-ID', request.id);
-    done();
-  });
-  fastify.addHook('onResponse', (request: any, reply: any, done: () => void) => {
-    // Skip health checks from logs
-    if (request.url !== '/api/health') {
-      const ms = reply.elapsedTime?.toFixed(0) || '?';
-      const status = reply.statusCode;
-      const logLine = `${request.method} ${request.url} ${status} ${ms}ms [${request.id}]`;
-
-      if (status >= 500) {
-        httpLogger.error(logLine);
-      } else if (Number(ms) > 1000) {
-        httpLogger.warn(`SLOW ${logLine}`);
-      } else {
-        httpLogger.log(logLine);
-      }
-    }
-    done();
-  });
-  
-  const configService = app.get(ConfigService);
-
-  // ── Security: Validate JWT_SECRET at startup ──
-  const logger = new Logger('Bootstrap');
-  const jwtSecret = configService.get<string>('JWT_SECRET') || '';
-  const INSECURE_DEFAULTS = ['change_this_in_production', 'lms-super-secret-key-2026', 'secret', 'jwt_secret'];
-  if (!jwtSecret || jwtSecret.length < 16 || INSECURE_DEFAULTS.includes(jwtSecret)) {
-    logger.error('FATAL: JWT_SECRET is missing, too short (<16 chars), or using an insecure default.');
-    logger.error('Generate a secure one with: node -e "console.log(require(\'crypto\').randomBytes(64).toString(\'hex\'))"');
-    process.exit(1);
-  }
-  
-  app.setGlobalPrefix('api');
-  app.useGlobalFilters(new AllExceptionsFilter());
-  app.useGlobalPipes(
-    new ValidationPipe({
-      whitelist: true,
-      forbidNonWhitelisted: true,
-      transform: true,
-      transformOptions: { enableImplicitConversion: true },
-    }),
-  );
-
-  app.enableCors({
-    origin: configService.get('CORS_ORIGIN') || 'http://localhost:3100',
-    methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
-    credentials: true,
-  });
-
-  // Swagger API docs — only in development (never expose API schema in production)
-  if (process.env.NODE_ENV !== 'production') {
-    const config = new DocumentBuilder()
-      .setTitle('Enterprise LMS API')
-      .setDescription('LMS Backend API')
-      .setVersion('1.0')
-      .addBearerAuth()
-      .build();
-    
-    const document = SwaggerModule.createDocument(app, config);
-    SwaggerModule.setup('docs', app, document);
-  }
-
-  // Enable WebSocket support with native ws adapter (compatible with Fastify)
-  app.useWebSocketAdapter(new WsAdapter(app));
-
-  // Enable graceful shutdown hooks (Prisma disconnect, cron cleanup, WS close)
-  app.enableShutdownHooks();
-
-  const port = process.env.PORT || process.env.APP_PORT || 3200;
-  await app.listen(port, '0.0.0.0');
-  logger.log(`LMS API running on port ${port}`);
 }
-bootstrap();
+
+/**
+ * Identificador de correlación por petición y registro de acceso.
+ * El identificador vuelve en la cabecera `X-Request-ID` y en el cuerpo de los errores, de
+ * modo que un usuario puede indicarlo al reportar un problema y se localiza la traza exacta.
+ */
+function configurarTrazas(app: NestFastifyApplication): void {
+  const logger = new Logger('HTTP');
+  const fastify = app.getHttpAdapter().getInstance();
+
+  fastify.addHook('onRequest', (peticion, respuesta, siguiente) => {
+    const id = (peticion.headers['x-request-id'] as string) || randomUUID();
+    (peticion as { id: string }).id = id;
+    respuesta.header('X-Request-ID', id);
+    siguiente();
+  });
+
+  fastify.addHook('onResponse', (peticion, respuesta, siguiente) => {
+    // Ni la comprobación de salud ni el flujo de eventos aportan nada al registro: la
+    // primera llega constantemente y el segundo dura horas abierto.
+    const url = peticion.url;
+    if (url === '/api/health' || url.startsWith('/api/realtime/stream')) {
+      siguiente();
+      return;
+    }
+
+    const ms = respuesta.elapsedTime ?? 0;
+    const linea = `${peticion.method} ${url} ${respuesta.statusCode} ${ms.toFixed(0)}ms [${(peticion as { id?: string }).id}]`;
+
+    if (respuesta.statusCode >= 500) logger.error(linea);
+    else if (ms > UMBRAL_LENTITUD_MS) logger.warn(`LENTA ${linea}`);
+    else logger.log(linea);
+
+    siguiente();
+  });
+}
+
+/**
+ * Orígenes admitidos por CORS.
+ * `CORS_ORIGIN` acepta varias URLs separadas por comas, porque las dos sedes pueden
+ * servirse desde dominios distintos apuntando a la misma API.
+ */
+function origenesPermitidos(config: ConfigService): string[] {
+  return (config.get<string>('CORS_ORIGIN') ?? 'http://localhost:3100')
+    .split(',')
+    .map((origen) => origen.trim().replace(/\/+$/, ''))
+    .filter(Boolean);
+}
+
+void bootstrap();

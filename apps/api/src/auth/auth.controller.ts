@@ -1,13 +1,15 @@
 import {
-  Controller,
-  Post,
+  BadRequestException,
   Body,
+  Controller,
+  Delete,
+  ForbiddenException,
   Get,
   Param,
+  ParseIntPipe,
   Patch,
-  ForbiddenException,
-  Delete,
-  BadRequestException,
+  Post,
+  Query,
   Req,
 } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
@@ -17,183 +19,211 @@ import { TokenBlacklistService } from './token-blacklist.service';
 import { Public } from '../common/decorators/public.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
-import { JwtPayload } from '../common/interfaces/jwt-payload.interface';
+import { JwtPayload, RolUsuario } from '../common/interfaces/jwt-payload.interface';
+import { leerArchivoDeLaPeticion } from '../storage/multipart';
 import { LoginDto } from './dto/login.dto';
 import { SolicitarAccesoDto } from './dto/solicitar-acceso.dto';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { SetupPasswordDto } from './dto/setup-password.dto';
 import { RequestPasswordResetDto, ResetPasswordDto } from './dto/password-reset.dto';
+import { ConfirmarCodigoDto, SolicitarCodigoDto } from './dto/verificacion-email.dto';
+import { CrearUsuarioDto } from './dto/crear-usuario.dto';
+import { RechazarSolicitudDto } from './dto/rechazar-solicitud.dto';
+
+/** Límite estricto para los flujos que pueden usarse para adivinar credenciales. */
+const LIMITE_CREDENCIALES = { default: { ttl: 60_000, limit: 5 } };
+
+/** Límite para los flujos que disparan el envío de un correo. */
+const LIMITE_CORREO = { default: { ttl: 60_000, limit: 3 } };
 
 @Controller('auth')
 export class AuthController {
   constructor(
-    private authService: AuthService,
-    private userService: UserService,
-    private tokenBlacklistService: TokenBlacklistService,
+    private readonly auth: AuthService,
+    private readonly users: UserService,
+    private readonly tokenBlacklist: TokenBlacklistService,
   ) {}
 
-  // ── Public auth endpoints ──
+  // ── Acceso público ───────────────────────────────────────────────────────
 
   @Public()
-  @Throttle({ default: { ttl: 60000, limit: 3 } })
-  @Post('solicitar')
-  async requestAccess(@Body() dto: SolicitarAccesoDto) {
-    return this.authService.requestAccess(dto);
-  }
-
-  @Public()
-  @Throttle({ default: { ttl: 60000, limit: 5 } })
+  @Throttle(LIMITE_CREDENCIALES)
   @Post('login')
-  async login(@Body() dto: LoginDto) {
-    return this.authService.login(dto.email, dto.contrasena);
+  login(@Body() dto: LoginDto) {
+    return this.auth.login(dto.email, dto.contrasena, dto.pais);
   }
 
   @Public()
-  @Throttle({ default: { ttl: 60000, limit: 5 } })
+  @Throttle(LIMITE_CREDENCIALES)
   @Post('establecer-password')
-  async setupPassword(@Body() body: SetupPasswordDto) {
-    return this.authService.setupPassword(body.email, body.contrasenaTemporal, body.nuevaContrasena);
+  setupPassword(@Body() dto: SetupPasswordDto) {
+    return this.auth.setupPassword(dto.email, dto.contrasenaTemporal, dto.nuevaContrasena);
   }
 
   @Public()
-  @Throttle({ default: { ttl: 60000, limit: 3 } })
+  @Throttle(LIMITE_CORREO)
+  @Post('solicitar')
+  requestAccess(@Body() dto: SolicitarAccesoDto) {
+    return this.auth.requestAccess(dto);
+  }
+
+  @Public()
+  @Throttle(LIMITE_CORREO)
+  @Post('verificar-email')
+  sendVerification(@Body() dto: SolicitarCodigoDto) {
+    return this.auth.sendEmailVerification(dto.email);
+  }
+
+  @Public()
+  @Throttle({ default: { ttl: 60_000, limit: 10 } })
+  @Post('confirmar-email')
+  confirmVerification(@Body() dto: ConfirmarCodigoDto) {
+    return this.auth.confirmEmailVerification(dto.email, dto.codigo);
+  }
+
+  @Public()
+  @Throttle(LIMITE_CORREO)
   @Post('recuperar-contrasena')
-  async requestPasswordReset(@Body() body: RequestPasswordResetDto) {
-    return this.authService.requestPasswordReset(body.email);
+  requestPasswordReset(@Body() dto: RequestPasswordResetDto) {
+    return this.auth.requestPasswordReset(dto.email);
   }
 
   @Public()
-  @Throttle({ default: { ttl: 60000, limit: 5 } })
+  @Throttle(LIMITE_CREDENCIALES)
   @Post('restablecer-contrasena')
-  async resetPassword(@Body() body: ResetPasswordDto) {
-    return this.authService.resetPassword(body.token, body.nuevaContrasena);
+  resetPassword(@Body() dto: ResetPasswordDto) {
+    return this.auth.resetPassword(dto.token, dto.nuevaContrasena);
   }
 
-  // ── Session management ──
+  // ── Sesión ───────────────────────────────────────────────────────────────
 
+  /**
+   * Cierra la sesión actual. Revoca sólo este token, de modo que cerrar sesión en un
+   * dispositivo no expulsa al usuario de los demás.
+   */
   @Post('logout')
   async logout(@CurrentUser() user: JwtPayload) {
-    this.tokenBlacklistService.revokeUser(user.sub);
-    return { message: 'Sesión cerrada correctamente.' };
+    await this.tokenBlacklist.revocarSesion(user.sub, user.jti);
+    return { message: 'Sesión cerrada.' };
   }
 
-  // ── User profile (delegated to UserService) ──
+  // ── Perfil propio ────────────────────────────────────────────────────────
 
   @Get('me')
-  async getMe(@CurrentUser() user: JwtPayload) {
-    if (!user) throw new ForbiddenException('No autenticado');
-    return this.userService.getUserProfile(user.sub);
+  getMe(@CurrentUser() user: JwtPayload) {
+    return this.users.getUserProfile(user.sub, user.pais);
   }
 
+  @Patch('me')
+  updateMe(@CurrentUser() user: JwtPayload, @Body() dto: UpdateProfileDto) {
+    return this.users.updateProfile(user.sub, dto);
+  }
+
+  @Post('me/foto')
+  @Throttle({ default: { ttl: 60_000, limit: 10 } })
+  async uploadMyPhoto(@CurrentUser() user: JwtPayload, @Req() req: unknown) {
+    const archivo = await leerArchivoDeLaPeticion(req);
+    return this.users.uploadProfilePhoto(user.sub, archivo.contenido, archivo.nombre);
+  }
+
+  @Delete('me/foto')
+  deleteMyPhoto(@CurrentUser() user: JwtPayload) {
+    return this.users.deleteProfilePhoto(user.sub);
+  }
+
+  /**
+   * Perfil de otro usuario de la misma sede.
+   * Sólo el propio interesado o un administrador pueden consultarlo.
+   */
   @Get('perfil/:guid')
-  async getProfile(@Param('guid') guid: string, @CurrentUser() user: JwtPayload) {
-    if (user && user.sub !== guid && user.role !== 'ADMINISTRADOR') {
+  getProfile(@Param('guid') guid: string, @CurrentUser() user: JwtPayload) {
+    if (user.sub !== guid && user.role !== 'ADMINISTRADOR') {
       throw new ForbiddenException('No tienes permiso para ver este perfil.');
     }
-    return this.userService.getUserProfile(guid);
+    return this.users.getUserProfile(guid, user.pais);
   }
 
-  @Patch('perfil/:guid')
-  async updateProfile(@Param('guid') guid: string, @Body() dto: UpdateProfileDto, @CurrentUser() user: JwtPayload) {
-    if (user && user.sub !== guid && user.role !== 'ADMINISTRADOR') {
-      throw new ForbiddenException('No tienes permiso para modificar este perfil.');
-    }
-    return this.userService.updateProfile(guid, dto);
-  }
-
-  // ── Admin user management (delegated to UserService) ──
+  // ── Administración de cuentas ────────────────────────────────────────────
 
   @Roles('ADMINISTRADOR')
   @Get('usuarios')
-  async getAllUsers() {
-    return this.userService.getAllUsers();
+  getAllUsers(@CurrentUser() user: JwtPayload) {
+    return this.users.getAllUsers(user.pais);
+  }
+
+  @Roles('ADMINISTRADOR')
+  @Get('usuarios/por-rol')
+  getUsuariosPorRol(@CurrentUser() user: JwtPayload, @Query('rol') rol: string) {
+    const roles: RolUsuario[] = ['ADMINISTRADOR', 'PROFESOR', 'ESTUDIANTE'];
+    if (!roles.includes(rol as RolUsuario)) {
+      throw new BadRequestException(`El rol debe ser uno de: ${roles.join(', ')}.`);
+    }
+    return this.users.getUsuariosPorRol(user.pais, rol as RolUsuario);
   }
 
   @Roles('ADMINISTRADOR')
   @Get('admin-stats')
-  async getAdminStats() {
-    return this.userService.getAdminStats();
+  getAdminStats(@CurrentUser() user: JwtPayload) {
+    return this.users.getAdminStats(user.pais);
+  }
+
+  @Roles('ADMINISTRADOR')
+  @Post('usuarios')
+  createUser(@CurrentUser() user: JwtPayload, @Body() dto: CrearUsuarioDto) {
+    return this.users.createUser(dto, user.pais);
+  }
+
+  /** Cuentas que pueden heredar los cursos de otra antes de eliminarla. */
+  @Roles('ADMINISTRADOR')
+  @Get('usuarios/:guid/destinos-cursos')
+  getDestinosDeCursos(@CurrentUser() user: JwtPayload, @Param('guid') guid: string) {
+    return this.users.getPosiblesDestinosDeCursos(user.pais, guid);
+  }
+
+  @Roles('ADMINISTRADOR')
+  @Patch('usuarios/:guid/activo')
+  setUserActive(
+    @CurrentUser() user: JwtPayload,
+    @Param('guid') guid: string,
+    @Body('activo') activo: boolean,
+  ) {
+    if (typeof activo !== 'boolean') {
+      throw new BadRequestException('Indica si la cuenta debe quedar activa (true) o desactivada (false).');
+    }
+    return this.users.setUserActive(guid, activo, user.pais, user.sub);
   }
 
   @Roles('ADMINISTRADOR')
   @Delete('usuarios/:guid')
-  async deleteUser(@Param('guid') guid: string, @CurrentUser() currentUser: any) {
-    return this.userService.deleteUser(guid, currentUser?.sub);
-  }
-
-  @Roles('ADMINISTRADOR')
-  @Post('usuarios/crear')
-  async createUser(
-    @Body() body: { nombre: string; apellido: string; email: string; rol: string; contrasena_temporal: string },
+  deleteUser(
+    @CurrentUser() user: JwtPayload,
+    @Param('guid') guid: string,
+    @Query('destino_cursos') destinoCursos?: string,
   ) {
-    return this.userService.createUser(body);
+    return this.users.deleteUser(guid, user.pais, user.sub, destinoCursos);
   }
 
-  // ── Access request management ──
+  // ── Solicitudes de acceso ────────────────────────────────────────────────
 
   @Roles('ADMINISTRADOR')
   @Get('solicitudes')
-  async getPendingRequests() {
-    return this.authService.getPendingRequests();
+  getPendingRequests(@CurrentUser() user: JwtPayload) {
+    return this.auth.getPendingRequests(user.pais);
   }
 
   @Roles('ADMINISTRADOR')
   @Post('solicitudes/:id/aprobar')
-  async approveRequest(@Param('id') id: string) {
-    const result = await this.authService.approveRequest(parseInt(id, 10));
-    this.authService.notifyRequestResolved('approved', { id: parseInt(id, 10) });
-    return result;
+  approveRequest(@CurrentUser() user: JwtPayload, @Param('id', ParseIntPipe) id: number) {
+    return this.auth.approveRequest(id, user.pais);
   }
 
   @Roles('ADMINISTRADOR')
   @Post('solicitudes/:id/rechazar')
-  async rejectRequest(@Param('id') id: string) {
-    const result = await this.authService.rejectRequest(parseInt(id, 10));
-    this.authService.notifyRequestResolved('rejected', { id: parseInt(id, 10) });
-    return result;
-  }
-
-  // ── Profile photo management (Fastify multipart) ──
-
-  @Post('perfil/:guid/foto')
-  async uploadPhoto(@Param('guid') guid: string, @CurrentUser() user: JwtPayload, @Req() req: any) {
-    if (user && user.sub !== guid && user.role !== 'ADMINISTRADOR') {
-      throw new ForbiddenException('No tienes permiso para modificar este perfil.');
-    }
-    const data = await req.file();
-    if (!data) throw new BadRequestException('No se recibió ningún archivo.');
-
-    const chunks: Buffer[] = [];
-    for await (const chunk of data.file) {
-      chunks.push(chunk);
-    }
-    const buffer = Buffer.concat(chunks);
-    if (buffer.length === 0) throw new BadRequestException('El archivo está vacío.');
-
-    return this.userService.uploadProfilePhoto(guid, buffer, data.filename || 'avatar.png');
-  }
-
-  @Delete('perfil/:guid/foto')
-  async deletePhoto(@Param('guid') guid: string, @CurrentUser() user: JwtPayload) {
-    if (user && user.sub !== guid && user.role !== 'ADMINISTRADOR') {
-      throw new ForbiddenException('No tienes permiso para modificar este perfil.');
-    }
-    return this.userService.deleteProfilePhoto(guid);
-  }
-
-  // ── Email verification (for access requests) ──
-
-  @Public()
-  @Throttle({ default: { ttl: 60000, limit: 3 } })
-  @Post('verificar-email')
-  async verifyEmail(@Body() body: { email: string }) {
-    return this.authService.sendEmailVerification(body.email);
-  }
-
-  @Public()
-  @Throttle({ default: { ttl: 60000, limit: 10 } })
-  @Post('confirmar-email')
-  async confirmEmail(@Body() body: { email: string; codigo: string }) {
-    return this.authService.confirmEmailVerification(body.email, body.codigo);
+  rejectRequest(
+    @CurrentUser() user: JwtPayload,
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: RechazarSolicitudDto,
+  ) {
+    return this.auth.rejectRequest(id, user.pais, dto.motivo);
   }
 }

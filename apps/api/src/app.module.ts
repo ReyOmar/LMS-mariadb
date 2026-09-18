@@ -2,85 +2,87 @@ import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { JwtModule } from '@nestjs/jwt';
 import { APP_GUARD } from '@nestjs/core';
-import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
+import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { EventEmitterModule } from '@nestjs/event-emitter';
 
-import { ConfiguracionModule } from './configuracion/configuracion.module';
 import { PrismaModule } from './prisma/prisma.module';
+import { RealtimeModule } from './realtime/realtime.module';
+import { ConfiguracionModule } from './configuracion/configuracion.module';
+import { StorageModule } from './storage/storage.module';
+import { MailModule } from './mail/mail.module';
+import { NotificacionesModule } from './notificaciones/notificaciones.module';
 import { AuthModule } from './auth/auth.module';
 import { CursosModule } from './cursos/cursos.module';
-import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
-import { RolesGuard } from './common/guards/roles.guard';
-import { StorageModule } from './storage/storage.module';
 import { EvaluacionesModule } from './evaluaciones/evaluaciones.module';
 import { EstudiantesModule } from './estudiantes/estudiantes.module';
 import { MatriculasModule } from './matriculas/matriculas.module';
 import { DashboardsModule } from './dashboards/dashboards.module';
-import { WsModule } from './ws/ws.module';
-import { NotificacionesModule } from './notificaciones/notificaciones.module';
-import { MailModule } from './mail/mail.module';
-import { SchedulerModule } from './scheduler/scheduler.module';
 import { CertificadosModule } from './certificados/certificados.module';
+import { SchedulerModule } from './scheduler/scheduler.module';
 import { HealthModule } from './health/health.module';
-import { LmsEventListener } from './common/listeners/lms-event.listener';
+import { ListenersModule } from './common/listeners/listeners.module';
+
+import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
+import { RolesGuard } from './common/guards/roles.guard';
+
+/** Vida del token de sesión. Debe coincidir con `VIDA_TOKEN_MS` del servicio de revocación. */
+const VIGENCIA_TOKEN = '24h';
 
 @Module({
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
+      // En producción las variables las inyecta el entorno (cPanel, Docker, systemd);
+      // leer un fichero .env allí sería una fuente de configuración que nadie controla.
       envFilePath: process.env.NODE_ENV === 'production' ? [] : ['../../.env'],
       ignoreEnvFile: process.env.NODE_ENV === 'production',
     }),
 
-    // JWT — available globally for signing/verifying tokens
     JwtModule.registerAsync({
       global: true,
       inject: [ConfigService],
       useFactory: (config: ConfigService) => ({
         secret: config.get<string>('JWT_SECRET'),
-        signOptions: { expiresIn: '24h' },
+        signOptions: { expiresIn: VIGENCIA_TOKEN },
       }),
     }),
 
-    // Rate Limiting — 200 requests per minute per IP (global)
-    // Higher limit needed because WebSocket events trigger refetches across multiple mounted components
+    // Límite general por IP. Los flujos sensibles (acceso, correo, subidas) lo estrechan
+    // con su propio @Throttle, y el latido del visor de curso lo omite con @SkipThrottle.
     ThrottlerModule.forRoot({
-      throttlers: [{ ttl: 60000, limit: 200 }],
+      throttlers: [{ ttl: 60_000, limit: 120 }],
     }),
 
-    // Event-driven architecture — decoupled service-to-service communication
     EventEmitterModule.forRoot(),
 
-    ConfiguracionModule,
+    // Infraestructura
     PrismaModule,
+    RealtimeModule,
+    StorageModule,
+    ConfiguracionModule,
+    MailModule,
+    NotificacionesModule,
+
+    // Dominio
     AuthModule,
     CursosModule,
-    StorageModule,
     EvaluacionesModule,
     EstudiantesModule,
     MatriculasModule,
     DashboardsModule,
-    WsModule,
-    NotificacionesModule,
-    MailModule,
-    SchedulerModule,
     CertificadosModule,
+
+    // Procesos de fondo y diagnóstico
+    ListenersModule,
+    SchedulerModule,
     HealthModule,
   ],
-  controllers: [],
   providers: [
-    // Global JWT authentication guard — all routes protected by default
-    // Use @Public() decorator to bypass on specific routes
+    // Toda ruta exige sesión salvo las marcadas con @Public().
     { provide: APP_GUARD, useClass: JwtAuthGuard },
-
-    // Global Roles guard — enforces @Roles() decorator
+    // Y, cuando la ruta declara @Roles(), también el rol adecuado.
     { provide: APP_GUARD, useClass: RolesGuard },
-
-    // Global rate limiting guard
     { provide: APP_GUARD, useClass: ThrottlerGuard },
-
-    // Centralized event listener for cross-cutting concerns
-    LmsEventListener,
   ],
 })
 export class AppModule {}

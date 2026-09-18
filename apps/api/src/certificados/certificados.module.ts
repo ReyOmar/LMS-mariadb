@@ -1,14 +1,12 @@
-import { Module, forwardRef } from '@nestjs/common';
-import { CertificadosService } from './certificados.service';
+import { Module } from '@nestjs/common';
 import { CertificadosController } from './certificados.controller';
-import { PrismaModule } from '../prisma/prisma.module';
-import { WsModule } from '../ws/ws.module';
-import { ConfiguracionModule } from '../configuracion/configuracion.module';
-import { NotificacionesModule } from '../notificaciones/notificaciones.module';
+import { CertificadosService } from './certificados.service';
+import { CursosModule } from '../cursos/cursos.module';
 import { StorageModule } from '../storage/storage.module';
+import { ConfiguracionModule } from '../configuracion/configuracion.module';
 
 @Module({
-  imports: [PrismaModule, WsModule, ConfiguracionModule, NotificacionesModule, StorageModule],
+  imports: [CursosModule, StorageModule, ConfiguracionModule],
   controllers: [CertificadosController],
   providers: [CertificadosService],
   exports: [CertificadosService],

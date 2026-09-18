@@ -1,409 +1,291 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
-import { Cron, CronExpression } from '@nestjs/schedule';
+import { Injectable, Logger } from '@nestjs/common';
+import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { NotificacionesService } from '../notificaciones/notificaciones.service';
 import { MailService } from '../mail/mail.service';
-import { LmsGateway } from '../ws/lms.gateway';
 import { StorageService } from '../storage/storage.service';
-import * as fs from 'fs';
-import * as path from 'path';
+import { CertificadosService } from '../certificados/certificados.service';
+import { HORAS_DESBLOQUEO_AUTOMATICO } from '../estudiantes/estudiantes.service';
 
+/** Días sin entrar tras los cuales se envía un recordatorio. */
+const DIAS_INACTIVIDAD = 3;
+
+/** Antigüedad mínima de un archivo para considerarlo huérfano y borrarlo. */
+const HORAS_GRACIA_HUERFANOS = 24;
+
+/**
+ * Tareas de mantenimiento.
+ *
+ * Todas llevan un candado en memoria que evita que una ejecución arranque mientras la
+ * anterior sigue viva. En cPanel sólo corre una instancia del proceso, así que basta;
+ * si algún día se levantan varias, habrá que mover el candado a la base de datos.
+ *
+ * Se eliminó la tarea que cada cinco minutos comparaba la lista de cursos en borrador con
+ * una copia en memoria para adivinar cuáles se habían republicado: ese cambio lo conoce
+ * `CursosService.updateCurso` en el instante en que ocurre y ya avisa desde allí.
+ */
 @Injectable()
-export class SchedulerService implements OnModuleInit {
+export class SchedulerService {
   private readonly logger = new Logger(SchedulerService.name);
-  // Track courses that were in BORRADOR so we can detect when they go back to PUBLICADO
-  private previousDraftCourses = new Set<string>();
-  // Guard against overlapping cron executions (single-instance idempotency)
-  private runningJobs = new Set<string>();
+  private readonly enCurso = new Set<string>();
 
   constructor(
-    private prisma: PrismaService,
-    private notificacionesService: NotificacionesService,
-    private mailService: MailService,
-    private lmsGateway: LmsGateway,
-    private storageService: StorageService,
+    private readonly prisma: PrismaService,
+    private readonly notificaciones: NotificacionesService,
+    private readonly mail: MailService,
+    private readonly storage: StorageService,
+    private readonly certificados: CertificadosService,
   ) {}
 
-  async onModuleInit() {
-    // Snapshot initial draft courses
-    const drafts = await this.prisma.lms_cursos.findMany({
-      where: { estado: 'BORRADOR' },
-      select: { guid: true },
-    });
-    drafts.forEach(d => this.previousDraftCourses.add(d.guid));
-    this.logger.log(`Scheduler initialized — monitoring ${drafts.length} draft courses`);
-  }
-
-  /**
-   * Guard to prevent overlapping cron executions.
-   * If a job with the same name is already running, skip the execution.
-   */
-  private async withJobLock(jobName: string, fn: () => Promise<void>): Promise<void> {
-    if (this.runningJobs.has(jobName)) {
-      this.logger.warn(`Skipping ${jobName} — previous execution still running`);
+  /** Ejecuta una tarea evitando solapes y registrando su resultado. */
+  private async ejecutar(nombre: string, tarea: () => Promise<string | void>): Promise<void> {
+    if (this.enCurso.has(nombre)) {
+      this.logger.warn(`Se omite "${nombre}": la ejecución anterior sigue en curso.`);
       return;
     }
-    this.runningJobs.add(jobName);
+
+    this.enCurso.add(nombre);
+    const inicio = Date.now();
     try {
-      await fn();
-    } catch (err) {
-      this.logger.error(`${jobName} failed:`, err);
+      const resumen = await tarea();
+      if (resumen) this.logger.log(`${nombre}: ${resumen} (${Date.now() - inicio} ms)`);
+    } catch (error) {
+      this.logger.error(`${nombre} falló`, error);
     } finally {
-      this.runningJobs.delete(jobName);
+      this.enCurso.delete(nombre);
     }
   }
 
-  /**
-   * Check for inactive students every day at 8:00 AM
-   * Students who haven't accessed in 3+ days get a reminder notification and email.
-   */
-  @Cron('0 8 * * *') // Every day at 8:00 AM
-  async checkInactiveStudents() {
-    this.logger.log('Running inactivity check...');
-    const threeDaysAgo = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
+  // ── Recordatorios ────────────────────────────────────────────────────────
 
-    const inactiveStudents = await this.prisma.usuarios.findMany({
-      where: {
-        rol: 'ESTUDIANTE',
-        activo: true,
-        OR: [
-          { ultimo_acceso: { lt: threeDaysAgo } },
-          { ultimo_acceso: null },
-        ],
-      },
-      select: { guid: true, email: true, nombre: true, apellido: true, ultimo_acceso: true },
-    });
+  /** Recuerda a los alumnos inactivos que tienen formación pendiente. Cada día a las 8:00. */
+  @Cron('0 8 * * *')
+  recordarInactividad(): Promise<void> {
+    return this.ejecutar('recordatorio de inactividad', async () => {
+      const corte = new Date(Date.now() - DIAS_INACTIVIDAD * 24 * 60 * 60 * 1000);
 
-    for (const student of inactiveStudents) {
-      const diasInactivo = student.ultimo_acceso
-        ? Math.floor((Date.now() - student.ultimo_acceso.getTime()) / (24 * 60 * 60 * 1000))
-        : 999;
-
-      // Only send reminder once per period (check if we already notified recently)
-      const recentReminder = await this.prisma.lms_notificaciones.findFirst({
+      const inactivos = await this.prisma.usuarios.findMany({
         where: {
-          usuario_guid: student.guid,
-          tipo: 'RECORDATORIO_INACTIVIDAD',
-          created_at: { gt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000) },
+          rol: 'ESTUDIANTE',
+          activo: true,
+          OR: [{ ultimo_acceso: { lt: corte } }, { ultimo_acceso: null }],
+          // Sólo tiene sentido avisar a quien tiene formación asignada.
+          matriculas: { some: { activa: true } },
+          // Y sólo si no se le avisó ya en este mismo periodo.
+          notificaciones: {
+            none: { tipo: 'RECORDATORIO_INACTIVIDAD', created_at: { gt: corte } },
+          },
         },
+        select: { guid: true, email: true, nombre: true, pais: true, ultimo_acceso: true },
       });
 
-      if (!recentReminder) {
-        // Create in-app notification
-        await this.notificacionesService.crearNotificacion({
-          usuario_guid: student.guid,
+      for (const alumno of inactivos) {
+        const dias = alumno.ultimo_acceso
+          ? Math.floor((Date.now() - alumno.ultimo_acceso.getTime()) / (24 * 60 * 60 * 1000))
+          : DIAS_INACTIVIDAD;
+
+        await this.notificaciones.crear({
+          usuario_guid: alumno.guid,
+          pais: alumno.pais,
           tipo: 'RECORDATORIO_INACTIVIDAD',
-          titulo: 'Te echamos de menos',
-          mensaje: `Llevas ${diasInactivo} días sin acceder a la plataforma. ¡Tu progreso es importante!`,
+          titulo: 'Tienes formación pendiente',
+          mensaje: `Llevas ${dias} día(s) sin entrar. Retoma tus cursos cuando puedas.`,
           url_accion: '/dashboard',
         });
 
-        // Send email
-        await this.mailService.sendInactivityReminder(
-          student.email,
-          student.nombre,
-          diasInactivo,
-        );
-
-        this.logger.log(`Inactivity reminder sent to ${student.email} (${diasInactivo} days)`);
+        await this.mail.sendInactivityReminder(alumno.email, alumno.nombre, dias, alumno.pais);
       }
-    }
+
+      return `${inactivos.length} recordatorio(s) enviados`;
+    });
   }
 
-  /**
-   * Check every 5 minutes if any course went from BORRADOR to PUBLICADO
-   * This handles "course reactivated" notifications.
-   */
-  @Cron('*/5 * * * *') // Every 5 minutes
-  async checkCourseReactivation() {
-    const currentDrafts = await this.prisma.lms_cursos.findMany({
-      where: { estado: 'BORRADOR' },
-      select: { guid: true },
-    });
-    const currentDraftSet = new Set(currentDrafts.map(d => d.guid));
-
-    // Courses that were BORRADOR before but no longer are = reactivated
-    for (const prevDraftGuid of this.previousDraftCourses) {
-      if (!currentDraftSet.has(prevDraftGuid)) {
-        // This course was reactivated
-        const curso = await this.prisma.lms_cursos.findUnique({
-          where: { guid: prevDraftGuid },
-          select: { guid: true, titulo: true, estado: true },
-        });
-
-        if (curso && curso.estado === 'PUBLICADO') {
-          this.logger.log(`Course reactivated: ${curso.titulo}`);
-
-          // Get enrolled students
-          const matriculas = await this.prisma.lms_matriculas.findMany({
-            where: { curso_guid: prevDraftGuid },
-            include: { usuario: { select: { guid: true, email: true, nombre: true } } },
-          });
-
-          for (const m of matriculas) {
-            // In-app notification
-            await this.notificacionesService.crearNotificacion({
-              usuario_guid: m.usuario_guid,
-              tipo: 'CURSO_REACTIVADO',
-              titulo: '¡Curso disponible nuevamente!',
-              mensaje: `El curso "${curso.titulo}" que estaba en mantenimiento ya está activo. ¡Puedes continuar!`,
-              ref_tipo: 'curso',
-              ref_guid: curso.guid,
-            });
-
-            // Email notification
-            await this.mailService.sendCourseReactivated(
-              m.usuario.email,
-              m.usuario.nombre,
-              curso.titulo,
-            );
-          }
-
-          // Broadcast to all enrolled students
-          const enrolledGuids = matriculas.map(m => m.usuario_guid);
-          this.lmsGateway.broadcast('course:updated', {
-            guid: curso.guid,
-            titulo: curso.titulo,
-            estado: 'PUBLICADO',
-            reactivated: true,
-          }, enrolledGuids);
-        }
-      }
-    }
-
-    // Update snapshot
-    this.previousDraftCourses = currentDraftSet;
-  }
+  // ── Desbloqueo por espera ────────────────────────────────────────────────
 
   /**
-   * Auto-unlock resources when assignments are pending grading for >48 hours.
-   * Runs every hour. Creates progress records so students can advance.
+   * Desbloquea el avance de quien lleva más de 48 h esperando una calificación.
+   *
+   * No da la tarea por aprobada: sólo crea el registro de progreso que permite pasar al
+   * siguiente recurso. El certificado sigue exigiendo que todas las tareas estén
+   * calificadas, así que nadie se certifica por esta vía.
    */
-  @Cron('0 * * * *') // Every hour at minute 0
-  async autoUnlockPendingSubmissions() {
-    const twoDaysAgo = new Date(Date.now() - 48 * 60 * 60 * 1000);
+  @Cron('0 * * * *')
+  desbloquearEsperasLargas(): Promise<void> {
+    return this.ejecutar('desbloqueo por espera', async () => {
+      const corte = new Date(Date.now() - HORAS_DESBLOQUEO_AUTOMATICO * 60 * 60 * 1000);
 
-    // Find all submissions that are ENTREGADA or EN_REVISION and older than 48 hours
-    const pendingSubmissions = await this.prisma.lms_entregas.findMany({
-      where: {
-        estado: { in: ['ENTREGADA', 'EN_REVISION'] },
-        fecha_entrega: { lt: twoDaysAgo },
-        tarea_guid: { not: null },
-      },
-      select: {
-        guid: true,
-        usuario_guid: true,
-        tarea_guid: true,
-        fecha_entrega: true,
-        calificacion: true,
-      },
-    });
-
-    if (pendingSubmissions.length === 0) return;
-
-    let unlocked = 0;
-
-    for (const submission of pendingSubmissions) {
-      if (!submission.tarea_guid) continue;
-
-      // Check if progress already exists (already unlocked)
-      const existing = await this.prisma.lms_progreso_recurso.findUnique({
+      const pendientes = await this.prisma.lms_entregas.findMany({
         where: {
-          usuario_guid_recurso_guid: {
-            usuario_guid: submission.usuario_guid,
-            recurso_guid: submission.tarea_guid,
-          },
+          estado: { in: ['ENTREGADA', 'EN_REVISION'] },
+          fecha_entrega: { lt: corte },
+          tarea_guid: { not: null },
         },
+        select: {
+          usuario_guid: true,
+          tarea_guid: true,
+          usuario: { select: { pais: true } },
+          tarea: { select: { titulo: true } },
+        },
+        take: 500,
       });
+      if (pendientes.length === 0) return;
 
-      if (existing) continue; // Already unlocked
+      let desbloqueados = 0;
+      for (const entrega of pendientes) {
+        if (!entrega.tarea_guid) continue;
 
-      // F5.8: If submission already has a calificacion, verify it meets nota_aprobacion
-      // This prevents auto-unlock for submissions that were graded as failing
-      // but whose estado wasn't transitioned to CALIFICADA correctly
-      if (submission.calificacion != null) {
-        const recursoConCurso = await this.prisma.lms_recursos.findUnique({
-          where: { guid: submission.tarea_guid },
-          select: {
-            leccion: {
-              select: {
-                modulo: {
-                  select: {
-                    curso: { select: { nota_aprobacion: true } }
-                  }
-                }
-              }
-            }
-          }
+        const yaDesbloqueado = await this.prisma.lms_progreso_recurso.findUnique({
+          where: {
+            usuario_guid_recurso_guid: {
+              usuario_guid: entrega.usuario_guid,
+              recurso_guid: entrega.tarea_guid,
+            },
+          },
+          select: { id: true },
         });
-        const notaAprobacion = recursoConCurso?.leccion?.modulo?.curso?.nota_aprobacion
-          ? Number(recursoConCurso.leccion.modulo.curso.nota_aprobacion)
-          : 3.0;
+        if (yaDesbloqueado) continue;
 
-        if (Number(submission.calificacion) < notaAprobacion) {
-          this.logger.warn(`Skipping auto-unlock for submission ${submission.guid}: grade ${submission.calificacion} < ${notaAprobacion}`);
-          continue; // Don't unlock — student needs to resubmit
-        }
+        await this.prisma.lms_progreso_recurso.create({
+          data: { usuario_guid: entrega.usuario_guid, recurso_guid: entrega.tarea_guid, completado: true },
+        });
+        desbloqueados++;
+
+        await this.notificaciones.crear({
+          usuario_guid: entrega.usuario_guid,
+          pais: entrega.usuario.pais,
+          tipo: 'MODULO_COMPLETADO',
+          titulo: 'Puedes continuar con el curso',
+          mensaje:
+            `Tu tarea "${entrega.tarea?.titulo ?? 'pendiente'}" lleva más de ${HORAS_DESBLOQUEO_AUTOMATICO} horas ` +
+            'esperando calificación, así que hemos desbloqueado el siguiente recurso. La tarea sigue pendiente de revisión.',
+          url_accion: '/dashboard/student/cursos',
+        });
       }
 
-      // Create progress record to unlock the next resource
-      await this.prisma.lms_progreso_recurso.create({
-        data: {
-          usuario_guid: submission.usuario_guid,
-          recurso_guid: submission.tarea_guid,
-          completado: true,
-        },
-      });
-
-      unlocked++;
-
-      // Get task info for notification
-      const recursoInfo = await this.prisma.lms_recursos.findUnique({
-        where: { guid: submission.tarea_guid },
-        select: { titulo: true },
-      });
-
-      // Notify student
-      await this.notificacionesService.crearNotificacion({
-        usuario_guid: submission.usuario_guid,
-        tipo: 'MODULO_COMPLETADO',
-        titulo: '🔓 Recurso desbloqueado automáticamente',
-        mensaje: `Tu tarea "${recursoInfo?.titulo || 'Tarea'}" lleva más de 48 horas esperando calificación. Hemos desbloqueado el siguiente recurso para que puedas seguir avanzando. La tarea sigue pendiente de revisión por el examinador.`,
-        url_accion: '/dashboard/student/cursos',
-      }).catch((err) => this.logger.error('Auto-unlock notification error:', err));
-    }
-
-    if (unlocked > 0) {
-      this.logger.log(`Auto-unlocked ${unlocked} resources for pending submissions >48h`);
-      this.lmsGateway.broadcast('dashboard:refresh', { reason: 'auto_unlock' });
-    }
+      return `${desbloqueados} recurso(s) desbloqueados`;
+    });
   }
 
+  // ── Limpieza de almacenamiento ───────────────────────────────────────────
+
   /**
-   * F7.7: Clean up orphan files in uploads/ directory.
-   * Runs daily at 3:00 AM. Finds files not referenced in the DB and deletes them.
-   * Only deletes files older than 24h to avoid race conditions with in-progress uploads.
+   * Borra los archivos que ya no referencia ninguna fila.
+   *
+   * La versión anterior comparaba los nombres planos del directorio contra las claves con
+   * prefijo de carpeta guardadas en base de datos. No coincidía ninguna, así que borraba
+   * **todos** los archivos locales con más de 24 horas, entregas y certificados incluidos.
+   * Ahora ambos lados usan la misma clave `carpeta/nombre`.
    */
-  @Cron('0 3 * * *') // Daily at 3:00 AM
-  async cleanupOrphanFiles() {
-    const uploadsDir = path.join(process.cwd(), 'uploads');
-    if (!fs.existsSync(uploadsDir)) return;
+  @Cron('0 3 * * *')
+  limpiarArchivosHuerfanos(): Promise<void> {
+    return this.ejecutar('limpieza de archivos huérfanos', async () => {
+      if (this.storage.usaAlmacenamientoRemoto) {
+        // Con R2 el inventario remoto no se recorre desde aquí: listar un bucket completo
+        // cada noche es caro y el borrado ya se hace en el momento de desvincular.
+        return 'omitida (almacenamiento remoto)';
+      }
 
-    const oneDayAgo = Date.now() - 24 * 60 * 60 * 1000;
+      const referenciadas = await this.clavesReferenciadas();
+      const locales = await this.storage.listarLocales();
+      const corte = Date.now() - HORAS_GRACIA_HUERFANOS * 60 * 60 * 1000;
 
-    // Get all filenames referenced in DB
-    const [recursos, entregas, certificados, usuarios, configuracion, cursos] = await Promise.all([
-      this.prisma.lms_recursos.findMany({
-        where: { archivo_adjunto: { not: null } },
-        select: { archivo_adjunto: true },
-      }),
+      let borrados = 0;
+      for (const archivo of locales) {
+        if (referenciadas.has(archivo.clave)) continue;
+        // El margen evita borrar un archivo recién subido cuya fila aún no se ha escrito.
+        if (archivo.modificado > corte) continue;
+
+        await this.storage.deleteFile(archivo.clave);
+        borrados++;
+      }
+
+      return `${borrados} archivo(s) huérfanos borrados de ${locales.length} revisados`;
+    });
+  }
+
+  /** Todas las claves de almacenamiento que alguna fila sigue usando. */
+  private async clavesReferenciadas(): Promise<Set<string>> {
+    const [recursos, entregas, certificados, usuarios, cursos, configuraciones] = await Promise.all([
+      this.prisma.lms_recursos.findMany({ select: { archivo_adjunto: true, url_archivo: true } }),
       this.prisma.lms_entregas.findMany({
         where: { url_archivo_adjunto: { not: null } },
         select: { url_archivo_adjunto: true },
       }),
-      this.prisma.lms_certificados.findMany({
-        select: { archivo_pdf: true },
-      }),
-      this.prisma.usuarios.findMany({
-        where: { firma_url: { not: null } },
-        select: { firma_url: true },
-      }),
-      this.prisma.lms_configuracion.findFirst({
-        select: { logo_url: true },
-      }),
-      this.prisma.lms_cursos.findMany({
-        where: { imagen_portada: { not: null } },
-        select: { imagen_portada: true },
+      this.prisma.lms_certificados.findMany({ select: { archivo_pdf: true } }),
+      this.prisma.usuarios.findMany({ select: { firma_url: true, foto_url: true } }),
+      this.prisma.lms_cursos.findMany({ select: { imagen_portada: true } }),
+      this.prisma.lms_configuracion.findMany({
+        select: { logo_url: true, favicon_url: true, login_fondo_url: true },
       }),
     ]);
 
-    const referencedFiles = new Set<string>();
-    recursos.forEach(r => r.archivo_adjunto && referencedFiles.add(r.archivo_adjunto));
-    entregas.forEach(e => e.url_archivo_adjunto && referencedFiles.add(e.url_archivo_adjunto));
-    certificados.forEach(c => c.archivo_pdf && referencedFiles.add(c.archivo_pdf));
-    usuarios.forEach(u => u.firma_url && referencedFiles.add(u.firma_url));
-    cursos.forEach(c => c.imagen_portada && referencedFiles.add(c.imagen_portada));
-    if (configuracion?.logo_url) referencedFiles.add(configuracion.logo_url);
+    const claves = new Set<string>();
+    const anadir = (valor: string | null | undefined) => {
+      if (valor) claves.add(valor);
+    };
 
-    // Scan local files
-    const localFiles = fs.readdirSync(uploadsDir).filter(f => {
-      const fullPath = path.join(uploadsDir, f);
-      return fs.statSync(fullPath).isFile();
-    });
-
-    let deleted = 0;
-    for (const file of localFiles) {
-      if (referencedFiles.has(file)) continue; // Referenced in DB
-
-      const fullPath = path.join(uploadsDir, file);
-      const stat = fs.statSync(fullPath);
-
-      // Only delete files older than 24h (safety buffer)
-      if (stat.mtimeMs > oneDayAgo) continue;
-
-      try {
-        fs.unlinkSync(fullPath);
-        deleted++;
-        this.logger.log(`Deleted orphan file: ${file}`);
-      } catch (err) {
-        this.logger.warn(`Failed to delete orphan file: ${file}`, err);
-      }
+    for (const r of recursos) {
+      anadir(r.archivo_adjunto);
+      anadir(r.url_archivo);
+    }
+    for (const e of entregas) anadir(e.url_archivo_adjunto);
+    for (const c of certificados) anadir(c.archivo_pdf);
+    for (const u of usuarios) {
+      anadir(u.firma_url);
+      anadir(u.foto_url);
+    }
+    for (const c of cursos) anadir(c.imagen_portada);
+    for (const c of configuraciones) {
+      anadir(c.logo_url);
+      anadir(c.favicon_url);
+      anadir(c.login_fondo_url);
     }
 
-    if (deleted > 0) {
-      this.logger.log(`Orphan cleanup: deleted ${deleted} unreferenced files`);
-    }
+    return claves;
   }
 
   /**
-   * F7.5.5: Weekly retrospective purge — clean up submission files
-   * for students who already have a certificate but files weren't purged
-   * (e.g. submissions from before this feature was implemented).
-   * Runs every Sunday at 4:00 AM.
+   * Retira los archivos de las entregas de quienes ya tienen certificado.
+   * Recoge los casos en que la purga del momento de emitir falló. Domingos a las 4:00.
    */
   @Cron('0 4 * * 0')
-  async purgeRetroactiveEntregaFiles() {
-    this.logger.log('⏰ Running weekly retrospective entrega file purge...');
+  purgarEntregasCertificadas(): Promise<void> {
+    return this.ejecutar('purga de entregas certificadas', async () => {
+      const certificados = await this.prisma.lms_certificados.findMany({
+        where: {
+          usuario: {
+            entregas: { some: { archivo_purgado: false, url_archivo_adjunto: { not: null } } },
+          },
+        },
+        select: { usuario_guid: true, curso_guid: true },
+        take: 200,
+      });
 
-    try {
-      // Find entregas that have files + are CALIFICADA + the user has a certificate for that course
-      const entregas = await this.prisma.$queryRaw<Array<{
-        guid: string;
-        url_archivo_adjunto: string;
-      }>>`
-        SELECT e.guid, e.url_archivo_adjunto
-        FROM lms_entregas e
-        INNER JOIN lms_recursos r ON e.tarea_guid = r.guid
-        INNER JOIN lms_lecciones l ON r.leccion_guid = l.guid
-        INNER JOIN lms_modulos m ON l.modulo_guid = m.guid
-        INNER JOIN lms_certificados c ON c.usuario_guid = e.usuario_guid AND c.curso_guid = m.curso_guid
-        WHERE e.url_archivo_adjunto IS NOT NULL
-          AND e.archivo_purgado = false
-          AND e.estado = 'CALIFICADA'
-      `;
-
-      if (entregas.length === 0) {
-        this.logger.log('No retrospective entregas to purge.');
-        return;
+      for (const certificado of certificados) {
+        await this.certificados.purgarEntregas(certificado.curso_guid, certificado.usuario_guid);
       }
 
-      let purged = 0;
-      for (const entrega of entregas) {
-        try {
-          await this.storageService.deleteFile(entrega.url_archivo_adjunto);
-          await this.prisma.lms_entregas.update({
-            where: { guid: entrega.guid },
-            data: { url_archivo_adjunto: null, archivo_purgado: true },
-          });
-          purged++;
-        } catch (err) {
-          this.logger.warn(`Failed to purge retroactive entrega ${entrega.guid}:`, err);
-        }
-      }
+      return `${certificados.length} certificado(s) revisados`;
+    });
+  }
 
-      this.logger.log(`📦 Retrospective purge: cleaned ${purged}/${entregas.length} submission files`);
-    } catch (err) {
-      this.logger.error('Retrospective purge failed:', err);
-    }
+  // ── Limpieza de datos temporales ─────────────────────────────────────────
+
+  /**
+   * Borra códigos de verificación y enlaces de recuperación caducados.
+   * Son secretos de un solo uso: conservarlos pasada su vigencia no aporta nada y alarga
+   * innecesariamente la ventana en que podrían filtrarse.
+   */
+  @Cron('30 3 * * *')
+  limpiarDatosTemporales(): Promise<void> {
+    return this.ejecutar('limpieza de datos temporales', async () => {
+      const ahora = new Date();
+      const [verificaciones, recuperaciones] = await Promise.all([
+        this.prisma.lms_verificacion_email.deleteMany({ where: { expires_at: { lt: ahora } } }),
+        this.prisma.lms_password_resets.deleteMany({ where: { expires_at: { lt: ahora } } }),
+      ]);
+
+      return `${verificaciones.count} código(s) y ${recuperaciones.count} enlace(s) caducados borrados`;
+    });
   }
 }

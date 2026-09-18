@@ -1,382 +1,328 @@
-import { Injectable, Logger, BadRequestException } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { PrismaService } from '../prisma/prisma.service';
-import { LmsGateway } from '../ws/lms.gateway';
+import { CursoAccesoService } from './curso-acceso.service';
+import { ConfiguracionQuiz, parsearConfiguracionQuiz, respuestasCorrectas, sinRespuestas } from './quiz-config';
+import { esAprobada, notaDeCuestionario, umbralAprobacion } from '../common/domain/calificacion';
+import { JwtPayload } from '../common/interfaces/jwt-payload.interface';
+
+/** Margen de gracia sobre el límite de tiempo, para absorber la latencia del envío. */
+const MARGEN_TIEMPO_MS = 30_000;
+
+/** Estado de un cuestionario para un alumno concreto. */
+export interface EstadoQuiz {
+  intentos_realizados: number;
+  max_intentos: number;
+  mejor_nota: number | null;
+  nota_aprobacion: number;
+  aprobado: boolean;
+  intento_en_curso: boolean;
+  fecha_inicio: Date | null;
+  tiempo_minutos: number;
+  puede_reintentar: boolean;
+  motivo_bloqueo: string | null;
+}
 
 /**
- * QuizService — Quiz attempt management (start, evaluate, status, enrollment check).
- * Extracted from CursosService. Uses event-driven architecture for notifications.
+ * Cuestionarios: iniciar un intento, corregirlo y consultar su estado.
+ *
+ * El recuento de intentos se lleva contando las entregas registradas, sin más.
+ * La versión anterior intentaba deducir si un módulo había sido reiniciado comparando
+ * «hay entregas calificadas pero no hay registro de progreso» y, cuando lo creía, borraba
+ * los intentos previos. El efecto era que `intentos_permitidos` no limitaba nada: cada
+ * suspenso borraba el contador y el alumno podía repetir indefinidamente.
+ *
+ * Ahora las dos cosas están separadas y son explícitas:
+ *  - Los intentos **se conservan**, así que el límite configurado se respeta.
+ *  - Suspender reinicia el **progreso del módulo** (obliga a repasar el material), pero no
+ *    borra el historial de intentos.
  */
 @Injectable()
 export class QuizService {
   private readonly logger = new Logger(QuizService.name);
+
   constructor(
-    private prisma: PrismaService,
-    private lmsGateway: LmsGateway,
-    private eventEmitter: EventEmitter2,
+    private readonly prisma: PrismaService,
+    private readonly acceso: CursoAccesoService,
+    private readonly eventos: EventEmitter2,
   ) {}
 
-  async startQuiz(recurso_guid: string, usuario_guid: string) {
-    const bloque = await this.prisma.lms_recursos.findUnique({ where: { guid: recurso_guid } });
-    if (!bloque || bloque.tipo !== 'TAREA' || !bloque.quiz_config) {
-      throw new BadRequestException('El recurso no es un cuestionario válido.');
-    }
+  // ── Inicio del intento ───────────────────────────────────────────────────
 
-    let quizConfig: any;
-    try {
-      quizConfig = JSON.parse(bloque.quiz_config);
-    } catch {
-      throw new BadRequestException('Configuración de cuestionario corrupta.');
-    }
+  /**
+   * Abre un intento y devuelve las preguntas **sin las respuestas correctas**.
+   *
+   * Si ya había un intento abierto se devuelve ese mismo: recargar la página a mitad de un
+   * examen no debe consumir un intento ni reiniciar el cronómetro.
+   */
+  async iniciarIntento(recursoGuid: string, user: JwtPayload) {
+    const { config, curso } = await this.cargarCuestionario(recursoGuid, user);
 
     return this.prisma.$transaction(async (tx) => {
-      const enProgreso = await tx.lms_entregas.findFirst({
-        where: { tarea_guid: recurso_guid, usuario_guid, estado: 'BORRADOR' },
+      const enCurso = await tx.lms_entregas.findFirst({
+        where: { tarea_guid: recursoGuid, usuario_guid: user.sub, estado: 'BORRADOR' },
+        select: { guid: true, fecha_inicio: true },
       });
-      if (enProgreso) return { success: true, guid: enProgreso.guid, fecha_inicio: enProgreso.fecha_inicio };
+      if (enCurso) {
+        return {
+          guid: enCurso.guid,
+          fecha_inicio: enCurso.fecha_inicio,
+          tiempo_minutos: config.tiempo_minutos,
+          preguntas: sinRespuestas(config).preguntas,
+        };
+      }
 
-      // Clean up stale attempts from a previous module reset.
-      // When a student fails a quiz, their module progress is reset (lms_progreso_recurso deleted)
-      // but old CALIFICADA delivery records may still exist. These stale records would incorrectly
-      // count towards the attempt limit, blocking the student from retrying.
-      // Detection: if there are graded attempts but NO progress record, the module was reset.
-      const [existingAttempts, progressRecord] = await Promise.all([
-        tx.lms_entregas.count({
-          where: {
-            tarea_guid: recurso_guid,
-            usuario_guid,
-            estado: { in: ['CALIFICADA', 'ENTREGADA', 'ENTREGADA_TARDE'] },
-          },
-        }),
-        tx.lms_progreso_recurso.findFirst({
-          where: { usuario_guid, recurso_guid },
-        }),
-      ]);
+      const yaAprobado = await tx.lms_progreso_recurso.findUnique({
+        where: { usuario_guid_recurso_guid: { usuario_guid: user.sub, recurso_guid: recursoGuid } },
+        select: { id: true },
+      });
+      if (yaAprobado) {
+        throw new BadRequestException('Ya superaste este cuestionario.');
+      }
 
-      if (existingAttempts > 0 && !progressRecord) {
-        // Stale state detected: old attempts exist but quiz hasn't been passed.
-        // This means the module was reset — clean up old delivery records.
-        this.logger.log(
-          `Cleaning up ${existingAttempts} stale quiz attempt(s) for user ${usuario_guid} on resource ${recurso_guid} after module reset`,
+      const intentosPrevios = await tx.lms_entregas.count({
+        where: { tarea_guid: recursoGuid, usuario_guid: user.sub, estado: { not: 'BORRADOR' } },
+      });
+      if (config.intentos_permitidos > 0 && intentosPrevios >= config.intentos_permitidos) {
+        throw new BadRequestException(
+          `Has agotado los ${config.intentos_permitidos} intento(s) disponibles para este cuestionario. Contacta con tu examinador.`,
         );
-        await tx.lms_entregas.deleteMany({
-          where: {
-            tarea_guid: recurso_guid,
-            usuario_guid,
-            estado: { in: ['CALIFICADA', 'ENTREGADA', 'ENTREGADA_TARDE'] },
-          },
-        });
       }
 
-      // Count valid attempts (after cleanup)
-      const prevAttempts = existingAttempts > 0 && !progressRecord ? 0 : existingAttempts;
-
-      const maxIntentos = quizConfig.intentos_permitidos || 0;
-      if (maxIntentos > 0 && prevAttempts >= maxIntentos) {
-        throw new BadRequestException(`Has alcanzado el límite de ${maxIntentos} intento(s) para este cuestionario.`);
-      }
-
-      const nueva = await tx.lms_entregas.create({
+      const intento = await tx.lms_entregas.create({
         data: {
-          usuario_guid,
-          tarea_guid: recurso_guid,
+          usuario_guid: user.sub,
+          tarea_guid: recursoGuid,
           estado: 'BORRADOR',
           fecha_inicio: new Date(),
-          intento_numero: prevAttempts + 1,
+          intento_numero: intentosPrevios + 1,
         },
+        select: { guid: true, fecha_inicio: true },
       });
 
-      return { success: true, guid: nueva.guid, fecha_inicio: nueva.fecha_inicio };
+      this.logger.log(`Intento ${intentosPrevios + 1} iniciado por ${user.sub} en ${curso.titulo}`);
+
+      return {
+        guid: intento.guid,
+        fecha_inicio: intento.fecha_inicio,
+        tiempo_minutos: config.tiempo_minutos,
+        preguntas: sinRespuestas(config).preguntas,
+      };
     });
   }
 
-  async evaluarQuiz(recurso_guid: string, usuario_guid: string, respuestas: Record<string, string>) {
-    const bloque = await this.prisma.lms_recursos.findUnique({
-      where: { guid: recurso_guid },
-      include: {
-        leccion: {
-          select: {
-            modulo: {
-              select: {
-                curso: { select: { nota_aprobacion: true } },
-              },
-            },
-          },
-        },
-      },
+  // ── Corrección ───────────────────────────────────────────────────────────
+
+  /**
+   * Corrige el intento abierto y devuelve la nota sobre 100.
+   *
+   * La corrección ocurre íntegramente aquí: el navegador nunca ha tenido las respuestas
+   * correctas, así que no puede calcular ni falsear la nota.
+   */
+  async corregirIntento(recursoGuid: string, user: JwtPayload, respuestas: Record<string, string>) {
+    const { config, curso } = await this.cargarCuestionario(recursoGuid, user);
+    const umbral = umbralAprobacion(curso.nota_aprobacion);
+
+    const intento = await this.prisma.lms_entregas.findFirst({
+      where: { tarea_guid: recursoGuid, usuario_guid: user.sub, estado: 'BORRADOR' },
+      select: { guid: true, fecha_inicio: true },
     });
-    if (!bloque || bloque.tipo !== 'TAREA' || !bloque.quiz_config) {
-      throw new BadRequestException('El recurso no es un cuestionario válido.');
+    if (!intento) {
+      throw new BadRequestException('No tienes ningún intento abierto. Inicia el cuestionario de nuevo.');
     }
 
-    const notaAprobacion = bloque.leccion?.modulo?.curso?.nota_aprobacion
-      ? Number(bloque.leccion.modulo.curso.nota_aprobacion)
-      : 3.0;
+    const fueraDeTiempo = this.excedioElTiempo(intento.fecha_inicio, config.tiempo_minutos);
+    const { correctas, total } = fueraDeTiempo
+      ? { correctas: 0, total: config.preguntas.length }
+      : this.contarAciertos(config, respuestas);
 
-    let quizConfig: any;
-    try {
-      quizConfig = JSON.parse(bloque.quiz_config);
-    } catch {
-      throw new BadRequestException('Configuración de cuestionario corrupta.');
-    }
+    const nota = fueraDeTiempo ? 0 : notaDeCuestionario(correctas, total);
+    const aprobado = esAprobada(nota, umbral);
 
-    // BUG-03 FIX: Validate time limit
-    const tiempoMinutos = quizConfig.tiempo_minutos || 0;
-    let tiempoExcedido = false;
-    if (tiempoMinutos > 0) {
-      const enProgreso = await this.prisma.lms_entregas.findFirst({
-        where: { tarea_guid: recurso_guid, usuario_guid, estado: 'BORRADOR' },
-      });
-      if (enProgreso?.fecha_inicio) {
-        const tiempoLimiteMs = tiempoMinutos * 60 * 1000;
-        const tiempoTranscurrido = Date.now() - new Date(enProgreso.fecha_inicio).getTime();
-        if (tiempoTranscurrido > tiempoLimiteMs + 30000) {
-          this.logger.warn(`Quiz time exceeded for user ${usuario_guid} on resource ${recurso_guid}`);
-          tiempoExcedido = true;
-        }
-      }
-    }
-
-    const preguntas = quizConfig.preguntas || [];
-    let correctas = 0;
-    const total = preguntas.length;
-
-    if (!tiempoExcedido) {
-      for (const p of preguntas) {
-        const userAnswer = respuestas[p.id];
-        const correctOption = p.opciones.find((o: any) => o.es_correcta);
-        if (correctOption && userAnswer === correctOption.id) {
-          correctas++;
-        }
-      }
-    }
-
-    let nota = 0;
-    if (total > 0 && !tiempoExcedido) {
-      nota = parseFloat(((correctas / total) * 5).toFixed(1));
-    }
-
-    // F6.2: Atomic update — only transitions BORRADOR→CALIFICADA once.
-    // If a concurrent submit already transitioned this, updateMany returns count=0.
-    const updateResult = await this.prisma.lms_entregas.updateMany({
-      where: { tarea_guid: recurso_guid, usuario_guid, estado: 'BORRADOR' },
+    // `updateMany` sobre el estado BORRADOR hace la transición atómica: si llegan dos
+    // envíos a la vez, sólo uno la consigue y el segundo no crea un intento duplicado.
+    const transicion = await this.prisma.lms_entregas.updateMany({
+      where: { guid: intento.guid, estado: 'BORRADOR' },
       data: {
         estado: 'CALIFICADA',
         fecha_entrega: new Date(),
         calificacion: nota,
-        comentario_calificacion: `${correctas}/${total} correctas`,
-        contenido_texto: `NOTA: ${nota.toFixed(1)} | ${correctas}/${total} correctas`,
+        comentario_calificacion: fueraDeTiempo
+          ? 'Se agotó el tiempo disponible.'
+          : `${correctas} de ${total} respuestas correctas.`,
       },
     });
-
-    if (updateResult.count === 0) {
-      // No BORRADOR found — either already submitted or no attempt started
-      // Check if there's a recently graded attempt to return its result
-      const recent = await this.prisma.lms_entregas.findFirst({
-        where: { tarea_guid: recurso_guid, usuario_guid, estado: 'CALIFICADA' },
-        orderBy: { fecha_entrega: 'desc' },
-        select: { calificacion: true },
-      });
-      if (recent) {
-        return { success: true, nota: Number(recent.calificacion), correctas: 0, total, already_submitted: true };
-      }
-      // Fallback: create a new graded record (legacy path)
-      await this.prisma.lms_entregas.create({
-        data: {
-          usuario_guid,
-          tarea_guid: recurso_guid,
-          estado: 'CALIFICADA',
-          fecha_inicio: new Date(),
-          fecha_entrega: new Date(),
-          calificacion: nota,
-          comentario_calificacion: `${correctas}/${total} correctas`,
-          contenido_texto: `NOTA: ${nota.toFixed(1)} | ${correctas}/${total} correctas`,
-        },
-      });
+    if (transicion.count === 0) {
+      throw new BadRequestException('Este intento ya se había enviado.');
     }
 
-    const quizName = bloque.titulo.replace('[QUIZ] ', '');
+    const tituloQuiz = await this.tituloDelRecurso(recursoGuid);
 
-    if (nota >= notaAprobacion) {
-      const existente = await this.prisma.lms_progreso_recurso.findFirst({
-        where: { usuario_guid, recurso_guid },
-      });
-      if (!existente) {
-        await this.prisma.lms_progreso_recurso.create({
-          data: { usuario_guid, recurso_guid },
-        });
-      }
-
-      // Emit event instead of direct service calls
-      this.eventEmitter.emit('quiz.passed', {
-        usuario_guid,
-        recurso_guid,
+    if (aprobado) {
+      await this.registrarAprobado(recursoGuid, user.sub);
+      this.eventos.emit('quiz.aprobado', {
+        usuario_guid: user.sub,
+        pais: user.pais,
+        recurso_guid: recursoGuid,
+        curso_guid: curso.guid,
         nota,
-        titulo_quiz: quizName,
+        titulo_quiz: tituloQuiz,
       });
     } else {
-      // FAILED: Reset module progress
-      const recursoConModulo = await this.prisma.lms_recursos.findUnique({
-        where: { guid: recurso_guid },
-        select: {
-          leccion: {
-            select: {
-              modulo: {
-                select: {
-                  guid: true,
-                  titulo: true,
-                  curso: { select: { guid: true, titulo: true, profesor_guid: true } },
-                  lecciones: {
-                    select: {
-                      recursos: {
-                        select: { guid: true, titulo: true, tipo: true },
-                      },
-                    },
-                  },
-                },
-              },
-            },
-          },
-        },
+      await this.reiniciarProgresoDelModulo(recursoGuid, user.sub);
+      this.eventos.emit('quiz.suspendido', {
+        usuario_guid: user.sub,
+        pais: user.pais,
+        recurso_guid: recursoGuid,
+        nota,
+        nota_aprobacion: umbral,
+        titulo_quiz: tituloQuiz,
+        curso_guid: curso.guid,
+        curso_titulo: curso.titulo,
+        profesor_guid: curso.profesor_guid,
       });
-
-      if (recursoConModulo) {
-        const modulo = recursoConModulo.leccion.modulo;
-        const allResources = modulo.lecciones.flatMap((l) => l.recursos);
-        const resetGuids = allResources
-          .filter((r) => {
-            if (r.tipo === 'TAREA' && !r.titulo.startsWith('[QUIZ]')) return false;
-            return true;
-          })
-          .map((r) => r.guid);
-
-        const [, estudiante] = await Promise.all([
-          // Delete progress records for the module's resources (non-task resources + quizzes)
-          resetGuids.length > 0
-            ? this.prisma.lms_progreso_recurso.deleteMany({
-                where: { usuario_guid, recurso_guid: { in: resetGuids } },
-              })
-            : Promise.resolve(),
-          this.prisma.usuarios.findUnique({
-            where: { guid: usuario_guid },
-            select: { nombre: true, apellido: true, email: true },
-          }),
-          // Delete old graded quiz attempts so the student's attempt counter resets.
-          // Without this, startQuiz() still counts the old CALIFICADA attempts
-          // and blocks the student from retrying when intentos_permitidos is reached.
-          this.prisma.lms_entregas.deleteMany({
-            where: {
-              tarea_guid: recurso_guid,
-              usuario_guid,
-              estado: { in: ['CALIFICADA', 'ENTREGADA', 'ENTREGADA_TARDE'] },
-            },
-          }),
-        ]);
-
-        // Emit event instead of direct service calls
-        this.eventEmitter.emit('quiz.failed', {
-          usuario_guid,
-          recurso_guid,
-          nota,
-          titulo_quiz: quizName,
-          modulo_guid: modulo.guid,
-          modulo_titulo: modulo.titulo,
-          curso_titulo: modulo.curso.titulo,
-          profesor_guid: modulo.curso.profesor_guid,
-          estudiante,
-        });
-      }
     }
 
-    return { success: true, nota, correctas, total };
+    return { nota, aprobado, correctas, total, nota_aprobacion: umbral, fuera_de_tiempo: fueraDeTiempo };
   }
 
-  async getQuizStatus(recurso_guid: string, usuario_guid: string) {
-    const entregas = await this.prisma.lms_entregas.findMany({
-      where: { tarea_guid: recurso_guid, usuario_guid },
-    });
-
-    let mejor_nota = 0;
-    let inProgressAttempt: any = null;
-    let validAttempts = 0;
-
-    for (const e of entregas) {
-      if (e.estado === 'BORRADOR') {
-        inProgressAttempt = e;
-      } else if (e.estado === 'CALIFICADA') {
-        validAttempts++;
-        if (e.calificacion != null) {
-          const n = Number(e.calificacion);
-          if (!isNaN(n) && n > mejor_nota) {
-            mejor_nota = n;
-          }
-        }
-      }
+  private contarAciertos(config: ConfiguracionQuiz, respuestas: Record<string, string>) {
+    const correctas = respuestasCorrectas(config);
+    let aciertos = 0;
+    for (const [preguntaId, opcionCorrecta] of correctas) {
+      if (respuestas[preguntaId] === opcionCorrecta) aciertos++;
     }
+    return { correctas: aciertos, total: config.preguntas.length };
+  }
 
-    const progreso = await this.prisma.lms_progreso_recurso.findFirst({
-      where: { usuario_guid, recurso_guid },
+  private excedioElTiempo(inicio: Date | null, minutos: number): boolean {
+    if (minutos <= 0 || !inicio) return false;
+    return Date.now() - inicio.getTime() > minutos * 60_000 + MARGEN_TIEMPO_MS;
+  }
+
+  /** Marca el cuestionario como superado. Idempotente. */
+  private async registrarAprobado(recursoGuid: string, usuarioGuid: string): Promise<void> {
+    await this.prisma.lms_progreso_recurso.upsert({
+      where: { usuario_guid_recurso_guid: { usuario_guid: usuarioGuid, recurso_guid: recursoGuid } },
+      create: { usuario_guid: usuarioGuid, recurso_guid: recursoGuid, completado: true },
+      update: {},
+    });
+  }
+
+  /**
+   * Devuelve al alumno al principio del módulo tras suspender: se borra el progreso de los
+   * recursos de ese módulo para que tenga que repasarlos antes de volver a intentarlo.
+   *
+   * No se tocan las entregas de tareas evaluadas por el examinador: su calificación es
+   * trabajo ya hecho y corregido, y perderla obligaría a repetir una corrección manual.
+   */
+  private async reiniciarProgresoDelModulo(recursoGuid: string, usuarioGuid: string): Promise<void> {
+    const recurso = await this.prisma.lms_recursos.findUnique({
+      where: { guid: recursoGuid },
+      select: { modulo_guid: true },
+    });
+    if (!recurso) return;
+
+    const delModulo = await this.prisma.lms_recursos.findMany({
+      where: { modulo_guid: recurso.modulo_guid },
+      select: { guid: true, tipo: true, quiz_config: true },
     });
 
-    // Detect stale state: if there are graded attempts but no progress record,
-    // the module was reset after a quiz failure. Treat attempt count as 0.
-    const effectiveAttempts = validAttempts > 0 && !progreso ? 0 : validAttempts;
-    const effectiveBestNota = validAttempts > 0 && !progreso ? 0 : mejor_nota;
+    // Se reinician los recursos de estudio y los cuestionarios; las tareas con entrega
+    // calificada se conservan.
+    const aReiniciar = delModulo
+      .filter((r) => r.tipo !== 'TAREA' || r.quiz_config !== null)
+      .map((r) => r.guid);
 
-    let maxIntentos = 0;
-    try {
-      const bloque = await this.prisma.lms_recursos.findUnique({
-        where: { guid: recurso_guid },
-        select: { quiz_config: true },
-      });
-      if (bloque?.quiz_config) {
-        const config = JSON.parse(bloque.quiz_config);
-        maxIntentos = config.intentos_permitidos || 0;
-      }
-    } catch {}
+    if (aReiniciar.length === 0) return;
 
-    const limitReached = maxIntentos > 0 && effectiveAttempts >= maxIntentos;
+    await this.prisma.lms_progreso_recurso.deleteMany({
+      where: { usuario_guid: usuarioGuid, recurso_guid: { in: aReiniciar } },
+    });
+  }
+
+  // ── Estado ───────────────────────────────────────────────────────────────
+
+  /** Estado del cuestionario para el alumno: intentos, mejor nota y si puede reintentar. */
+  async getEstado(recursoGuid: string, user: JwtPayload): Promise<EstadoQuiz> {
+    const { config, curso } = await this.cargarCuestionario(recursoGuid, user);
+    const umbral = umbralAprobacion(curso.nota_aprobacion);
+
+    const [intentos, enCurso, progreso] = await Promise.all([
+      this.prisma.lms_entregas.findMany({
+        where: { tarea_guid: recursoGuid, usuario_guid: user.sub, estado: 'CALIFICADA' },
+        select: { calificacion: true },
+      }),
+      this.prisma.lms_entregas.findFirst({
+        where: { tarea_guid: recursoGuid, usuario_guid: user.sub, estado: 'BORRADOR' },
+        select: { fecha_inicio: true },
+      }),
+      this.prisma.lms_progreso_recurso.findUnique({
+        where: { usuario_guid_recurso_guid: { usuario_guid: user.sub, recurso_guid: recursoGuid } },
+        select: { id: true },
+      }),
+    ]);
+
+    const notas = intentos.map((i) => Number(i.calificacion ?? 0));
+    const mejorNota = notas.length > 0 ? Math.max(...notas) : null;
+    const aprobado = Boolean(progreso);
+    const limiteAlcanzado = config.intentos_permitidos > 0 && intentos.length >= config.intentos_permitidos;
 
     return {
-      intentos_realizados: effectiveAttempts,
-      max_intentos: maxIntentos,
-      mejor_nota: effectiveBestNota,
-      completado: !!progreso,
-      in_progress: !!inProgressAttempt,
-      fecha_inicio: inProgressAttempt?.fecha_inicio,
-      puede_reintentar: !progreso && !inProgressAttempt && !limitReached,
-      limite_alcanzado: limitReached,
+      intentos_realizados: intentos.length,
+      max_intentos: config.intentos_permitidos,
+      mejor_nota: mejorNota,
+      nota_aprobacion: umbral,
+      aprobado,
+      intento_en_curso: Boolean(enCurso),
+      fecha_inicio: enCurso?.fecha_inicio ?? null,
+      tiempo_minutos: config.tiempo_minutos,
+      puede_reintentar: !aprobado && !enCurso && !limiteAlcanzado,
+      motivo_bloqueo: this.motivoDeBloqueo(aprobado, Boolean(enCurso), limiteAlcanzado, config.intentos_permitidos),
     };
   }
 
-  async verificarMatricula(recurso_guid: string, usuario_guid: string): Promise<void> {
+  /** Explica al alumno por qué no puede empezar, en lugar de dejar el botón inerte. */
+  private motivoDeBloqueo(
+    aprobado: boolean,
+    enCurso: boolean,
+    limiteAlcanzado: boolean,
+    maxIntentos: number,
+  ): string | null {
+    if (aprobado) return 'Ya superaste este cuestionario.';
+    if (enCurso) return 'Tienes un intento en curso. Continúalo para poder finalizarlo.';
+    if (limiteAlcanzado) {
+      return `Has agotado los ${maxIntentos} intento(s) disponibles. Contacta con tu examinador para que te habilite otro.`;
+    }
+    return null;
+  }
+
+  // ── Común ────────────────────────────────────────────────────────────────
+
+  /**
+   * Carga el cuestionario comprobando antes el acceso: sede, matrícula y curso publicado.
+   * Toda entrada al servicio pasa por aquí, así que no hay ningún camino que salte la
+   * comprobación.
+   */
+  private async cargarCuestionario(recursoGuid: string, user: JwtPayload) {
+    const curso = await this.acceso.asegurarAccesoARecurso(recursoGuid, user);
+
     const recurso = await this.prisma.lms_recursos.findUnique({
-      where: { guid: recurso_guid },
-      select: {
-        leccion: {
-          select: {
-            modulo: {
-              select: { curso_guid: true },
-            },
-          },
-        },
-      },
+      where: { guid: recursoGuid },
+      select: { quiz_config: true, tipo: true },
     });
-
-    if (!recurso) {
-      throw new BadRequestException('Recurso no encontrado.');
+    if (!recurso || recurso.tipo !== 'TAREA' || !recurso.quiz_config) {
+      throw new BadRequestException('Este recurso no es un cuestionario.');
     }
 
-    const curso_guid = recurso.leccion.modulo.curso_guid;
+    return { config: parsearConfiguracionQuiz(recurso.quiz_config), curso };
+  }
 
-    const matricula = await this.prisma.lms_matriculas.findUnique({
-      where: {
-        usuario_guid_curso_guid: { usuario_guid, curso_guid },
-      },
+  private async tituloDelRecurso(recursoGuid: string): Promise<string> {
+    const recurso = await this.prisma.lms_recursos.findUnique({
+      where: { guid: recursoGuid },
+      select: { titulo: true },
     });
-
-    if (!matricula) {
-      throw new BadRequestException('No estás matriculado en este curso.');
-    }
+    return recurso?.titulo.replace(/^\[QUIZ\]\s*/, '') ?? 'Cuestionario';
   }
 }

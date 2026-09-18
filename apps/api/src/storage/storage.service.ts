@@ -1,18 +1,15 @@
-import { Injectable, BadRequestException, NotFoundException, Logger } from '@nestjs/common';
-import { S3Client, PutObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
+import { BadRequestException, Injectable, Logger, NotFoundException, PayloadTooLargeException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
-import * as crypto from 'crypto';
+import { Carpeta, esClavePublica } from './storage.carpetas';
 
-const UPLOADS_DIR = path.join(process.cwd(), 'uploads');
+const DIRECTORIO_LOCAL = path.join(process.cwd(), 'uploads');
 
-const ALLOWED_EXTENSIONS = [
-  '.pdf', '.doc', '.docx', '.ppt', '.pptx', '.xls', '.xlsx',
-  '.txt', '.zip', '.rar', '.png', '.jpg', '.jpeg', '.gif', '.webp',
-  '.mp4', '.mp3', '.svg',
-];
-
-const MIME_MAP: Record<string, string> = {
+/** Extensiones admitidas y su tipo MIME. Lo que no esté aquí no se sube. */
+const TIPOS_PERMITIDOS: Readonly<Record<string, string>> = {
   '.pdf': 'application/pdf',
   '.doc': 'application/msword',
   '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
@@ -21,8 +18,9 @@ const MIME_MAP: Record<string, string> = {
   '.xls': 'application/vnd.ms-excel',
   '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   '.txt': 'text/plain',
+  '.csv': 'text/csv',
   '.zip': 'application/zip',
-  '.rar': 'application/x-rar-compressed',
+  '.rar': 'application/vnd.rar',
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
   '.jpeg': 'image/jpeg',
@@ -30,248 +28,295 @@ const MIME_MAP: Record<string, string> = {
   '.webp': 'image/webp',
   '.mp4': 'video/mp4',
   '.mp3': 'audio/mpeg',
+  // Un SVG puede llevar scripts dentro. Se admite porque los logotipos suelen venir en
+  // este formato, pero el controlador lo sirve con una CSP que impide su ejecución
+  // (`StorageController.cabecerasDeSeguridad`).
   '.svg': 'image/svg+xml',
 };
 
-const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
+/** Formatos que sólo son seguros con cabeceras de contención adicionales. */
+export const FORMATOS_CON_RIESGO_ACTIVO = ['.svg'] as const;
 
+/**
+ * Firmas de archivo conocidas, para detectar un binario renombrado.
+ * Un formato sin firma definida (texto plano, CSV, ofimática antigua) no se comprueba.
+ */
+const FIRMAS: Readonly<Record<string, readonly number[][]>> = {
+  '.pdf': [[0x25, 0x50, 0x44, 0x46]],
+  '.png': [[0x89, 0x50, 0x4e, 0x47]],
+  '.jpg': [[0xff, 0xd8, 0xff]],
+  '.jpeg': [[0xff, 0xd8, 0xff]],
+  '.gif': [[0x47, 0x49, 0x46, 0x38]],
+  '.webp': [[0x52, 0x49, 0x46, 0x46]],
+  // Los formatos de Office modernos son ZIP por dentro, de ahí la misma firma.
+  '.zip': [
+    [0x50, 0x4b, 0x03, 0x04],
+    [0x50, 0x4b, 0x05, 0x06],
+  ],
+  '.docx': [[0x50, 0x4b, 0x03, 0x04]],
+  '.xlsx': [[0x50, 0x4b, 0x03, 0x04]],
+  '.pptx': [[0x50, 0x4b, 0x03, 0x04]],
+  '.mp3': [
+    [0x49, 0x44, 0x33],
+    [0xff, 0xfb],
+    [0xff, 0xf3],
+    [0xff, 0xf2],
+  ],
+};
+
+/** Tope absoluto del servidor. Cada sede puede fijar un límite menor en su configuración. */
+export const TAMANO_MAXIMO_BYTES = 50 * 1024 * 1024;
+
+/** Vigencia por defecto de una URL firmada. Suficiente para abrir o descargar el archivo. */
+const VIGENCIA_FIRMA_S = 60 * 60;
+
+/** Archivo recuperado del almacenamiento remoto. */
+interface ArchivoRemoto {
+  contenido: Buffer;
+  contentType: string;
+}
+
+/**
+ * Almacenamiento de archivos con dos destinos posibles: Cloudflare R2 si está configurado
+ * y el disco local en caso contrario.
+ *
+ * La clave de un archivo es siempre `carpeta/nombre` y es idéntica en los dos destinos.
+ * Antes el destino local aplanaba la ruta y guardaba `nombre` mientras la base de datos
+ * registraba `carpeta/nombre`; la limpieza periódica comparaba ambas listas, no encontraba
+ * coincidencias y borraba archivos que sí estaban en uso.
+ */
 @Injectable()
 export class StorageService {
   private readonly logger = new Logger(StorageService.name);
-  private s3Client: S3Client | null = null;
-  private bucketName: string = '';
-  private publicUrl: string = '';
-  private useR2: boolean = false;
+  private readonly s3: S3Client | null = null;
+  private readonly bucket: string;
+  private readonly urlPublica: string;
+  private readonly secretoFirma: string;
 
-  constructor() {
-    // Ensure local uploads dir exists (for fallback and legacy files)
-    if (!fs.existsSync(UPLOADS_DIR)) {
-      fs.mkdirSync(UPLOADS_DIR, { recursive: true });
-    }
+  constructor(private readonly config: ConfigService) {
+    fs.mkdirSync(DIRECTORIO_LOCAL, { recursive: true });
 
-    // Initialize R2 if credentials are configured
-    const accountId = process.env.R2_ACCOUNT_ID;
-    const accessKeyId = process.env.R2_ACCESS_KEY_ID;
-    const secretAccessKey = process.env.R2_SECRET_ACCESS_KEY;
-    this.bucketName = process.env.R2_BUCKET_NAME || 'lms-uploads';
-    this.publicUrl = process.env.R2_PUBLIC_URL || '';
+    this.bucket = this.config.get<string>('R2_BUCKET_NAME') ?? 'lms-uploads';
+    this.urlPublica = (this.config.get<string>('R2_PUBLIC_URL') ?? '').replace(/\/+$/, '');
+    // Las URLs firmadas usan su propio secreto si existe; si no, el del JWT, que ya es
+    // obligatorio y se valida al arrancar.
+    this.secretoFirma = this.config.get<string>('STORAGE_SECRET') || this.config.get<string>('JWT_SECRET') || '';
+
+    const accountId = this.config.get<string>('R2_ACCOUNT_ID');
+    const accessKeyId = this.config.get<string>('R2_ACCESS_KEY_ID');
+    const secretAccessKey = this.config.get<string>('R2_SECRET_ACCESS_KEY');
 
     if (accountId && accessKeyId && secretAccessKey) {
-      this.s3Client = new S3Client({
+      this.s3 = new S3Client({
         region: 'auto',
         endpoint: `https://${accountId}.r2.cloudflarestorage.com`,
         credentials: { accessKeyId, secretAccessKey },
       });
-      this.useR2 = true;
-      this.logger.log('☁️  Cloudflare R2 storage initialized');
+      this.logger.log('Almacenamiento en Cloudflare R2');
     } else {
-      this.logger.warn('⚠️  R2 not configured — using local storage fallback. Set R2_* env vars for production.');
-    }
-  }
-
-  /**
-   * Upload a file from a Buffer (multipart upload).
-   * This is the primary upload method for the new multipart flow.
-   */
-  async uploadFromBuffer(buffer: Buffer, originalName: string, folder?: string): Promise<string> {
-    const ext = path.extname(originalName).toLowerCase() || '.bin';
-    if (!ALLOWED_EXTENSIONS.includes(ext)) {
-      throw new BadRequestException(`Tipo de archivo no permitido: ${ext}`);
-    }
-    if (buffer.length > MAX_FILE_SIZE) {
-      throw new BadRequestException(`El archivo excede el tamaño máximo permitido (50MB).`);
-    }
-
-    // F7.5: Validate MIME magic bytes to prevent extension spoofing
-    this.validateMagicBytes(buffer, ext);
-
-    const uniqueName = `${Date.now()}-${crypto.randomBytes(4).toString('hex')}${ext}`;
-    // In R2, organize files by folder prefix (e.g. "portadas/123-abc.png")
-    const r2Key = folder ? `${folder}/${uniqueName}` : uniqueName;
-    const contentType = MIME_MAP[ext] || 'application/octet-stream';
-
-    if (this.useR2 && this.s3Client) {
-      // Upload to Cloudflare R2 with folder prefix
-      await this.s3Client.send(new PutObjectCommand({
-        Bucket: this.bucketName,
-        Key: r2Key,
-        Body: buffer,
-        ContentType: contentType,
-      }));
-      this.logger.log(`☁️  Uploaded to R2: ${r2Key} (${(buffer.length / 1024 / 1024).toFixed(1)}MB)`);
-    } else {
-      // Fallback: save to local uploads directory (flat, no subfolders for simplicity)
-      await fs.promises.writeFile(path.join(UPLOADS_DIR, uniqueName), buffer);
-      this.logger.log(`💾 Saved locally: ${uniqueName} (${(buffer.length / 1024 / 1024).toFixed(1)}MB)`);
-    }
-
-    // Return the key with folder prefix so downloads resolve correctly
-    return r2Key;
-  }
-
-  /**
-   * Upload a buffer to R2 with a specific key (no renaming).
-   * Used for structured paths like 'certificados/filename.pdf'.
-   * Falls back silently if R2 is not configured.
-   */
-  async uploadToR2WithKey(buffer: Buffer, key: string, contentType = 'application/octet-stream'): Promise<boolean> {
-    if (!this.useR2 || !this.s3Client) return false;
-
-    await this.s3Client.send(new PutObjectCommand({
-      Bucket: this.bucketName,
-      Key: key,
-      Body: buffer,
-      ContentType: contentType,
-    }));
-    this.logger.log(`☁️  Uploaded to R2: ${key} (${(buffer.length / 1024 / 1024).toFixed(1)}MB)`);
-    return true;
-  }
-
-
-  /**
-   * Get the public URL for a file.
-   * If R2 is configured, returns the CDN URL. Otherwise returns the API download path.
-   */
-  getFileUrl(filename: string, apiBaseUrl?: string): string {
-    if (this.useR2 && this.publicUrl) {
-      return `${this.publicUrl}/${filename}`;
-    }
-    // Fallback: serve through API
-    const base = apiBaseUrl || '/api';
-    return `${base}/storage/download/${filename}`;
-  }
-
-  /**
-   * Get the local file path for legacy/fallback downloads.
-   */
-  getUploadPath(filename: string): string {
-    const fullPath = path.join(UPLOADS_DIR, filename);
-    if (!fs.existsSync(fullPath)) throw new NotFoundException('Archivo no encontrado');
-    return fullPath;
-  }
-
-  /**
-   * Check if a file exists locally (for legacy fallback).
-   */
-  existsLocally(filename: string): boolean {
-    return fs.existsSync(path.join(UPLOADS_DIR, filename));
-  }
-
-  /**
-   * Whether R2 cloud storage is active.
-   */
-  isCloudStorageActive(): boolean {
-    return this.useR2;
-  }
-
-  /**
-   * Whether a public CDN URL is configured for direct browser access.
-   * If false, the API must proxy/stream files from R2.
-   */
-  hasPublicUrl(): boolean {
-    return this.useR2 && !!this.publicUrl;
-  }
-
-  /**
-   * Stream a file directly from R2 as a Buffer.
-   * Used when R2_PUBLIC_URL is not set — the API proxies the file.
-   */
-  async streamFromR2(key: string): Promise<{ buffer: Buffer; contentType: string } | null> {
-    if (!this.useR2 || !this.s3Client) return null;
-
-    try {
-      const { GetObjectCommand } = await import('@aws-sdk/client-s3');
-      const response = await this.s3Client.send(new GetObjectCommand({
-        Bucket: this.bucketName,
-        Key: key,
-      }));
-
-      if (!response.Body) return null;
-
-      // Convert readable stream to buffer
-      const chunks: Uint8Array[] = [];
-      const stream = response.Body as AsyncIterable<Uint8Array>;
-      for await (const chunk of stream) {
-        chunks.push(chunk);
-      }
-
-      const ext = key.split('.').pop()?.toLowerCase() || '';
-      const contentType = response.ContentType || MIME_MAP[`.${ext}`] || 'application/octet-stream';
-
-      return { buffer: Buffer.concat(chunks), contentType };
-    } catch (err) {
-      this.logger.warn(`Failed to stream from R2: ${key}`, err);
-      return null;
-    }
-  }
-
-  /**
-   * R2-02: Delete a file from storage (R2 or local filesystem).
-   * Silently ignores if the file doesn't exist.
-   */
-  async deleteFile(filename: string): Promise<void> {
-    if (!filename) return;
-
-    // For R2: use the full key (may include folder prefix like 'entregas/123-abc.docx')
-    // For local: use just the basename (flat storage)
-    const localName = path.basename(filename);
-
-    if (this.useR2 && this.s3Client) {
-      try {
-        await this.s3Client.send(new DeleteObjectCommand({
-          Bucket: process.env.R2_BUCKET_NAME!,
-          Key: filename, // Full key including folder prefix
-        }));
-        this.logger.log(`Deleted from R2: ${filename}`);
-      } catch (err) {
-        this.logger.warn(`Failed to delete from R2: ${filename}`, err);
-      }
-    }
-
-    // Always try local cleanup too (might exist as fallback copy)
-    const localPath = path.join(UPLOADS_DIR, localName);
-    if (fs.existsSync(localPath)) {
-      try {
-        fs.unlinkSync(localPath);
-        this.logger.log(`Deleted local file: ${localName}`);
-      } catch (err) {
-        this.logger.warn(`Failed to delete local file: ${localName}`, err);
-      }
-    }
-  }
-
-  /**
-   * F7.5: Validate file magic bytes to prevent extension spoofing.
-   * Only checks formats where magic bytes are well-defined.
-   * Allows unknown formats (txt, csv, etc.) to pass through.
-   */
-  private validateMagicBytes(buffer: Buffer, ext: string): void {
-    if (buffer.length < 8) return; // Too small to check
-
-    const SIGNATURES: Record<string, number[][]> = {
-      '.pdf': [[0x25, 0x50, 0x44, 0x46]], // %PDF
-      '.png': [[0x89, 0x50, 0x4E, 0x47]], // PNG header
-      '.jpg': [[0xFF, 0xD8, 0xFF]],
-      '.jpeg': [[0xFF, 0xD8, 0xFF]],
-      '.gif': [[0x47, 0x49, 0x46, 0x38]], // GIF8
-      '.zip': [[0x50, 0x4B, 0x03, 0x04], [0x50, 0x4B, 0x05, 0x06]], // PK
-      '.webp': [[0x52, 0x49, 0x46, 0x46]], // RIFF
-      '.mp4': [], // MP4 has variable headers, skip check
-      '.mp3': [[0xFF, 0xFB], [0xFF, 0xF3], [0xFF, 0xF2], [0x49, 0x44, 0x33]], // MP3 frame sync or ID3
-    };
-
-    const expected = SIGNATURES[ext];
-    if (!expected || expected.length === 0) return; // No signature to check
-
-    const matches = expected.some(sig =>
-      sig.every((byte, i) => buffer[i] === byte)
-    );
-
-    if (!matches) {
-      this.logger.warn(`Magic byte mismatch for extension ${ext}: got ${buffer.slice(0, 4).toString('hex')}`);
-      throw new BadRequestException(
-        `El contenido del archivo no coincide con la extensión ${ext}. Posible archivo corrupto o renombrado.`
+      this.logger.warn(
+        'R2 no configurado: los archivos se guardan en disco local. En cPanel es válido si el directorio persiste entre despliegues.',
       );
     }
+  }
+
+  /** Indica si el almacenamiento remoto está activo. */
+  get usaAlmacenamientoRemoto(): boolean {
+    return this.s3 !== null;
+  }
+
+  // ── Subida ───────────────────────────────────────────────────────────────
+
+  /**
+   * Guarda un archivo y devuelve su clave (`carpeta/nombre`).
+   *
+   * @param maxBytes Tope específico de la operación, normalmente el configurado por la
+   *        sede. Nunca puede superar el tope del servidor.
+   * @throws BadRequestException si la extensión no está admitida o el contenido no
+   *         corresponde a la extensión.
+   * @throws PayloadTooLargeException si excede el tamaño permitido.
+   */
+  async uploadFromBuffer(
+    contenido: Buffer,
+    nombreOriginal: string,
+    carpeta: Carpeta,
+    maxBytes: number = TAMANO_MAXIMO_BYTES,
+  ): Promise<string> {
+    const extension = path.extname(nombreOriginal).toLowerCase();
+    const contentType = TIPOS_PERMITIDOS[extension];
+
+    if (!contentType) {
+      throw new BadRequestException(
+        `No se admiten archivos "${extension || 'sin extensión'}". Formatos válidos: ${Object.keys(TIPOS_PERMITIDOS).join(', ')}.`,
+      );
+    }
+
+    const tope = Math.min(maxBytes, TAMANO_MAXIMO_BYTES);
+    if (contenido.length > tope) {
+      throw new PayloadTooLargeException(
+        `El archivo pesa ${this.enMB(contenido.length)} MB y el máximo permitido es ${this.enMB(tope)} MB.`,
+      );
+    }
+
+    this.verificarFirmaDeArchivo(contenido, extension);
+
+    const clave = `${carpeta}/${Date.now()}-${crypto.randomBytes(6).toString('hex')}${extension}`;
+    await this.escribir(clave, contenido, contentType);
+    return clave;
+  }
+
+  /** Guarda un archivo con una clave ya decidida (certificados generados por el servidor). */
+  async guardarConClave(clave: string, contenido: Buffer, contentType: string): Promise<void> {
+    await this.escribir(clave, contenido, contentType);
+  }
+
+  private async escribir(clave: string, contenido: Buffer, contentType: string): Promise<void> {
+    if (this.s3) {
+      await this.s3.send(
+        new PutObjectCommand({ Bucket: this.bucket, Key: clave, Body: contenido, ContentType: contentType }),
+      );
+      this.logger.log(`Guardado en R2: ${clave} (${this.enMB(contenido.length)} MB)`);
+      return;
+    }
+
+    const destino = path.join(DIRECTORIO_LOCAL, clave);
+    await fs.promises.mkdir(path.dirname(destino), { recursive: true });
+    await fs.promises.writeFile(destino, contenido);
+    this.logger.log(`Guardado en disco: ${clave} (${this.enMB(contenido.length)} MB)`);
+  }
+
+  /**
+   * Comprueba que los primeros bytes del archivo correspondan a su extensión.
+   * Impide subir un ejecutable renombrado como `.pdf`.
+   */
+  private verificarFirmaDeArchivo(contenido: Buffer, extension: string): void {
+    const esperadas = FIRMAS[extension];
+    if (!esperadas || contenido.length < 4) return;
+
+    const coincide = esperadas.some((firma) => firma.every((byte, i) => contenido[i] === byte));
+    if (!coincide) {
+      throw new BadRequestException(
+        `El contenido del archivo no corresponde a un ${extension}. Puede estar dañado o tener la extensión cambiada.`,
+      );
+    }
+  }
+
+  // ── Lectura ──────────────────────────────────────────────────────────────
+
+  /** Recupera un archivo. Devuelve `null` si no existe en el destino activo. */
+  async leer(clave: string): Promise<ArchivoRemoto | null> {
+    if (this.s3) {
+      try {
+        const respuesta = await this.s3.send(new GetObjectCommand({ Bucket: this.bucket, Key: clave }));
+        if (!respuesta.Body) return null;
+
+        const trozos: Uint8Array[] = [];
+        for await (const trozo of respuesta.Body as AsyncIterable<Uint8Array>) trozos.push(trozo);
+
+        return {
+          contenido: Buffer.concat(trozos),
+          contentType: respuesta.ContentType ?? this.contentTypeDe(clave),
+        };
+      } catch (error) {
+        this.logger.warn(`No se pudo leer de R2: ${clave} — ${(error as Error)?.message}`);
+        return null;
+      }
+    }
+
+    const ruta = path.join(DIRECTORIO_LOCAL, clave);
+    if (!fs.existsSync(ruta)) return null;
+    return { contenido: await fs.promises.readFile(ruta), contentType: this.contentTypeDe(clave) };
+  }
+
+  /** Ruta absoluta de un archivo local. Sólo tiene sentido sin almacenamiento remoto. */
+  rutaLocal(clave: string): string {
+    const ruta = path.join(DIRECTORIO_LOCAL, clave);
+    if (!fs.existsSync(ruta)) throw new NotFoundException('Archivo no encontrado.');
+    return ruta;
+  }
+
+  /** Lista las claves presentes en el disco local, con su fecha de modificación. */
+  async listarLocales(): Promise<{ clave: string; modificado: number }[]> {
+    const resultado: { clave: string; modificado: number }[] = [];
+
+    const recorrer = async (directorio: string, prefijo: string): Promise<void> => {
+      const entradas = await fs.promises.readdir(directorio, { withFileTypes: true });
+      for (const entrada of entradas) {
+        const ruta = path.join(directorio, entrada.name);
+        const clave = prefijo ? `${prefijo}/${entrada.name}` : entrada.name;
+        if (entrada.isDirectory()) {
+          await recorrer(ruta, clave);
+        } else if (entrada.isFile()) {
+          const stat = await fs.promises.stat(ruta);
+          resultado.push({ clave, modificado: stat.mtimeMs });
+        }
+      }
+    };
+
+    if (fs.existsSync(DIRECTORIO_LOCAL)) await recorrer(DIRECTORIO_LOCAL, '');
+    return resultado;
+  }
+
+  // ── Borrado ──────────────────────────────────────────────────────────────
+
+  /** Elimina un archivo del destino activo. No falla si ya no existe. */
+  async deleteFile(clave: string | null | undefined): Promise<void> {
+    if (!clave) return;
+
+    if (this.s3) {
+      await this.s3.send(new DeleteObjectCommand({ Bucket: this.bucket, Key: clave }));
+      this.logger.log(`Borrado de R2: ${clave}`);
+      return;
+    }
+
+    const ruta = path.join(DIRECTORIO_LOCAL, clave);
+    await fs.promises.rm(ruta, { force: true });
+    this.logger.log(`Borrado de disco: ${clave}`);
+  }
+
+  // ── URLs ─────────────────────────────────────────────────────────────────
+
+  /**
+   * URL con la que el navegador puede pedir el archivo.
+   *
+   * Los archivos de marca se sirven sin más; los reservados —entregas, certificados,
+   * firmas y material de curso— llevan una firma con caducidad, de modo que una URL
+   * filtrada deja de funcionar sola en lugar de quedar accesible indefinidamente.
+   */
+  urlDeDescarga(clave: string, vigenciaSegundos: number = VIGENCIA_FIRMA_S): string {
+    if (esClavePublica(clave)) return `/api/storage/download/${clave}`;
+
+    const caduca = Math.floor(Date.now() / 1000) + vigenciaSegundos;
+    return `/api/storage/download/${clave}?exp=${caduca}&sig=${this.firmar(clave, caduca)}`;
+  }
+
+  /** Comprueba la firma de una descarga reservada. */
+  firmaValida(clave: string, exp: string | undefined, sig: string | undefined): boolean {
+    const caduca = Number(exp);
+    if (!sig || !Number.isFinite(caduca)) return false;
+    if (caduca * 1000 < Date.now()) return false;
+
+    const esperada = Buffer.from(this.firmar(clave, caduca));
+    const recibida = Buffer.from(sig);
+    // Comparación en tiempo constante: evita deducir la firma midiendo respuestas.
+    return esperada.length === recibida.length && crypto.timingSafeEqual(esperada, recibida);
+  }
+
+  private firmar(clave: string, caduca: number): string {
+    return crypto.createHmac('sha256', this.secretoFirma).update(`${clave}:${caduca}`).digest('hex');
+  }
+
+  /** URL pública directa del CDN, si está configurado. */
+  urlPublicaDirecta(clave: string): string | null {
+    return this.urlPublica ? `${this.urlPublica}/${clave}` : null;
+  }
+
+  contentTypeDe(clave: string): string {
+    const extension = path.extname(clave).toLowerCase();
+    return TIPOS_PERMITIDOS[extension] ?? 'application/octet-stream';
+  }
+
+  private enMB(bytes: number): string {
+    return (bytes / 1024 / 1024).toFixed(1);
   }
 }

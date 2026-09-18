@@ -1,4 +1,11 @@
-import { CanActivate, ExecutionContext, Injectable, Logger, UnauthorizedException, OnModuleDestroy } from '@nestjs/common';
+import {
+  CanActivate,
+  ExecutionContext,
+  Injectable,
+  Logger,
+  OnModuleDestroy,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { Reflector } from '@nestjs/core';
@@ -7,109 +14,142 @@ import { JwtPayload } from '../interfaces/jwt-payload.interface';
 import { PrismaService } from '../../prisma/prisma.service';
 import { TokenBlacklistService } from '../../auth/token-blacklist.service';
 
+/** Cada cuánto, como máximo, se persiste `ultimo_acceso` de un mismo usuario. */
+const INTERVALO_ULTIMO_ACCESO_MS = 5 * 60 * 1000;
+
+/** Cada cuánto se purgan las marcas de escritura ya caducadas. */
+const INTERVALO_LIMPIEZA_MS = 60 * 60 * 1000;
+
+/**
+ * Autenticación por JWT para todas las rutas.
+ *
+ * Además de validar la firma, en cada petición comprueba contra la base de datos que la
+ * cuenta siga existiendo, activa y con el rol y país vigentes. Esto cuesta una consulta
+ * por petición, pero es lo que permite que desactivar una cuenta o cambiarla de rol surta
+ * efecto al instante en lugar de esperar a que caduque el token.
+ *
+ * Las rutas marcadas con `@Public()` no exigen token; si viene uno válido se usa, y si
+ * viene uno inválido se ignora en silencio en lugar de rechazar la petición.
+ */
 @Injectable()
 export class JwtAuthGuard implements CanActivate, OnModuleDestroy {
-  // Throttle ultimo_acceso updates: max once every 5 minutes per user
-  private lastAccessUpdates = new Map<string, number>();
-  private static readonly ACCESS_UPDATE_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
-  private cleanupInterval: ReturnType<typeof setInterval>;
+  private readonly logger = new Logger(JwtAuthGuard.name);
+  /** guid → instante de la última escritura de `ultimo_acceso`. */
+  private readonly ultimoAccesoEscrito = new Map<string, number>();
+  private readonly limpieza: ReturnType<typeof setInterval>;
 
   constructor(
-    private jwtService: JwtService,
-    private configService: ConfigService,
-    private reflector: Reflector,
-    private prisma: PrismaService,
-    private tokenBlacklistService: TokenBlacklistService,
+    private readonly jwtService: JwtService,
+    private readonly configService: ConfigService,
+    private readonly reflector: Reflector,
+    private readonly prisma: PrismaService,
+    private readonly tokenBlacklist: TokenBlacklistService,
   ) {
-    // PERF-03: Periodically clean up stale entries to prevent memory leak
-    this.cleanupInterval = setInterval(() => {
-      const cutoff = Date.now() - 10 * 60 * 1000; // 10 minutes
-      for (const [guid, timestamp] of this.lastAccessUpdates) {
-        if (timestamp < cutoff) this.lastAccessUpdates.delete(guid);
-      }
-    }, 60 * 60 * 1000); // Every hour
+    this.limpieza = setInterval(() => this.purgarMarcas(), INTERVALO_LIMPIEZA_MS);
+    this.limpieza.unref?.();
   }
 
-  onModuleDestroy() {
-    clearInterval(this.cleanupInterval);
+  onModuleDestroy(): void {
+    clearInterval(this.limpieza);
   }
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
-    const isPublic = this.reflector.getAllAndOverride<boolean>(IS_PUBLIC_KEY, [
+    const esPublica = this.reflector.getAllAndOverride<boolean>(IS_PUBLIC_KEY, [
       context.getHandler(),
       context.getClass(),
     ]);
-
     const request = context.switchToHttp().getRequest();
-    const token = this.extractTokenFromHeader(request);
+    const token = this.extraerToken(request);
 
-    let payload: JwtPayload | null = null;
-
-    if (token) {
-      try {
-        payload = await this.jwtService.verifyAsync<JwtPayload>(token, {
-          secret: this.configService.get<string>('JWT_SECRET'),
-        });
-
-        // Check if the user's tokens have been revoked (e.g., after deletion)
-        if (payload.sub && payload.iat) {
-          if (this.tokenBlacklistService.isRevoked(payload.sub, payload.iat)) {
-            if (!isPublic) {
-              throw new UnauthorizedException('Sesión revocada. Tu cuenta ha sido eliminada o tu sesión fue cerrada.');
-            }
-            // On public routes, just don't set user
-            payload = null;
-          }
-        }
-
-        // Verify user still exists in database and is active
-        if (payload?.sub) {
-          const dbUser = await this.prisma.usuarios.findUnique({
-            where: { guid: payload.sub },
-            select: { guid: true, activo: true, rol: true },
-          });
-
-          if (!dbUser) {
-            if (!isPublic) {
-              throw new UnauthorizedException('Tu cuenta ya no existe en el sistema.');
-            }
-            payload = null;
-          } else if (!dbUser.activo) {
-            if (!isPublic) {
-              throw new UnauthorizedException('Tu cuenta ha sido desactivada.');
-            }
-            payload = null;
-          } else {
-            // Sync role from DB (in case admin changed it)
-            request.user = { ...payload, role: dbUser.rol };
-
-            // Throttled update: only write ultimo_acceso if >5min since last write
-            const now = Date.now();
-            const lastUpdate = this.lastAccessUpdates.get(payload.sub) || 0;
-            if (now - lastUpdate > JwtAuthGuard.ACCESS_UPDATE_INTERVAL_MS) {
-              this.lastAccessUpdates.set(payload.sub, now);
-              this.prisma.usuarios.update({
-                where: { guid: payload.sub },
-                data: { ultimo_acceso: new Date() }
-              }).catch(err => Logger.error("Error updating ultimo_acceso", err, 'JwtAuthGuard'));
-            }
-          }
-        }
-      } catch (err) {
-        if (!isPublic) {
-          if (err instanceof UnauthorizedException) throw err;
-          throw new UnauthorizedException('Token inválido o expirado.');
-        }
-      }
-    } else if (!isPublic) {
+    if (!token) {
+      if (esPublica) return true;
       throw new UnauthorizedException('Token de autenticación requerido.');
     }
 
-    return true;
+    try {
+      request.user = await this.resolverIdentidad(token);
+      return true;
+    } catch (error) {
+      // En rutas públicas un token inválido no impide el acceso: simplemente se
+      // atiende la petición como anónima.
+      if (esPublica) return true;
+      throw error instanceof UnauthorizedException
+        ? error
+        : new UnauthorizedException('Token inválido o expirado.');
+    }
   }
 
-  private extractTokenFromHeader(request: any): string | undefined {
-    const [type, token] = request.headers.authorization?.split(' ') ?? [];
-    return type === 'Bearer' ? token : undefined;
+  /**
+   * Verifica el token y lo contrasta con el estado actual de la cuenta.
+   * @throws UnauthorizedException con un mensaje que el cliente distingue para decidir
+   *         si muestra «sesión expirada» o «sesión revocada».
+   */
+  private async resolverIdentidad(token: string): Promise<JwtPayload> {
+    const payload = await this.jwtService.verifyAsync<JwtPayload>(token, {
+      secret: this.configService.get<string>('JWT_SECRET'),
+    });
+
+    if (!payload?.sub) {
+      throw new UnauthorizedException('Token inválido o expirado.');
+    }
+
+    if (this.tokenBlacklist.estaRevocado(payload.sub, payload.jti, payload.iat)) {
+      throw new UnauthorizedException('Sesión revocada. Vuelve a iniciar sesión.');
+    }
+
+    const cuenta = await this.prisma.usuarios.findUnique({
+      where: { guid: payload.sub },
+      select: { guid: true, email: true, activo: true, rol: true, pais: true },
+    });
+
+    if (!cuenta) {
+      throw new UnauthorizedException('Tu cuenta ya no existe en el sistema.');
+    }
+    if (!cuenta.activo) {
+      throw new UnauthorizedException('Tu cuenta ha sido desactivada.');
+    }
+
+    this.marcarAcceso(cuenta.guid);
+
+    // El rol y el país mandan desde la base de datos, no desde el token.
+    return {
+      sub: cuenta.guid,
+      email: cuenta.email,
+      role: cuenta.rol,
+      pais: cuenta.pais,
+      jti: payload.jti,
+      iat: payload.iat,
+      exp: payload.exp,
+    };
+  }
+
+  /**
+   * Registra la actividad del usuario como mucho una vez cada cinco minutos.
+   * La escritura no se espera: que falle no debe tumbar la petición del usuario.
+   */
+  private marcarAcceso(guid: string): void {
+    const ahora = Date.now();
+    const ultima = this.ultimoAccesoEscrito.get(guid) ?? 0;
+    if (ahora - ultima <= INTERVALO_ULTIMO_ACCESO_MS) return;
+
+    this.ultimoAccesoEscrito.set(guid, ahora);
+    this.prisma.usuarios
+      .update({ where: { guid }, data: { ultimo_acceso: new Date(ahora) } })
+      .catch((error) => this.logger.warn(`No se pudo registrar ultimo_acceso de ${guid}: ${error?.message}`));
+  }
+
+  /** Evita que el mapa de marcas crezca sin límite con usuarios que ya no vuelven. */
+  private purgarMarcas(): void {
+    const corte = Date.now() - 2 * INTERVALO_ULTIMO_ACCESO_MS;
+    for (const [guid, instante] of this.ultimoAccesoEscrito) {
+      if (instante < corte) this.ultimoAccesoEscrito.delete(guid);
+    }
+  }
+
+  private extraerToken(request: { headers?: Record<string, unknown> }): string | undefined {
+    const cabecera = request.headers?.authorization;
+    if (typeof cabecera !== 'string') return undefined;
+    const [tipo, token] = cabecera.split(' ');
+    return tipo === 'Bearer' && token ? token : undefined;
   }
 }

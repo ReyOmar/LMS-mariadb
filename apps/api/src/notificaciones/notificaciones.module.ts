@@ -1,13 +1,13 @@
-import { Module } from '@nestjs/common';
+import { Global, Module } from '@nestjs/common';
 import { NotificacionesController } from './notificaciones.controller';
 import { NotificacionesService } from './notificaciones.service';
 import { ChatService } from './chat.service';
-import { PrismaModule } from '../prisma/prisma.module';
 
+/** Global: casi todos los módulos de dominio crean avisos para el usuario. */
+@Global()
 @Module({
-  imports: [PrismaModule],
   controllers: [NotificacionesController],
   providers: [NotificacionesService, ChatService],
-  exports: [NotificacionesService, ChatService],
+  exports: [NotificacionesService],
 })
 export class NotificacionesModule {}

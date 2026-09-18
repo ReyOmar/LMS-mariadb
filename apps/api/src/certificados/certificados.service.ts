@@ -1,901 +1,503 @@
-import { Injectable, Logger, BadRequestException, NotFoundException } from '@nestjs/common';
-import { PrismaService } from '../prisma/prisma.service';
-import { LmsGateway } from '../ws/lms.gateway';
-import { ConfiguracionService } from '../configuracion/configuracion.service';
-import { NotificacionesService } from '../notificaciones/notificaciones.service';
-import { StorageService } from '../storage/storage.service';
-import { MailService } from '../mail/mail.service';
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-const PDFDocument = require('pdfkit');
-import * as fs from 'fs';
-import * as path from 'path';
+import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import * as crypto from 'crypto';
+import { PrismaService } from '../prisma/prisma.service';
+import { StorageService } from '../storage/storage.service';
+import { RealtimeService } from '../realtime/realtime.service';
+import { MailService } from '../mail/mail.service';
+import { ConfiguracionService } from '../configuracion/configuracion.service';
+import { CursoAccesoService } from '../cursos/curso-acceso.service';
+import { promedioNotas } from '../common/domain/calificacion';
+import { Pais } from '../common/domain/pais';
+import { JwtPayload } from '../common/interfaces/jwt-payload.interface';
+import { componerCertificado } from './certificado-pdf';
 
-const CERTS_DIR = path.join(process.cwd(), 'uploads', 'certificados');
+/** Horas mínimas que se imprimen cuando el tiempo registrado es insignificante. */
+const HORAS_MINIMAS = 0.1;
 
+/** Resultado de comprobar si un alumno ya puede recibir su certificado. */
+export interface EstadoFinalizacion {
+  completo: boolean;
+  puede_certificarse: boolean;
+  completados: number;
+  total: number;
+  porcentaje: number;
+  tareas_pendientes: { recurso_guid: string; titulo: string; estado: string | null }[];
+  motivo: string | null;
+}
+
+/**
+ * Certificados de finalización.
+ *
+ * Un certificado se emite cuando el alumno ha completado **todos** los recursos del curso
+ * y **todas** sus tareas están calificadas. Es un documento con valor probatorio, así que
+ * la emisión es idempotente (un certificado por alumno y curso) y lleva un código de
+ * verificación consultable públicamente.
+ */
 @Injectable()
 export class CertificadosService {
   private readonly logger = new Logger(CertificadosService.name);
+
   constructor(
-    private prisma: PrismaService,
-    private lmsGateway: LmsGateway,
-    private configuracionService: ConfiguracionService,
-    private notificacionesService: NotificacionesService,
-    private storageService: StorageService,
-    private mailService: MailService,
-  ) {
-    if (!fs.existsSync(CERTS_DIR)) {
-      fs.mkdirSync(CERTS_DIR, { recursive: true });
-    }
-  }
+    private readonly prisma: PrismaService,
+    private readonly acceso: CursoAccesoService,
+    private readonly storage: StorageService,
+    private readonly configuracion: ConfiguracionService,
+    private readonly realtime: RealtimeService,
+    private readonly mail: MailService,
+  ) {}
+
+  // ── Comprobación de finalización ─────────────────────────────────────────
 
   /**
-   * Verify if a student has completed ALL resources in a course.
-   * Also checks if all TAREA-type resources have been graded (CALIFICADA).
+   * Comprueba si un alumno cumple los requisitos del certificado y, si no, explica cuál
+   * falta. El mensaje es el que ve el alumno, así que nombra las tareas pendientes en vez
+   * de decir sólo que «no puede».
    */
-  async verificarCursoCompleto(
-    usuario_guid: string,
-    curso_guid: string,
-  ): Promise<{
-    completo: boolean;
-    completados: number;
-    total: number;
-    puede_generar_certificado: boolean;
-    tareas_pendientes: { recurso_guid: string; titulo: string; fecha_entrega: string | null }[];
-  }> {
-    const curso = await this.prisma.lms_cursos.findUnique({
-      where: { guid: curso_guid },
-      include: {
-        modulos: {
-          orderBy: { orden: 'asc' },
-          include: {
-            lecciones: {
-              include: {
-                recursos: { select: { guid: true, tipo: true, titulo: true } },
-              },
-            },
-          },
-        },
-      },
-    });
+  async comprobarFinalizacion(cursoGuid: string, usuarioGuid: string): Promise<EstadoFinalizacion> {
+    const recursos = await this.acceso.recursosDelCurso(cursoGuid);
 
-    if (!curso) throw new NotFoundException('Curso no encontrado');
-
-    const allResources = curso.modulos.flatMap((m) => m.lecciones.flatMap((l) => l.recursos));
-    const allResourceGuids = allResources.map((r) => r.guid);
-
-    if (allResourceGuids.length === 0) {
-      return { completo: false, completados: 0, total: 0, puede_generar_certificado: false, tareas_pendientes: [] };
+    if (recursos.length === 0) {
+      return {
+        completo: false,
+        puede_certificarse: false,
+        completados: 0,
+        total: 0,
+        porcentaje: 0,
+        tareas_pendientes: [],
+        motivo: 'Este curso todavía no tiene contenido.',
+      };
     }
 
-    // Check progress (completed resources)
-    const completed = await this.prisma.lms_progreso_recurso.findMany({
-      where: { usuario_guid, recurso_guid: { in: allResourceGuids } },
-      select: { recurso_guid: true },
-    });
-    const completedSet = new Set(completed.map((c) => c.recurso_guid));
-    const completados = allResourceGuids.filter((g) => completedSet.has(g)).length;
-    const completo = completados === allResourceGuids.length;
+    const guids = recursos.map((r) => r.guid);
+    const tareas = recursos.filter((r) => r.tipo === 'TAREA');
 
-    // Check if all TAREA-type resources have graded submissions
-    const tareaResources = allResources.filter((r) => r.tipo === 'TAREA');
-    const tareaGuids = tareaResources.map((r) => r.guid);
+    const [progreso, entregas] = await Promise.all([
+      this.prisma.lms_progreso_recurso.findMany({
+        where: { usuario_guid: usuarioGuid, recurso_guid: { in: guids } },
+        select: { recurso_guid: true },
+      }),
+      tareas.length > 0
+        ? this.prisma.lms_entregas.findMany({
+            where: { usuario_guid: usuarioGuid, tarea_guid: { in: tareas.map((t) => t.guid) } },
+            select: { tarea_guid: true, estado: true },
+          })
+        : Promise.resolve([]),
+    ]);
 
-    let puede_generar_certificado = completo;
-    const tareas_pendientes: { recurso_guid: string; titulo: string; fecha_entrega: string | null }[] = [];
+    const completados = new Set(progreso.map((p) => p.recurso_guid));
+    const estadoPorTarea = new Map<string, string>(
+      entregas.flatMap((e) => (e.tarea_guid ? [[e.tarea_guid, String(e.estado)] as [string, string]] : [])),
+    );
 
-    if (tareaGuids.length > 0) {
-      // Fetch all submissions for task resources
-      const entregas = await this.prisma.lms_entregas.findMany({
-        where: {
-          usuario_guid,
-          tarea_guid: { in: tareaGuids },
-        },
-        select: { tarea_guid: true, estado: true, fecha_entrega: true },
-      });
+    const pendientes = tareas
+      .filter((tarea) => estadoPorTarea.get(tarea.guid) !== 'CALIFICADA')
+      .map((tarea) => ({
+        recurso_guid: tarea.guid,
+        titulo: tarea.titulo,
+        estado: estadoPorTarea.get(tarea.guid) ?? null,
+      }));
 
-      const entregaMap = new Map(entregas.map((e) => [e.tarea_guid, e]));
-
-      for (const tarea of tareaResources) {
-        const entrega = entregaMap.get(tarea.guid);
-        if (!entrega || entrega.estado !== 'CALIFICADA') {
-          puede_generar_certificado = false;
-          tareas_pendientes.push({
-            recurso_guid: tarea.guid,
-            titulo: tarea.titulo,
-            fecha_entrega: entrega?.fecha_entrega?.toISOString() || null,
-          });
-        }
-      }
-    }
+    const completo = completados.size === recursos.length;
+    const puedeCertificarse = completo && pendientes.length === 0;
 
     return {
       completo,
-      completados,
-      total: allResourceGuids.length,
-      puede_generar_certificado,
-      tareas_pendientes,
+      puede_certificarse: puedeCertificarse,
+      completados: completados.size,
+      total: recursos.length,
+      porcentaje: Math.round((completados.size / recursos.length) * 100),
+      tareas_pendientes: pendientes,
+      motivo: this.motivoDeBloqueo(completo, recursos.length - completados.size, pendientes),
+    };
+  }
+
+  private motivoDeBloqueo(
+    completo: boolean,
+    faltantes: number,
+    pendientes: { titulo: string }[],
+  ): string | null {
+    if (!completo) {
+      return `Te faltan ${faltantes} recurso(s) por completar antes de poder obtener el certificado.`;
+    }
+    if (pendientes.length > 0) {
+      const nombres = pendientes.map((t) => `"${t.titulo}"`).join(', ');
+      return `Tu examinador todavía debe calificar ${pendientes.length} tarea(s): ${nombres}.`;
+    }
+    return null;
+  }
+
+  // ── Emisión ──────────────────────────────────────────────────────────────
+
+  /**
+   * Emite el certificado del alumno en sesión para un curso.
+   * Si ya existe se devuelve el mismo: un alumno no puede tener dos certificados del
+   * mismo curso con códigos de verificación distintos.
+   */
+  async emitirParaUsuario(cursoGuid: string, user: JwtPayload) {
+    await this.acceso.cursoDeSede(cursoGuid, user.pais);
+    await this.acceso.asegurarMatricula(cursoGuid, user.sub);
+    return this.emitir(cursoGuid, user.sub, user.pais);
+  }
+
+  /**
+   * Emite el certificado si el alumno cumple los requisitos, y no hace nada si no.
+   * Lo invoca el listener de eventos cada vez que un progreso o una calificación pueden
+   * haber cerrado el curso.
+   */
+  async emitirSiProcede(cursoGuid: string, usuarioGuid: string, pais: Pais): Promise<void> {
+    const yaTiene = await this.prisma.lms_certificados.findUnique({
+      where: { usuario_guid_curso_guid: { usuario_guid: usuarioGuid, curso_guid: cursoGuid } },
+      select: { id: true },
+    });
+    if (yaTiene) return;
+
+    const estado = await this.comprobarFinalizacion(cursoGuid, usuarioGuid);
+    if (!estado.puede_certificarse) return;
+
+    await this.emitir(cursoGuid, usuarioGuid, pais);
+    this.logger.log(`Certificado emitido automáticamente: alumno ${usuarioGuid}, curso ${cursoGuid}`);
+  }
+
+  private async emitir(cursoGuid: string, usuarioGuid: string, pais: Pais) {
+    const existente = await this.prisma.lms_certificados.findUnique({
+      where: { usuario_guid_curso_guid: { usuario_guid: usuarioGuid, curso_guid: cursoGuid } },
+      include: { curso: { select: { titulo: true } } },
+    });
+    if (existente) {
+      // Reintenta la limpieza de archivos por si falló en la emisión original.
+      void this.purgarEntregas(cursoGuid, usuarioGuid);
+      return this.paraElAlumno(existente);
+    }
+
+    const estado = await this.comprobarFinalizacion(cursoGuid, usuarioGuid);
+    if (!estado.puede_certificarse) {
+      throw new BadRequestException(estado.motivo ?? 'Todavía no cumples los requisitos del certificado.');
+    }
+
+    const datos = await this.reunirDatos(cursoGuid, usuarioGuid, pais);
+    const pdf = await componerCertificado(datos.certificado);
+
+    const clave = `certificados/${crypto.randomUUID()}.pdf`;
+    await this.storage.guardarConClave(clave, pdf, 'application/pdf');
+
+    const certificado = await this.prisma.lms_certificados.create({
+      data: {
+        usuario_guid: usuarioGuid,
+        curso_guid: cursoGuid,
+        codigo_verificacion: datos.certificado.codigoVerificacion,
+        archivo_pdf: clave,
+        fecha_inicio: datos.certificado.fechaInicio,
+        fecha_completado: datos.certificado.fechaCompletado,
+        tiempo_total_horas: datos.certificado.tiempoHoras,
+        tiempo_activo_seg: datos.segundosActivos,
+        nota_promedio: datos.certificado.notaPromedio,
+      },
+      include: { curso: { select: { titulo: true } } },
+    });
+
+    this.realtime.emitirAUsuarios(
+      'certificate:new',
+      { guid: certificado.guid, curso_guid: cursoGuid, curso_titulo: datos.certificado.tituloCurso },
+      pais,
+      [usuarioGuid],
+    );
+
+    void this.avisarDeLaEmision(certificado.guid, datos, pais);
+    void this.purgarEntregas(cursoGuid, usuarioGuid);
+
+    return this.paraElAlumno(certificado);
+  }
+
+  /** Reúne del curso, el alumno y la configuración todo lo que se imprime en el PDF. */
+  private async reunirDatos(cursoGuid: string, usuarioGuid: string, pais: Pais) {
+    const [usuario, curso, matricula, config, recursos] = await Promise.all([
+      this.prisma.usuarios.findUnique({
+        where: { guid: usuarioGuid },
+        select: { nombre: true, apellido: true, email: true },
+      }),
+      this.prisma.lms_cursos.findUnique({
+        where: { guid: cursoGuid },
+        select: {
+          titulo: true,
+          duracion_horas: true,
+          profesor_guid: true,
+          profesor: {
+            select: { nombre: true, apellido: true, email: true, firma_url: true, firma_nombre: true, firma_cargo: true },
+          },
+          _count: { select: { modulos: true } },
+        },
+      }),
+      this.prisma.lms_matriculas.findUnique({
+        where: { usuario_guid_curso_guid: { usuario_guid: usuarioGuid, curso_guid: cursoGuid } },
+        select: { fecha_matricula: true },
+      }),
+      this.configuracion.getConfig(pais),
+      this.acceso.recursosDelCurso(cursoGuid),
+    ]);
+
+    if (!usuario || !curso) throw new NotFoundException('No se encontró el alumno o el curso.');
+
+    const [notas, tiempo] = await Promise.all([
+      this.prisma.lms_entregas.findMany({
+        where: {
+          usuario_guid: usuarioGuid,
+          estado: 'CALIFICADA',
+          calificacion: { not: null },
+          tarea: { modulo: { curso_guid: cursoGuid } },
+        },
+        select: { calificacion: true },
+      }),
+      this.prisma.lms_sesion_activa.aggregate({
+        where: { usuario_guid: usuarioGuid, curso_guid: cursoGuid },
+        _sum: { duracion_seg: true },
+      }),
+    ]);
+
+    const segundosActivos = tiempo._sum.duracion_seg ?? 0;
+    const horasReales = Math.max(segundosActivos / 3600, HORAS_MINIMAS);
+    const totalTareas = recursos.filter((r) => r.tipo === 'TAREA').length;
+
+    const [logo, firma] = await Promise.all([
+      this.cargarImagen(config.logo_url),
+      config.cert_mostrar_firma ? this.cargarImagen(curso.profesor.firma_url) : Promise.resolve(null),
+    ]);
+
+    return {
+      segundosActivos,
+      alumnoEmail: usuario.email,
+      alumnoNombre: usuario.nombre,
+      profesorEmail: curso.profesor.email,
+      profesorNombre: curso.profesor.nombre,
+      certificado: {
+        nombreEstudiante: `${usuario.nombre} ${usuario.apellido}`,
+        tituloCurso: curso.titulo,
+        fechaInicio: matricula?.fecha_matricula ?? new Date(),
+        fechaCompletado: new Date(),
+        tiempoHoras: segundosActivos > 0 ? Math.round(horasReales * 10) / 10 : (curso.duracion_horas ?? 1),
+        notaPromedio: promedioNotas(notas.map((n) => n.calificacion)),
+        codigoVerificacion: this.generarCodigo(),
+        nombreProfesor: `${curso.profesor.nombre} ${curso.profesor.apellido}`,
+        nombrePlataforma: config.nombre_plataforma,
+        colorPrimario: config.color_primario,
+        colorSecundario: config.color_secundario,
+        totalModulos: curso._count.modulos,
+        totalRecursos: recursos.length,
+        textoLegal:
+          config.cert_texto_legal ||
+          `El presente certificado acredita que el participante cumplió satisfactoriamente la totalidad del programa de capacitación, compuesto por ${curso._count.modulos} módulo(s) y ${recursos.length} recurso(s) formativo(s), incluyendo ${totalTareas} evaluación(es) calificada(s) por el examinador asignado.`,
+        tituloPersonalizado: config.cert_titulo_personalizado,
+        subtitulo: config.cert_subtitulo,
+        mostrarModulos: config.cert_mostrar_modulos,
+        mostrarRecursos: config.cert_mostrar_recursos,
+        mostrarNota: config.cert_mostrar_nota,
+        mostrarFirma: config.cert_mostrar_firma,
+        mostrarFechaIngreso: config.cert_mostrar_fecha_ingreso,
+        firmaNombre: curso.profesor.firma_nombre,
+        firmaCargo: curso.profesor.firma_cargo,
+        logo,
+        firma,
+      },
     };
   }
 
   /**
-   * Generate a certificate PDF for a student who has completed a course.
-   * Idempotent: returns existing certificate if already generated.
+   * Carga una imagen del almacenamiento para incrustarla en el PDF.
+   * Devuelve `null` si no está: un certificado sin logotipo es preferible a no poder
+   * emitirlo, pero el fallo se registra para que alguien lo corrija.
    */
-  async generarCertificado(usuario_guid: string, curso_guid: string) {
-    // Check if certificate already exists
-    const existing = await this.prisma.lms_certificados.findUnique({
-      where: { usuario_guid_curso_guid: { usuario_guid, curso_guid } },
-      include: {
-        curso: { select: { titulo: true } },
-        usuario: { select: { nombre: true, apellido: true } },
-      },
-    });
-    if (existing) {
-      // Certificate already exists — but submission files may not have been purged
-      // (e.g., if the purge failed before, or was added after the certificate was generated).
-      // Run the purge defensively to ensure files are cleaned up.
-      this.purgeEntregaFiles(usuario_guid, curso_guid).catch((err) =>
-        this.logger.error('Retroactive purge on existing cert failed:', err),
-      );
-      return existing;
-    }
-
-    // Verify course completion AND grading
-    const verificacion = await this.verificarCursoCompleto(usuario_guid, curso_guid);
-    if (!verificacion.completo) {
-      throw new BadRequestException('El curso aún no ha sido completado. Debes finalizar todos los recursos.');
-    }
-    if (!verificacion.puede_generar_certificado) {
-      const pendingNames = verificacion.tareas_pendientes.map((t) => `"${t.titulo}"`).join(', ');
-      throw new BadRequestException(
-        `Tu certificado aún no puede ser generado. Hay ${verificacion.tareas_pendientes.length} tarea(s) pendiente(s) de calificación: ${pendingNames}. El examinador debe calificarlas primero.`,
-      );
-    }
-
-    // Gather all data needed for the certificate
-    const [usuario, curso, matricula, config] = await Promise.all([
-      this.prisma.usuarios.findUnique({
-        where: { guid: usuario_guid },
-        select: { nombre: true, apellido: true, email: true },
-      }),
-      this.prisma.lms_cursos.findUnique({
-        where: { guid: curso_guid },
-        select: {
-          titulo: true,
-          descripcion: true,
-          duracion_horas: true,
-          profesor_guid: true,
-          profesor: {
-            select: { nombre: true, apellido: true, firma_url: true, firma_nombre: true, firma_cargo: true },
-          },
-          modulos: {
-            include: {
-              lecciones: {
-                include: {
-                  recursos: { select: { guid: true, tipo: true } },
-                },
-              },
-            },
-          },
-        },
-      }),
-      this.prisma.lms_matriculas.findFirst({
-        where: { usuario_guid, curso_guid },
-        select: { fecha_matricula: true },
-      }),
-      this.configuracionService.getConfig(),
-    ]);
-
-    if (!usuario || !curso) {
-      throw new NotFoundException('Usuario o curso no encontrado.');
-    }
-
-    // Calculate metrics
-    const allResourceGuids = curso.modulos.flatMap((m) => m.lecciones.flatMap((l) => l.recursos.map((r) => r.guid)));
-    const totalModulos = curso.modulos.length;
-    const totalRecursos = allResourceGuids.length;
-    const totalTareas = curso.modulos.flatMap((m) =>
-      m.lecciones.flatMap((l) => l.recursos.filter((r) => r.tipo === 'TAREA')),
-    ).length;
-
-    // Calculate average grade from deliveries — use numeric field
-    const entregas = await this.prisma.lms_entregas.findMany({
-      where: {
-        usuario_guid,
-        tarea_guid: { in: allResourceGuids },
-        estado: 'CALIFICADA',
-        calificacion: { not: null },
-      },
-      select: { calificacion: true },
-    });
-
-    let notaPromedio: number | null = null;
-    if (entregas.length > 0) {
-      let sum = 0;
-      let count = 0;
-      for (const e of entregas) {
-        if (e.calificacion != null) {
-          sum += Number(e.calificacion);
-          count++;
-        }
-      }
-      if (count > 0) notaPromedio = parseFloat((sum / count).toFixed(2));
-    }
-
-    // Get active time (heartbeat-tracked)
-    const tiempoActivoResult = await this.prisma.lms_sesion_activa.aggregate({
-      where: { usuario_guid, curso_guid },
-      _sum: { duracion_seg: true },
-    });
-    const tiempoActivoSeg = tiempoActivoResult._sum.duracion_seg || 0;
-    const tiempoActivoHoras = parseFloat(Math.max(tiempoActivoSeg / 3600, 0.1).toFixed(1));
-
-    const fechaInicio = matricula?.fecha_matricula || new Date();
-    const fechaCompletado = new Date();
-
-    // Use active time or course duration as fallback
-    const tiempoHoras = tiempoActivoSeg > 0 ? tiempoActivoHoras : curso.duracion_horas || 1;
-
-    // Generate verification code
-    const codigoVerificacion = `CERT-${crypto.randomBytes(4).toString('hex').toUpperCase()}-${Date.now().toString(36).toUpperCase()}`;
-
-    // Generate PDF
-    const pdfFilename = `certificado-${usuario_guid.substring(0, 8)}-${curso_guid.substring(0, 8)}-${Date.now()}.pdf`;
-    const pdfPath = path.join(CERTS_DIR, pdfFilename);
-
-    // Build legal text
-    const defaultLegalText = `El presente certificado acredita que el participante cumplió satisfactoriamente con la totalidad del programa de capacitación, el cual constó de ${totalModulos} módulo(s) y ${totalRecursos} recurso(s) formativo(s), incluyendo ${totalTareas} evaluación(es) calificada(s) por el examinador asignado.`;
-    const textoLegal = config?.cert_texto_legal || defaultLegalText;
-
-    // Determine logo image path
-    let logoImagePath: string | null = null;
-    if (config?.logo_url) {
-      const fp = path.join(process.cwd(), 'uploads', config.logo_url);
-      if (fs.existsSync(fp)) logoImagePath = fp;
-    }
-
-    let firmaImagePath: string | null = null;
-    if (config?.cert_mostrar_firma && curso.profesor.firma_url) {
-      const fp = path.join(process.cwd(), 'uploads', curso.profesor.firma_url);
-      if (fs.existsSync(fp)) firmaImagePath = fp;
-    }
-
-    await this.generatePDF(pdfPath, {
-      nombreEstudiante: `${usuario.nombre} ${usuario.apellido}`,
-      tituloCurso: curso.titulo,
-      fechaCompletado,
-      fechaInicio,
-      tiempoHoras,
-      notaPromedio,
-      codigoVerificacion,
-      nombreProfesor: `${curso.profesor.nombre} ${curso.profesor.apellido}`,
-      nombrePlataforma: config?.nombre_plataforma || 'Campus Virtual',
-      logoImagePath,
-      colorPrimario: config?.color_primario || '#4f46e5',
-      colorSecundario: config?.color_secundario || '#10b981',
-      totalModulos,
-      totalRecursos,
-      textoLegal,
-      tituloPersonalizado: config?.cert_titulo_personalizado || null,
-      subtitulo: config?.cert_subtitulo || null,
-      mostrarModulos: config?.cert_mostrar_modulos ?? true,
-      mostrarRecursos: config?.cert_mostrar_recursos ?? true,
-      mostrarNota: config?.cert_mostrar_nota ?? true,
-      mostrarFirma: config?.cert_mostrar_firma ?? true,
-      mostrarFechaIngreso: config?.cert_mostrar_fecha_ingreso ?? false,
-      firmaImagePath,
-      firmaNombre: curso.profesor.firma_nombre || null,
-      firmaCargo: curso.profesor.firma_cargo || null,
-    });
-
-    // F7.1: Upload PDF to R2 if cloud storage is active
-    if (this.storageService.isCloudStorageActive()) {
-      try {
-        const pdfBuffer = await fs.promises.readFile(pdfPath);
-        await this.storageService.uploadToR2WithKey(pdfBuffer, `certificados/${pdfFilename}`, 'application/pdf');
-        this.logger.log(`Certificate PDF uploaded to R2: certificados/${pdfFilename}`);
-      } catch (err) {
-        this.logger.error('Failed to upload certificate PDF to R2, local copy preserved:', err);
-      }
-    }
-
-    // Create DB record
-    const certificado = await this.prisma.lms_certificados.create({
-      data: {
-        usuario_guid,
-        curso_guid,
-        codigo_verificacion: codigoVerificacion,
-        archivo_pdf: pdfFilename,
-        fecha_inicio: fechaInicio,
-        fecha_completado: fechaCompletado,
-        tiempo_total_horas: tiempoHoras,
-        tiempo_activo_seg: tiempoActivoSeg,
-        nota_promedio: notaPromedio,
-      },
-      include: {
-        curso: { select: { titulo: true } },
-        usuario: { select: { nombre: true, apellido: true } },
-      },
-    });
-
-    // Broadcast via WebSocket to the student
-    this.lmsGateway.broadcast(
-      'certificate:new',
-      {
-        guid: certificado.guid,
-        curso_guid,
-        curso_titulo: curso.titulo,
-        fecha_completado: fechaCompletado,
-      },
-      [usuario_guid],
-    );
-    this.lmsGateway.broadcast('dashboard:refresh', { reason: 'certificate_generated' });
-
-    // Create notification (fire-and-forget)
-    this.notificacionesService
-      .crearNotificacion({
-        usuario_guid,
-        tipo: 'MODULO_COMPLETADO',
-        titulo: '🎓 ¡Curso completado!',
-        mensaje: `Has finalizado exitosamente el curso "${curso.titulo}". Tu certificado ya está disponible para descargar.`,
-        url_accion: '/dashboard/student/certificados',
-        ref_tipo: 'certificado',
-        ref_guid: certificado.guid,
-      })
-      .catch((err) => this.logger.error('Certificate notification error:', err));
-
-    // Fire-and-forget: Send certificate email + notify examiner of course completion
-    (async () => {
-      try {
-        // Email to student: certificate generated
-        this.mailService
-          .sendCertificateGenerated(usuario.email, usuario.nombre, curso.titulo, codigoVerificacion, certificado.guid)
-          .catch(() => {});
-
-        // Email to examiner: student completed course
-        if (curso.profesor_guid) {
-          const examiner = await this.prisma.usuarios.findUnique({
-            where: { guid: curso.profesor_guid },
-            select: { email: true, nombre: true },
-          });
-          if (examiner) {
-            this.mailService
-              .sendCourseCompletedNotification(
-                examiner.email,
-                examiner.nombre,
-                `${usuario.nombre} ${usuario.apellido}`,
-                curso.titulo,
-              )
-              .catch(() => {});
-          }
-        }
-      } catch (err) {
-        this.logger.error('Certificate/completion email error:', err);
-      }
-    })();
-
-    // F7.5.2: Purge submission files to free storage after certificate generation.
-    // Awaited (not fire-and-forget) to ensure files are cleaned up before returning.
+  private async cargarImagen(clave: string | null): Promise<Buffer | null> {
+    if (!clave) return null;
     try {
-      this.logger.log(`🧹 Starting submission file purge for user ${usuario_guid} in course ${curso_guid}...`);
-      await this.purgeEntregaFiles(usuario_guid, curso_guid);
-    } catch (err) {
-      this.logger.error('Entrega file purge error:', err);
+      const archivo = await this.storage.leer(clave);
+      if (!archivo) {
+        this.logger.warn(`Imagen del certificado no encontrada: ${clave}`);
+        return null;
+      }
+      return archivo.contenido;
+    } catch (error) {
+      this.logger.warn(`No se pudo cargar la imagen ${clave} para el certificado`, error);
+      return null;
+    }
+  }
+
+  /** Código legible, único y difícil de adivinar para la verificación pública. */
+  private generarCodigo(): string {
+    const aleatorio = crypto.randomBytes(5).toString('hex').toUpperCase();
+    const marca = Date.now().toString(36).toUpperCase();
+    return `CERT-${aleatorio}-${marca}`;
+  }
+
+  private async avisarDeLaEmision(
+    certificadoGuid: string,
+    datos: Awaited<ReturnType<CertificadosService['reunirDatos']>>,
+    pais: Pais,
+  ): Promise<void> {
+    try {
+      await Promise.all([
+        this.mail.sendCertificateGenerated(
+          datos.alumnoEmail,
+          datos.alumnoNombre,
+          datos.certificado.tituloCurso,
+          datos.certificado.codigoVerificacion,
+          pais,
+        ),
+        this.mail.sendCourseCompletedNotification(
+          datos.profesorEmail,
+          datos.profesorNombre,
+          datos.certificado.nombreEstudiante,
+          datos.certificado.tituloCurso,
+          pais,
+        ),
+      ]);
+    } catch (error) {
+      this.logger.error(`No se pudo avisar de la emisión del certificado ${certificadoGuid}`, error);
+    }
+  }
+
+  // ── Consulta ─────────────────────────────────────────────────────────────
+
+  /** Certificados del alumno en sesión. */
+  async getMisCertificados(user: JwtPayload) {
+    const certificados = await this.prisma.lms_certificados.findMany({
+      where: { usuario_guid: user.sub },
+      include: { curso: { select: { titulo: true, imagen_portada: true } } },
+      orderBy: { fecha_completado: 'desc' },
+    });
+    return certificados.map((c) => this.paraElAlumno(c));
+  }
+
+  /**
+   * Certificado concreto. Sólo su titular o un administrador de la misma sede pueden
+   * consultarlo: antes bastaba con conocer el identificador para descargar el PDF de
+   * cualquier persona.
+   */
+  async getCertificado(guid: string, user: JwtPayload) {
+    const certificado = await this.prisma.lms_certificados.findUnique({
+      where: { guid },
+      include: {
+        curso: { select: { titulo: true, imagen_portada: true, pais: true } },
+        usuario: { select: { guid: true, nombre: true, apellido: true, pais: true } },
+      },
+    });
+    if (!certificado) throw new NotFoundException('Certificado no encontrado.');
+
+    const esSuyo = certificado.usuario_guid === user.sub;
+    const esAdminDeLaSede = user.role === 'ADMINISTRADOR' && certificado.usuario.pais === user.pais;
+    if (!esSuyo && !esAdminDeLaSede) {
+      throw new ForbiddenException('No tienes permiso para consultar este certificado.');
     }
 
     return certificado;
   }
 
+  /** Contenido del PDF, comprobando antes que quien lo pide tiene derecho a verlo. */
+  async getPdf(guid: string, user: JwtPayload): Promise<{ contenido: Buffer; nombre: string }> {
+    const certificado = await this.getCertificado(guid, user);
+
+    const archivo = await this.storage.leer(certificado.archivo_pdf);
+    if (!archivo) {
+      throw new NotFoundException(
+        'El archivo del certificado no está disponible. Avisa al administrador para que lo vuelva a emitir.',
+      );
+    }
+
+    const nombreCurso = certificado.curso.titulo.replace(/[^\p{L}\p{N} _-]/gu, '').trim() || 'Curso';
+    return { contenido: archivo.contenido, nombre: `Certificado - ${nombreCurso}.pdf` };
+  }
+
   /**
-   * Centralized method: after grading or resource completion, check if the student
-   * has now completed all requirements for a certificate.
-   * Called by EvaluacionesService, CursosService, and EstudiantesService.
+   * Verificación pública por código.
+   * Devuelve sólo lo imprescindible para comprobar la autenticidad de un documento: quién,
+   * qué curso y cuándo. Ni correo, ni identificadores internos, ni enlace al PDF.
    */
-  async checkCertificateAfterGrading(usuario_guid: string, tarea_guid: string) {
-    // Find which course this task belongs to
-    const recurso = await this.prisma.lms_recursos.findUnique({
-      where: { guid: tarea_guid },
+  async verificarPorCodigo(codigo: string) {
+    const certificado = await this.prisma.lms_certificados.findUnique({
+      where: { codigo_verificacion: codigo.trim().toUpperCase() },
       select: {
-        leccion: {
-          select: {
-            modulo: {
-              select: { curso_guid: true },
-            },
-          },
-        },
-      },
-    });
-    if (!recurso) return;
-
-    const curso_guid = recurso.leccion.modulo.curso_guid;
-
-    // Check if certificate already exists
-    const existing = await this.prisma.lms_certificados.findUnique({
-      where: { usuario_guid_curso_guid: { usuario_guid, curso_guid } },
-    });
-    if (existing) return;
-
-    // Verify full completion + all tasks graded
-    const result = await this.verificarCursoCompleto(usuario_guid, curso_guid);
-    if (!result.completo || !result.puede_generar_certificado) return;
-
-    // All conditions met — auto-generate certificate!
-    await this.generarCertificado(usuario_guid, curso_guid);
-    this.logger.log(`Certificate auto-generated after grading for user ${usuario_guid} in course ${curso_guid}`);
-  }
-
-  /**
-   * Get all certificates for a student.
-   */
-  async getCertificadosEstudiante(usuario_guid: string) {
-    return this.prisma.lms_certificados.findMany({
-      where: { usuario_guid },
-      include: {
-        curso: { select: { titulo: true, imagen_portada: true } },
-      },
-      orderBy: { fecha_completado: 'desc' },
-    });
-  }
-
-  /**
-   * Get a single certificate by GUID.
-   */
-  async getCertificado(guid: string) {
-    const cert = await this.prisma.lms_certificados.findUnique({
-      where: { guid },
-      include: {
-        curso: { select: { titulo: true, imagen_portada: true } },
-        usuario: { select: { nombre: true, apellido: true, email: true } },
-      },
-    });
-    if (!cert) throw new NotFoundException('Certificado no encontrado.');
-    return cert;
-  }
-
-  /**
-   * Public certificate verification by unique verification code.
-   * Returns limited, non-sensitive data for third-party validation.
-   */
-  async verificarPublico(codigo: string) {
-    const cert = await this.prisma.lms_certificados.findUnique({
-      where: { codigo_verificacion: codigo },
-      include: {
+        codigo_verificacion: true,
+        fecha_completado: true,
+        nota_promedio: true,
+        tiempo_total_horas: true,
         curso: { select: { titulo: true } },
         usuario: { select: { nombre: true, apellido: true } },
       },
     });
-    if (!cert) {
-      return { valido: false, mensaje: 'No se encontró ningún certificado con ese código de verificación.' };
+
+    if (!certificado) {
+      return { valido: false as const, mensaje: 'No existe ningún certificado con ese código de verificación.' };
     }
+
     return {
-      valido: true,
+      valido: true as const,
       certificado: {
-        nombre_estudiante: `${cert.usuario.nombre} ${cert.usuario.apellido}`,
-        curso: cert.curso.titulo,
-        fecha_emision: cert.fecha_completado,
-        codigo_verificacion: cert.codigo_verificacion,
-        nota_promedio: cert.nota_promedio,
+        nombre_estudiante: `${certificado.usuario.nombre} ${certificado.usuario.apellido}`,
+        curso: certificado.curso.titulo,
+        fecha_emision: certificado.fecha_completado,
+        horas: Number(certificado.tiempo_total_horas),
+        nota_promedio: certificado.nota_promedio === null ? null : Number(certificado.nota_promedio),
+        codigo_verificacion: certificado.codigo_verificacion,
       },
     };
   }
 
-  /**
-   * Get the PDF file path for download.
-   */
-  getArchivoPDF(filename: string): string {
-    // Try local cert directory first
-    const fullPath = path.join(CERTS_DIR, filename);
-    if (fs.existsSync(fullPath)) return fullPath;
-    // Try general uploads directory (legacy)
-    const uploadsPath = path.join(process.cwd(), 'uploads', filename);
-    if (fs.existsSync(uploadsPath)) return uploadsPath;
-    throw new NotFoundException('Archivo PDF no encontrado.');
+  private paraElAlumno(certificado: {
+    guid: string;
+    curso_guid: string;
+    codigo_verificacion: string;
+    fecha_completado: Date;
+    tiempo_total_horas: unknown;
+    nota_promedio: unknown;
+    curso: { titulo: string; imagen_portada?: string | null };
+  }) {
+    return {
+      guid: certificado.guid,
+      curso_guid: certificado.curso_guid,
+      curso_titulo: certificado.curso.titulo,
+      curso_imagen: certificado.curso.imagen_portada ?? null,
+      codigo_verificacion: certificado.codigo_verificacion,
+      fecha_completado: certificado.fecha_completado,
+      horas: Number(certificado.tiempo_total_horas),
+      nota_promedio: certificado.nota_promedio === null ? null : Number(certificado.nota_promedio),
+    };
   }
 
-  // ─── PDF GENERATION ──────────────────────────────────────
-
-  private async generatePDF(
-    outputPath: string,
-    data: {
-      nombreEstudiante: string;
-      tituloCurso: string;
-      fechaCompletado: Date;
-      fechaInicio: Date;
-      tiempoHoras: number;
-      notaPromedio: number | null;
-      codigoVerificacion: string;
-      nombreProfesor: string;
-      nombrePlataforma: string;
-      logoImagePath: string | null;
-      colorPrimario: string;
-      colorSecundario: string;
-      totalModulos: number;
-      totalRecursos: number;
-      textoLegal: string;
-      tituloPersonalizado: string | null;
-      subtitulo: string | null;
-      mostrarModulos: boolean;
-      mostrarRecursos: boolean;
-      mostrarNota: boolean;
-      mostrarFirma: boolean;
-      mostrarFechaIngreso: boolean;
-      firmaImagePath: string | null;
-      firmaNombre: string | null;
-      firmaCargo: string | null;
-    },
-  ): Promise<void> {
-    return new Promise((resolve, reject) => {
-      const doc = new PDFDocument({
-        size: [842, 595], // A4 Landscape
-        margins: { top: 0, bottom: 0, left: 0, right: 0 },
-        info: {
-          Title: `Certificado - ${data.tituloCurso}`,
-          Author: data.nombrePlataforma,
-          Subject: `Certificado de finalización para ${data.nombreEstudiante}`,
-        },
-      });
-
-      const stream = fs.createWriteStream(outputPath);
-      doc.pipe(stream);
-
-      const W = 842;
-      const H = 595;
-      const primary = data.colorPrimario;
-      const secondary = data.colorSecundario;
-
-      // ── Background ──
-      doc.rect(0, 0, W, H).fill('#FAFAFA');
-
-      // ── Academic Double Border ──
-      doc
-        .rect(24, 24, W - 48, H - 48)
-        .lineWidth(3)
-        .stroke(primary);
-
-      doc
-        .rect(30, 30, W - 60, H - 60)
-        .lineWidth(1)
-        .stroke(secondary);
-
-      // ── Decorative corner ornaments ──
-      this.drawCornerOrnament(doc, 36, 36, primary, false, false);
-      this.drawCornerOrnament(doc, W - 36, 36, secondary, true, false);
-      this.drawCornerOrnament(doc, 36, H - 36, secondary, false, true);
-      this.drawCornerOrnament(doc, W - 36, H - 36, primary, true, true);
-
-      // ── Logo and Platform name header ──
-      let headerY = 55;
-
-      if (data.logoImagePath) {
-        try {
-          doc.image(data.logoImagePath, W / 2 - 45, headerY, {
-            width: 90,
-            height: 90,
-            fit: [90, 90],
-            align: 'center',
-            valign: 'center',
-          });
-          headerY += 105;
-        } catch (e) {
-          // Fallback to text if image fails
-          doc.fontSize(16).font('Times-Bold').fillColor(primary).text(data.nombrePlataforma.toUpperCase(), 0, headerY, {
-            align: 'center',
-            width: W,
-            characterSpacing: 2,
-          });
-          headerY += 30;
-        }
-      } else {
-        doc.fontSize(16).font('Times-Bold').fillColor(primary).text(data.nombrePlataforma.toUpperCase(), 0, headerY, {
-          align: 'center',
-          width: W,
-          characterSpacing: 2,
-        });
-        headerY += 30;
-      }
-
-      // ── Horizontal separator after platform name ──
-      const sepY = headerY + 10;
-      const sepW = 160;
-      const sepGrad = doc.linearGradient(W / 2 - sepW / 2, sepY, W / 2 + sepW / 2, sepY);
-      sepGrad.stop(0, '#E2E8F0').stop(0.5, primary).stop(1, '#E2E8F0');
-      doc
-        .moveTo(W / 2 - sepW / 2, sepY)
-        .lineTo(W / 2 + sepW / 2, sepY)
-        .lineWidth(1)
-        .stroke(sepGrad);
-
-      // ── Title ──
-      const certTitle = data.tituloPersonalizado || 'CERTIFICADO';
-      doc
-        .fontSize(32)
-        .font('Times-Bold')
-        .fillColor('#1E293B')
-        .text(certTitle, 0, sepY + 15, { align: 'center', width: W });
-
-      const subTitle = data.subtitulo || 'DE FINALIZACIÓN ACADÉMICA';
-      doc
-        .fontSize(11)
-        .font('Times-Roman')
-        .fillColor('#64748B')
-        .text(subTitle, 0, sepY + 50, {
-          align: 'center',
-          width: W,
-          characterSpacing: 5,
-        });
-
-      // ── "Se otorga a:" ──
-      doc
-        .fontSize(12)
-        .font('Times-Italic')
-        .fillColor('#94A3B8')
-        .text('El presente documento se otorga a:', 0, sepY + 80, { align: 'center', width: W });
-
-      // ── Student Name ──
-      doc
-        .fontSize(28)
-        .font('Times-BoldItalic')
-        .fillColor(primary)
-        .text(data.nombreEstudiante, 0, sepY + 105, { align: 'center', width: W });
-
-      // ── Decorative line under name ──
-      const nameLineY = sepY + 140;
-      const nameLineW = Math.min(data.nombreEstudiante.length * 15 + 60, 500);
-      const nameGrad = doc.linearGradient(W / 2 - nameLineW / 2, nameLineY, W / 2 + nameLineW / 2, nameLineY);
-      nameGrad.stop(0, '#E2E8F0').stop(0.3, primary).stop(0.7, primary).stop(1, '#E2E8F0');
-      doc
-        .moveTo(W / 2 - nameLineW / 2, nameLineY)
-        .lineTo(W / 2 + nameLineW / 2, nameLineY)
-        .lineWidth(1)
-        .stroke(nameGrad);
-
-      // ── "Por haber completado exitosamente el curso:" ──
-      doc
-        .fontSize(12)
-        .font('Times-Italic')
-        .fillColor('#64748B')
-        .text(
-          'Por haber completado y aprobado satisfactoriamente los requisitos del programa formativo:',
-          0,
-          nameLineY + 15,
-          { align: 'center', width: W },
-        );
-
-      // ── Course Title ──
-      doc
-        .fontSize(18)
-        .font('Times-Bold')
-        .fillColor('#1E293B')
-        .text(`"${data.tituloCurso}"`, 60, nameLineY + 35, { align: 'center', width: W - 120 });
-
-      // ── Legal / Descriptive text ──
-      const legalY = nameLineY + 65;
-      doc
-        .fontSize(10)
-        .font('Times-Roman')
-        .fillColor('#475569')
-        .text(data.textoLegal, 80, legalY, { align: 'center', width: W - 160, lineGap: 4 });
-
-      // ── Metrics Row ──
-      const metricsY = legalY + 45;
-      const metricsData: { label: string; value: string }[] = [];
-
-      const formatDateDDMMYYYY = (d: Date) => {
-        return `${d.getDate().toString().padStart(2, '0')}/${(d.getMonth() + 1).toString().padStart(2, '0')}/${d.getFullYear()}`;
-      };
-
-      if (data.mostrarFechaIngreso) {
-        metricsData.push({
-          label: 'Fecha de inscripción',
-          value: formatDateDDMMYYYY(data.fechaInicio),
-        });
-      }
-
-      metricsData.push({
-        label: 'Fecha de expedición',
-        value: formatDateDDMMYYYY(data.fechaCompletado),
-      });
-
-      metricsData.push({
-        label: 'Duración',
-        value: `${data.tiempoHoras} horas`,
-      });
-      if (data.mostrarModulos) {
-        metricsData.push({ label: 'Módulos', value: `${data.totalModulos}` });
-      }
-      if (data.mostrarRecursos) {
-        metricsData.push({ label: 'Recursos', value: `${data.totalRecursos}` });
-      }
-      if (data.mostrarNota && data.notaPromedio !== null) {
-        metricsData.push({
-          label: 'Calificación promedio',
-          value: `${data.notaPromedio.toFixed(1)} / 5.0`,
-        });
-      }
-
-      const metricWidth = (W - 120) / metricsData.length;
-      metricsData.forEach((metric, i) => {
-        const x = 60 + i * metricWidth;
-        doc
-          .fontSize(9)
-          .font('Times-Roman')
-          .fillColor('#64748B')
-          .text(metric.label.toUpperCase(), x, metricsY, { width: metricWidth, align: 'center' });
-        doc
-          .fontSize(12)
-          .font('Times-Bold')
-          .fillColor('#1E293B')
-          .text(metric.value, x, metricsY + 14, { width: metricWidth, align: 'center' });
-      });
-
-      // ── Instructor signature area ──
-      if (data.mostrarFirma) {
-        const sigY = H - 110;
-
-        // If there's a signature image, render it
-        if (data.firmaImagePath) {
-          try {
-            doc.image(data.firmaImagePath, W / 2 - 60, sigY - 40, {
-              width: 120,
-              height: 35,
-              fit: [120, 35],
-              align: 'center',
-              valign: 'center',
-            });
-          } catch (e) {
-            // Signature image failed to load, skip silently
-          }
-        }
-
-        // Signature line
-        const sigLineW = 220;
-        doc
-          .moveTo(W / 2 - sigLineW / 2, sigY)
-          .lineTo(W / 2 + sigLineW / 2, sigY)
-          .lineWidth(0.8)
-          .stroke('#94A3B8');
-
-        const sigName = data.firmaNombre || data.nombreProfesor;
-        doc
-          .fontSize(11)
-          .font('Times-Bold')
-          .fillColor('#1E293B')
-          .text(sigName, 0, sigY + 8, { align: 'center', width: W });
-
-        const sigTitle = data.firmaCargo || 'Instructor / Examinador Académico';
-        doc
-          .fontSize(10)
-          .font('Times-Italic')
-          .fillColor('#64748B')
-          .text(sigTitle, 0, sigY + 22, { align: 'center', width: W });
-      }
-
-      // ── Verification code at bottom ──
-      const codeY = H - 45;
-      doc
-        .fontSize(8)
-        .font('Times-Roman')
-        .fillColor('#94A3B8')
-        .text(`Código de verificación institucional: ${data.codigoVerificacion}`, 0, codeY, {
-          align: 'center',
-          width: W,
-        });
-
-      // ── Finalize ──
-      doc.end();
-
-      stream.on('finish', resolve);
-      stream.on('error', reject);
-    });
-  }
+  // ── Limpieza ─────────────────────────────────────────────────────────────
 
   /**
-   * Draw a small corner ornament (L-shaped bracket).
+   * Retira los archivos de las entregas una vez emitido el certificado.
+   *
+   * El certificado es ya el documento que acredita la capacitación, así que conservar los
+   * borradores entregados sólo consume almacenamiento. Se conserva el nombre original del
+   * archivo y la calificación: el alumno sigue viendo qué entregó y qué nota obtuvo.
    */
-  private drawCornerOrnament(
-    doc: PDFKit.PDFDocument,
-    x: number,
-    y: number,
-    color: string,
-    flipX: boolean,
-    flipY: boolean,
-  ) {
-    const size = 16;
-    const dx = flipX ? -1 : 1;
-    const dy = flipY ? -1 : 1;
-
-    doc
-      .moveTo(x, y + dy * size)
-      .lineTo(x, y)
-      .lineTo(x + dx * size, y)
-      .lineWidth(2)
-      .lineCap('round')
-      .stroke(color);
-  }
-
-  /**
-   * F7.5.2: Purge submission files after certificate generation.
-   * Deletes the actual files from R2/local storage, but preserves
-   * `respuesta_texto` (original filename) so students can see what they submitted.
-   */
-  async purgeEntregaFiles(usuario_guid: string, curso_guid: string): Promise<void> {
-    // Find all tasks in this course
-    const curso = await this.prisma.lms_cursos.findUnique({
-      where: { guid: curso_guid },
-      select: {
-        modulos: {
-          select: {
-            lecciones: {
-              select: {
-                recursos: {
-                  where: { tipo: 'TAREA' },
-                  select: { guid: true },
-                },
-              },
-            },
-          },
+  async purgarEntregas(cursoGuid: string, usuarioGuid: string): Promise<void> {
+    try {
+      const entregas = await this.prisma.lms_entregas.findMany({
+        where: {
+          usuario_guid: usuarioGuid,
+          archivo_purgado: false,
+          url_archivo_adjunto: { not: null },
+          tarea: { modulo: { curso_guid: cursoGuid } },
         },
-      },
-    });
-    if (!curso) {
-      this.logger.warn(`Purge: course ${curso_guid} not found`);
-      return;
-    }
-
-    // Collect all task GUIDs
-    const taskGuids: string[] = [];
-    for (const mod of curso.modulos) {
-      for (const lec of mod.lecciones) {
-        for (const rec of lec.recursos) {
-          taskGuids.push(rec.guid);
-        }
-      }
-    }
-    this.logger.log(`Purge: found ${taskGuids.length} task(s) in course ${curso_guid}`);
-    if (taskGuids.length === 0) return;
-
-    // Find entregas with files that haven't been purged yet
-    const entregas = await this.prisma.lms_entregas.findMany({
-      where: {
-        usuario_guid,
-        tarea_guid: { in: taskGuids },
-        url_archivo_adjunto: { not: null },
-        archivo_purgado: false,
-      },
-      select: { guid: true, url_archivo_adjunto: true, respuesta_texto: true },
-    });
-
-    this.logger.log(`Purge: found ${entregas.length} entrega(s) with files to purge`);
-    if (entregas.length === 0) return;
-
-    let purged = 0;
-    for (const entrega of entregas) {
-      const filename = entrega.url_archivo_adjunto;
-      if (!filename) continue;
-
-      // Delete file from R2 and/or local storage
-      try {
-        await this.storageService.deleteFile(filename);
-        this.logger.log(`Purge: deleted file ${filename}`);
-      } catch (err) {
-        this.logger.warn(`Failed to delete file ${filename}, marking as purged anyway:`, err);
-      }
-
-      // Nullify the file reference but keep the original name
-      await this.prisma.lms_entregas.update({
-        where: { guid: entrega.guid },
-        data: {
-          url_archivo_adjunto: null,
-          archivo_purgado: true,
-        },
+        select: { guid: true, url_archivo_adjunto: true },
       });
+      if (entregas.length === 0) return;
 
-      purged++;
-    }
+      for (const entrega of entregas) {
+        // Se marca primero y se borra después: si el borrado falla, la fila ya no apunta a
+        // un archivo que podría no existir, y el mantenimiento semanal lo recoge.
+        await this.prisma.lms_entregas.update({
+          where: { guid: entrega.guid },
+          data: { url_archivo_adjunto: null, archivo_purgado: true },
+        });
+        await this.storage
+          .deleteFile(entrega.url_archivo_adjunto)
+          .catch((error) => this.logger.warn(`No se pudo borrar ${entrega.url_archivo_adjunto}`, error));
+      }
 
-    if (purged > 0) {
-      this.logger.log(`📦 Purged ${purged} submission files for user ${usuario_guid} in course ${curso_guid}`);
+      this.logger.log(`Entregas purgadas tras certificar: ${entregas.length} (alumno ${usuarioGuid})`);
+    } catch (error) {
+      this.logger.error(`Fallo al purgar entregas del curso ${cursoGuid}`, error);
     }
   }
 }

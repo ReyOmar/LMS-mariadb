@@ -1,239 +1,272 @@
-import { Injectable, OnModuleInit, Logger } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException, OnModuleInit } from '@nestjs/common';
+import { lms_configuracion } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-import { LmsGateway } from '../ws/lms.gateway';
 import { StorageService } from '../storage/storage.service';
+import { RealtimeService } from '../realtime/realtime.service';
+import { METADATOS_PAIS, PAISES, Pais } from '../common/domain/pais';
 import { UpdateConfiguracionDto } from './dto/update-configuracion.dto';
+import { UpdateCertConfigDto } from './dto/update-cert-config.dto';
+import { UpdateFirmaDto } from './dto/update-firma.dto';
 
-/** Fields in lms_configuracion that reference uploaded files */
-const FILE_FIELDS = ['logo_url', 'favicon_url', 'login_fondo_url'] as const;
+/** Campos que guardan una clave de archivo y hay que limpiar del almacenamiento al reemplazarse. */
+const CAMPOS_DE_ARCHIVO = ['logo_url', 'favicon_url', 'login_fondo_url'] as const;
 
+/** Campos que nunca salen en la respuesta pública. */
+const CAMPOS_SENSIBLES = ['contrasena_defecto'] as const;
+
+/** Vigencia de la caché de configuración pública. */
+const CACHE_MS = 30_000;
+
+/** Configuración pública: lo que la portada y el login necesitan antes de autenticarse. */
+export type ConfiguracionPublica = Omit<lms_configuracion, (typeof CAMPOS_SENSIBLES)[number]>;
+
+/**
+ * Configuración de cada sede.
+ *
+ * Existe exactamente una fila por país. Marca, textos de la portada, datos de contacto,
+ * textos legales y ajustes de certificado son propios de cada sede: la dirección de la
+ * oficina, el teléfono y la normativa de protección de datos difieren entre Colombia y
+ * México, y mostrarlos mezclados sería incorrecto además de confuso.
+ */
 @Injectable()
 export class ConfiguracionService implements OnModuleInit {
   private readonly logger = new Logger(ConfiguracionService.name);
 
+  /** país → { config, caduca } para la configuración pública. */
+  private readonly cache = new Map<Pais, { valor: ConfiguracionPublica; caduca: number }>();
+
   constructor(
-    private prisma: PrismaService,
-    private lmsGateway: LmsGateway,
-    private storageService: StorageService,
+    private readonly prisma: PrismaService,
+    private readonly storage: StorageService,
+    private readonly realtime: RealtimeService,
   ) {}
 
-  async onModuleInit() {
-    await this.ensureConfig();
+  async onModuleInit(): Promise<void> {
+    await this.asegurarConfiguracionDeCadaSede();
   }
 
-  async ensureConfig() {
-    const config = await this.prisma.lms_configuracion.findUnique({
-      where: { id: 1 },
-    });
+  /**
+   * Garantiza que cada país operativo tenga su fila.
+   * Se ejecuta al arrancar para que añadir una sede nueva no exija una migración manual.
+   */
+  private async asegurarConfiguracionDeCadaSede(): Promise<void> {
+    for (const pais of PAISES) {
+      const existente = await this.prisma.lms_configuracion.findUnique({ where: { pais }, select: { id: true } });
+      if (existente) continue;
 
-    if (!config) {
+      const meta = METADATOS_PAIS[pais];
       await this.prisma.lms_configuracion.create({
         data: {
-          id: 1,
+          pais,
           nombre_plataforma: 'PESV Education',
-          color_primario: '#1e3a8a',
-          color_secundario: '#ea580c',
-          fuente: 'Inter',
-          border_radius: 12,
-          mensaje_bienvenida: 'Bienvenido a PESV Education',
-          idioma: 'es',
-          landing_hero_titulo1: 'Transporte Seguro,',
-          landing_hero_titulo2: 'Personal Capacitado',
+          zona_horaria: meta.zonaHoraria,
+          mensaje_bienvenida: `Bienvenido a PESV Education ${meta.nombre}`,
           landing_hero_subtitulo:
-            'Plataforma integral para la gestión del Plan Estratégico de Seguridad Vial. Capacitación, evaluación y certificación de conductores con tecnología de vanguardia.',
-          landing_telefono: '+57 300 123 4567',
-          landing_telefono_sub: 'Lun-Vie 8am-6pm',
-          landing_email: 'contacto@pesveducation.com',
-          landing_email_sub: 'Respuesta en 24h',
-          landing_oficina: 'Bogotá, Colombia',
-          landing_oficina_sub: 'Cra 7 #45-21, Oficina 302',
+            'Plataforma integral para la gestión del Plan Estratégico de Seguridad Vial. Capacitación, ' +
+            'evaluación y certificación de conductores.',
+          landing_telefono: `${meta.prefijoTelefonico} 000 000 0000`,
+          landing_email: `contacto.${meta.iso.toLowerCase()}@pesveducation.com`,
+          landing_oficina: meta.nombre,
+          landing_oficina_sub: 'Actualiza esta dirección desde el panel de administración',
           landing_footer_texto:
-            'Plataforma líder en capacitación y certificación de seguridad vial para empresas de transporte de carga.',
+            'Plataforma de capacitación y certificación en seguridad vial para empresas de transporte.',
         },
       });
+      this.logger.log(`Configuración inicial creada para ${meta.nombre}`);
     }
   }
 
-  // In-memory cache for public config (avoids DB hit on every page load)
-  private configCache: any = null;
-  private configCacheExpiry = 0;
-  private static readonly CACHE_TTL_MS = 30_000; // 30 seconds
+  // ── Lectura ──────────────────────────────────────────────────────────────
 
-  async getConfig() {
-    const now = Date.now();
-    if (this.configCache && now < this.configCacheExpiry) {
-      return this.configCache;
-    }
+  /**
+   * Configuración pública de una sede, sin campos sensibles.
+   * Se cachea en memoria porque la piden todas las cargas de página, incluidas las
+   * anónimas, y cambia sólo cuando un administrador la edita.
+   */
+  async getConfig(pais: Pais): Promise<ConfiguracionPublica> {
+    const enCache = this.cache.get(pais);
+    if (enCache && Date.now() < enCache.caduca) return enCache.valor;
 
-    const config = await this.prisma.lms_configuracion.findUnique({
-      where: { id: 1 },
-    });
-    if (config) {
-      // Strip sensitive fields from public response
-      const { contrasena_defecto, ...safeConfig } = config as any;
-      this.configCache = safeConfig;
-      this.configCacheExpiry = now + ConfiguracionService.CACHE_TTL_MS;
-      return safeConfig;
+    const fila = await this.cargarConfiguracion(pais);
+    const publica = this.sinCamposSensibles(fila);
+    this.cache.set(pais, { valor: publica, caduca: Date.now() + CACHE_MS });
+    return publica;
+  }
+
+  /** Configuración completa, sólo para administradores de la sede. */
+  getFullConfig(pais: Pais): Promise<lms_configuracion> {
+    return this.cargarConfiguracion(pais);
+  }
+
+  /** Subconjunto que necesita la portada pública. */
+  async getLandingConfig(pais: Pais) {
+    const config = await this.getConfig(pais);
+    return {
+      pais: config.pais,
+      nombre_plataforma: config.nombre_plataforma,
+      logo_url: config.logo_url,
+      color_primario: config.color_primario,
+      color_secundario: config.color_secundario,
+      fuente: config.fuente,
+      border_radius: config.border_radius,
+      landing_hero_titulo1: config.landing_hero_titulo1,
+      landing_hero_titulo2: config.landing_hero_titulo2,
+      landing_hero_subtitulo: config.landing_hero_subtitulo,
+      landing_telefono: config.landing_telefono,
+      landing_telefono_sub: config.landing_telefono_sub,
+      landing_email: config.landing_email,
+      landing_email_sub: config.landing_email_sub,
+      landing_oficina: config.landing_oficina,
+      landing_oficina_sub: config.landing_oficina_sub,
+      landing_footer_texto: config.landing_footer_texto,
+      legal_terminos: config.legal_terminos,
+      legal_privacidad: config.legal_privacidad,
+      legal_datos: config.legal_datos,
+    };
+  }
+
+  /** Ajustes de impresión del certificado de la sede. */
+  async getCertConfig(pais: Pais) {
+    const config = await this.getConfig(pais);
+    return {
+      cert_titulo_personalizado: config.cert_titulo_personalizado,
+      cert_subtitulo: config.cert_subtitulo,
+      cert_texto_legal: config.cert_texto_legal,
+      cert_mostrar_modulos: config.cert_mostrar_modulos,
+      cert_mostrar_recursos: config.cert_mostrar_recursos,
+      cert_mostrar_nota: config.cert_mostrar_nota,
+      cert_mostrar_firma: config.cert_mostrar_firma,
+      cert_mostrar_fecha_ingreso: config.cert_mostrar_fecha_ingreso,
+      nombre_plataforma: config.nombre_plataforma,
+      color_primario: config.color_primario,
+      color_secundario: config.color_secundario,
+    };
+  }
+
+  /** Contraseña temporal con la que se crean las cuentas de la sede. */
+  async getContrasenaDefecto(pais: Pais): Promise<string> {
+    const config = await this.cargarConfiguracion(pais);
+    return config.contrasena_defecto;
+  }
+
+  /** Tamaño máximo de subida configurado para la sede, en MB. */
+  async getMaxArchivoMb(pais: Pais): Promise<number> {
+    const config = await this.cargarConfiguracion(pais);
+    return config.max_archivo_mb;
+  }
+
+  private async cargarConfiguracion(pais: Pais): Promise<lms_configuracion> {
+    const config = await this.prisma.lms_configuracion.findUnique({ where: { pais } });
+    if (!config) {
+      // No debería ocurrir: `onModuleInit` crea la fila. Si pasa, es mejor un error
+      // explícito que devolver valores inventados que acabarían impresos en un certificado.
+      throw new NotFoundException(`No hay configuración registrada para ${pais}.`);
     }
     return config;
   }
 
-  /** Invalidate the in-memory cache (called after updates) */
-  private invalidateCache() {
-    this.configCache = null;
-    this.configCacheExpiry = 0;
+  private sinCamposSensibles(config: lms_configuracion): ConfiguracionPublica {
+    const copia = { ...config } as Partial<lms_configuracion>;
+    for (const campo of CAMPOS_SENSIBLES) delete copia[campo];
+    return copia as ConfiguracionPublica;
   }
 
-  async getFullConfig() {
-    return this.prisma.lms_configuracion.findUnique({
-      where: { id: 1 },
-    });
+  // ── Escritura ────────────────────────────────────────────────────────────
+
+  /**
+   * Actualiza la configuración de una sede y borra del almacenamiento los archivos que
+   * hayan quedado reemplazados, para que el logo antiguo no siga ocupando espacio.
+   */
+  async updateConfig(pais: Pais, dto: UpdateConfiguracionDto): Promise<lms_configuracion> {
+    const actual = await this.cargarConfiguracion(pais);
+
+    const actualizada = await this.prisma.lms_configuracion.update({ where: { pais }, data: dto });
+    this.invalidarCache(pais);
+
+    await this.borrarArchivosReemplazados(actual, dto);
+
+    this.realtime.emitirASede('config:updated', this.sinCamposSensibles(actualizada), pais);
+    return actualizada;
+  }
+
+  /** Actualiza sólo los ajustes del certificado. */
+  async updateCertConfig(pais: Pais, dto: UpdateCertConfigDto) {
+    await this.prisma.lms_configuracion.update({ where: { pais }, data: dto });
+    this.invalidarCache(pais);
+
+    const publica = await this.getConfig(pais);
+    this.realtime.emitirASede('config:updated', publica, pais);
+    return this.getCertConfig(pais);
   }
 
   /**
-   * Update platform configuration.
-   * Automatically cleans up old files from R2 when file fields (logo, favicon, fondo) are replaced.
+   * Limpia los archivos sustituidos. Se hace después de guardar: si el borrado falla, la
+   * configuración ya quedó correcta y sólo sobra un archivo huérfano, que el mantenimiento
+   * periódico recogerá.
    */
-  async updateConfig(dto: UpdateConfiguracionDto) {
-    // Fetch current config to detect file replacements
-    const current = await this.prisma.lms_configuracion.findUnique({ where: { id: 1 } });
+  private async borrarArchivosReemplazados(
+    actual: lms_configuracion,
+    dto: UpdateConfiguracionDto,
+  ): Promise<void> {
+    for (const campo of CAMPOS_DE_ARCHIVO) {
+      const anterior = actual[campo];
+      const nuevo = dto[campo];
+      if (nuevo === undefined || !anterior || anterior === nuevo) continue;
 
-    // Clean up old files that are being replaced
-    if (current) {
-      for (const field of FILE_FIELDS) {
-        const oldValue = (current as any)[field];
-        const newValue = (dto as any)[field];
-        // Only delete if field is being updated AND the old value exists AND it's different
-        if (newValue !== undefined && oldValue && oldValue !== newValue) {
-          this.logger.log(`🗑️  Cleaning up replaced file: ${oldValue} (field: ${field})`);
-          await this.storageService.deleteFile(oldValue);
-        }
+      try {
+        await this.storage.deleteFile(anterior);
+      } catch (error) {
+        this.logger.warn(`No se pudo borrar el archivo reemplazado ${anterior}`, error);
       }
     }
+  }
 
-    const updated = await this.prisma.lms_configuracion.update({
-      where: { id: 1 },
+  private invalidarCache(pais: Pais): void {
+    this.cache.delete(pais);
+  }
+
+  // ── Firma del examinador ─────────────────────────────────────────────────
+
+  /**
+   * Firma de un usuario. El `pais` acota la búsqueda: pedir la firma de alguien de otra
+   * sede devuelve "no encontrado", igual que si el usuario no existiera.
+   */
+  async getFirma(usuarioGuid: string, pais?: Pais) {
+    const usuario = await this.prisma.usuarios.findFirst({
+      where: { guid: usuarioGuid, ...(pais ? { pais } : {}) },
+      select: { firma_url: true, firma_nombre: true, firma_cargo: true, nombre: true, apellido: true },
+    });
+    if (!usuario) throw new NotFoundException('Usuario no encontrado.');
+    return usuario;
+  }
+
+  /** Guarda la firma del examinador y retira del almacenamiento la imagen anterior. */
+  async updateFirma(usuarioGuid: string, dto: UpdateFirmaDto) {
+    const actual = await this.prisma.usuarios.findUnique({
+      where: { guid: usuarioGuid },
+      select: { firma_url: true },
+    });
+    if (!actual) throw new NotFoundException('Usuario no encontrado.');
+
+    const actualizado = await this.prisma.usuarios.update({
+      where: { guid: usuarioGuid },
       data: dto,
-    });
-
-    this.invalidateCache();
-    this.lmsGateway.broadcast('config:updated', updated);
-    return updated;
-  }
-
-  async getLandingConfig() {
-    return this.prisma.lms_configuracion.findUnique({
-      where: { id: 1 },
-      select: {
-        nombre_plataforma: true,
-        logo_url: true,
-        color_primario: true,
-        color_secundario: true,
-        fuente: true,
-        border_radius: true,
-        landing_hero_titulo1: true,
-        landing_hero_titulo2: true,
-        landing_hero_subtitulo: true,
-        landing_telefono: true,
-        landing_telefono_sub: true,
-        landing_email: true,
-        landing_email_sub: true,
-        landing_oficina: true,
-        landing_oficina_sub: true,
-        landing_footer_texto: true,
-        legal_terminos: true,
-        legal_privacidad: true,
-        legal_datos: true,
-      },
-    });
-  }
-
-  async getCertConfig() {
-    const config = await this.prisma.lms_configuracion.findUnique({
-      where: { id: 1 },
-      select: {
-        cert_titulo_personalizado: true,
-        cert_subtitulo: true,
-        cert_texto_legal: true,
-        cert_mostrar_modulos: true,
-        cert_mostrar_recursos: true,
-        cert_mostrar_nota: true,
-        cert_mostrar_firma: true,
-        cert_mostrar_fecha_ingreso: true,
-        nombre_plataforma: true,
-        color_primario: true,
-        color_secundario: true,
-      },
-    });
-    return config;
-  }
-
-  async updateCertConfig(dto: any) {
-    // Only allow cert_* fields to be updated
-    const allowedFields = [
-      'cert_titulo_personalizado',
-      'cert_subtitulo',
-      'cert_texto_legal',
-      'cert_mostrar_modulos',
-      'cert_mostrar_recursos',
-      'cert_mostrar_nota',
-      'cert_mostrar_firma',
-      'cert_mostrar_fecha_ingreso',
-    ];
-    const data: any = {};
-    for (const key of allowedFields) {
-      if (dto[key] !== undefined) data[key] = dto[key];
-    }
-    const updated = await this.prisma.lms_configuracion.update({
-      where: { id: 1 },
-      data,
-    });
-    this.lmsGateway.broadcast('config:updated', updated);
-    return updated;
-  }
-
-  // ── Examiner Firma Methods ──
-
-  async getFirma(usuario_guid: string) {
-    const user = await this.prisma.usuarios.findUnique({
-      where: { guid: usuario_guid },
       select: { firma_url: true, firma_nombre: true, firma_cargo: true, nombre: true, apellido: true },
     });
-    return user;
-  }
 
-  /**
-   * Update examiner's signature data.
-   * Cleans up old signature image from R2 when replaced.
-   */
-  async updateFirma(usuario_guid: string, dto: { firma_url?: string; firma_nombre?: string; firma_cargo?: string }) {
-    // Clean up old signature image if being replaced
-    if (dto.firma_url !== undefined) {
-      const currentUser = await this.prisma.usuarios.findUnique({
-        where: { guid: usuario_guid },
-        select: { firma_url: true },
-      });
-      if (currentUser?.firma_url && currentUser.firma_url !== dto.firma_url) {
-        this.logger.log(`🗑️  Cleaning up old signature: ${currentUser.firma_url}`);
-        await this.storageService.deleteFile(currentUser.firma_url);
-      }
+    if (dto.firma_url !== undefined && actual.firma_url && actual.firma_url !== dto.firma_url) {
+      await this.storage
+        .deleteFile(actual.firma_url)
+        .catch((error) => this.logger.warn(`No se pudo borrar la firma anterior ${actual.firma_url}`, error));
     }
 
-    const allowedFields = ['firma_url', 'firma_nombre', 'firma_cargo'];
-    const data: any = {};
-    for (const key of allowedFields) {
-      if (dto[key as keyof typeof dto] !== undefined) data[key] = dto[key as keyof typeof dto];
-    }
-    return this.prisma.usuarios.update({
-      where: { guid: usuario_guid },
-      data,
-      select: { firma_url: true, firma_nombre: true, firma_cargo: true, nombre: true, apellido: true },
-    });
+    return actualizado;
   }
 
-  async getFirmaPorCurso(curso_guid: string) {
-    const curso = await this.prisma.lms_cursos.findUnique({
-      where: { guid: curso_guid },
+  /** Firma del examinador responsable de un curso, para previsualizar el certificado. */
+  async getFirmaPorCurso(cursoGuid: string, pais: Pais) {
+    const curso = await this.prisma.lms_cursos.findFirst({
+      where: { guid: cursoGuid, pais },
       select: {
         titulo: true,
         profesor: {
@@ -241,6 +274,7 @@ export class ConfiguracionService implements OnModuleInit {
         },
       },
     });
+    if (!curso) throw new NotFoundException('Curso no encontrado.');
     return curso;
   }
 }

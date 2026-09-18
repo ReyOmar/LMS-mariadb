@@ -1,46 +1,35 @@
-import { CanActivate, ExecutionContext, Injectable, ForbiddenException } from '@nestjs/common';
+import { CanActivate, ExecutionContext, ForbiddenException, Injectable } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { ROLES_KEY } from '../decorators/roles.decorator';
 import { IS_PUBLIC_KEY } from '../decorators/public.decorator';
+import { JwtPayload, RolUsuario } from '../interfaces/jwt-payload.interface';
 
 /**
- * Guard that checks if the authenticated user has the required role(s).
- * Must run AFTER JwtAuthGuard (which attaches user to request).
+ * Comprueba el rol exigido por `@Roles()`. Se ejecuta después de `JwtAuthGuard`, que es
+ * quien deja la identidad en la petición con el rol vigente en base de datos.
  *
- * If no @Roles() decorator is present on the handler or class,
- * the route is open to any authenticated user (default behavior).
+ * Sin `@Roles()` la ruta queda abierta a cualquier usuario autenticado; la separación por
+ * país y la propiedad de los recursos las aplica cada servicio, no este guard.
  */
 @Injectable()
 export class RolesGuard implements CanActivate {
-  constructor(private reflector: Reflector) {}
+  constructor(private readonly reflector: Reflector) {}
 
   canActivate(context: ExecutionContext): boolean {
-    // Skip role checking on @Public() routes
-    const isPublic = this.reflector.getAllAndOverride<boolean>(IS_PUBLIC_KEY, [
+    const esPublica = this.reflector.getAllAndOverride<boolean>(IS_PUBLIC_KEY, [
       context.getHandler(),
       context.getClass(),
     ]);
-    if (isPublic) return true;
+    if (esPublica) return true;
 
-    const requiredRoles = this.reflector.getAllAndOverride<string[]>(ROLES_KEY, [
+    const rolesExigidos = this.reflector.getAllAndOverride<RolUsuario[]>(ROLES_KEY, [
       context.getHandler(),
       context.getClass(),
     ]);
+    if (!rolesExigidos?.length) return true;
 
-    // If no @Roles() decorator is set, allow access (any authenticated user)
-    if (!requiredRoles || requiredRoles.length === 0) {
-      return true;
-    }
-
-    const request = context.switchToHttp().getRequest();
-    const user = request.user;
-
-    if (!user || !user.role) {
-      throw new ForbiddenException('No tienes permisos para acceder a este recurso.');
-    }
-
-    const hasRole = requiredRoles.includes(user.role);
-    if (!hasRole) {
+    const user = context.switchToHttp().getRequest().user as JwtPayload | undefined;
+    if (!user?.role || !rolesExigidos.includes(user.role)) {
       throw new ForbiddenException('No tienes permisos para acceder a este recurso.');
     }
 

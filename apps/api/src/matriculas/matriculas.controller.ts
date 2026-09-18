@@ -1,42 +1,43 @@
-import { Controller, Get, Post, Delete, Param, Body } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Post } from '@nestjs/common';
 import { MatriculasService } from './matriculas.service';
 import { Roles } from '../common/decorators/roles.decorator';
+import { CurrentUser } from '../common/decorators/current-user.decorator';
+import { JwtPayload } from '../common/interfaces/jwt-payload.interface';
 import { MatricularEstudianteDto } from './dto/matricular.dto';
 
 @Controller('matriculas')
 export class MatriculasController {
-  constructor(private readonly matriculasService: MatriculasService) {}
+  constructor(private readonly matriculas: MatriculasService) {}
 
-  @Roles('ADMINISTRADOR')
-  @Post('/seed-matriculas')
-  async seedMatriculas() {
-    if (process.env.NODE_ENV === 'production') {
-      return { error: 'Este endpoint no está disponible en producción.' };
-    }
-    return this.matriculasService.seedMatriculas();
-  }
-
-  @Roles('ADMINISTRADOR')
-  @Get('/estudiantes')
-  async getEstudiantes() {
-    return this.matriculasService.getEstudiantesDisponibles();
-  }
-
-  @Roles('ADMINISTRADOR')
+  @Roles('ADMINISTRADOR', 'PROFESOR')
   @Get('/:curso_guid')
-  async getMatriculasCurso(@Param('curso_guid') curso_guid: string) {
-    return this.matriculasService.getMatriculasCurso(curso_guid);
+  getMatriculados(@CurrentUser() user: JwtPayload, @Param('curso_guid') cursoGuid: string) {
+    return this.matriculas.getMatriculados(cursoGuid, user);
   }
 
-  @Roles('ADMINISTRADOR')
+  @Roles('ADMINISTRADOR', 'PROFESOR')
+  @Get('/:curso_guid/candidatos')
+  getCandidatos(@CurrentUser() user: JwtPayload, @Param('curso_guid') cursoGuid: string) {
+    return this.matriculas.getCandidatos(cursoGuid, user);
+  }
+
+  @Roles('ADMINISTRADOR', 'PROFESOR')
   @Post('/:curso_guid')
-  async matricularEstudiante(@Param('curso_guid') curso_guid: string, @Body() body: MatricularEstudianteDto) {
-    return this.matriculasService.matricularEstudiante(curso_guid, body.usuario_guid);
+  matricular(
+    @CurrentUser() user: JwtPayload,
+    @Param('curso_guid') cursoGuid: string,
+    @Body() dto: MatricularEstudianteDto,
+  ) {
+    return this.matriculas.matricular(cursoGuid, dto.usuario_guid, user);
   }
 
-  @Roles('ADMINISTRADOR')
+  @Roles('ADMINISTRADOR', 'PROFESOR')
   @Delete('/:curso_guid/:usuario_guid')
-  async desmatricularEstudiante(@Param('curso_guid') curso_guid: string, @Param('usuario_guid') usuario_guid: string) {
-    return this.matriculasService.desmatricularEstudiante(curso_guid, usuario_guid);
+  darDeBaja(
+    @CurrentUser() user: JwtPayload,
+    @Param('curso_guid') cursoGuid: string,
+    @Param('usuario_guid') usuarioGuid: string,
+  ) {
+    return this.matriculas.darDeBaja(cursoGuid, usuarioGuid, user);
   }
 }

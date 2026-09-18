@@ -1,3 +1,18 @@
+// ═══════════════════════════════════════════════════════════════════════════
+//  LMS PESV Education — modelo de datos
+//
+//  Dos reglas transversales gobiernan este esquema:
+//
+//  1. SEPARACIÓN POR PAÍS. Colombia y México operan como sedes independientes.
+//     Las tablas raíz (`usuarios`, `lms_cursos`, `lms_configuracion`,
+//     `lms_solicitudes_acceso`) llevan columna `pais`; el resto lo hereda por
+//     relación. Una matrícula sólo es válida si alumno y curso comparten país,
+//     invariante que se verifica en `MatriculasService`.
+//
+//  2. CALIFICACIÓN SOBRE 100. Toda nota vive en el rango 0–100 y el umbral de
+//     aprobación por defecto es 80. Ver `src/common/domain/calificacion.ts`.
+// ═══════════════════════════════════════════════════════════════════════════
+
 generator client {
   provider = "prisma-client-js"
 }
@@ -6,7 +21,14 @@ datasource db {
   provider = "mysql"
 }
 
-// ── SISTEMA DE AUTENTICACIÓN INDEPENDIENTE ──
+// ── Separación por país ────────────────────────────────────────────────────
+
+enum lms_pais {
+  COLOMBIA
+  MEXICO
+}
+
+// ── Autenticación ──────────────────────────────────────────────────────────
 
 enum lms_rol_usuario {
   ADMINISTRADOR
@@ -15,53 +37,110 @@ enum lms_rol_usuario {
 }
 
 model usuarios {
-  guid              String          @id @default(uuid())
-  email             String          @unique
-  contrasena        String?         // Nullable for accounts created by Admin without password
-  nombre            String
-  apellido          String
-  rol               lms_rol_usuario @default(ESTUDIANTE)
-  activo            Boolean         @default(true)
-  created_at        DateTime        @default(now())
-  updated_at        DateTime        @updatedAt
-
-  // Relaciones LMS
-  cursos_impartidos lms_cursos[]
-  matriculas        lms_matriculas[]
-  entregas          lms_entregas[]
-  progreso_recurso  lms_progreso_recurso[]
-  notificaciones    lms_notificaciones[]
-  metricas          lms_metricas_capacitacion?
-  certificados      lms_certificados[]
-  sesiones_activas  lms_sesion_activa[]
-  mensajes_enviados   lms_mensajes[] @relation("mensajes_enviados")
-  mensajes_recibidos  lms_mensajes[] @relation("mensajes_recibidos")
+  guid       String          @id @default(uuid())
+  // El correo identifica a la persona en todo el sistema: una persona pertenece a
+  // una sola sede. Cambiar esto a @@unique([email, pais]) rompería la recuperación
+  // de contraseña, que sólo dispone del correo.
+  email      String          @unique
+  contrasena String? // Nulo mientras el administrador no fija clave temporal
+  nombre     String
+  apellido   String
+  rol        lms_rol_usuario @default(ESTUDIANTE)
+  pais       lms_pais
+  activo     Boolean         @default(true)
+  created_at DateTime        @default(now())
+  updated_at DateTime        @updatedAt
 
   ultimo_acceso     DateTime?
-  usa_clave_defecto Boolean         @default(true)
+  usa_clave_defecto Boolean   @default(true)
 
-  // Firma del examinador/instructor (para certificados)
-  firma_url         String?
-  firma_nombre      String?
-  firma_cargo       String?
+  // Firma del examinador, impresa en los certificados que emite
+  firma_url    String?
+  firma_nombre String?
+  firma_cargo  String?
 
-  // Foto de perfil del usuario
-  foto_url          String?
+  foto_url String?
+
+  cursos_impartidos  lms_cursos[]
+  matriculas         lms_matriculas[]
+  entregas           lms_entregas[]
+  progreso_recurso   lms_progreso_recurso[]
+  notificaciones     lms_notificaciones[]
+  metricas           lms_metricas_capacitacion?
+  certificados       lms_certificados[]
+  sesiones_activas   lms_sesion_activa[]
+  mensajes_enviados  lms_mensajes[]             @relation("mensajes_enviados")
+  mensajes_recibidos lms_mensajes[]             @relation("mensajes_recibidos")
+
+  @@index([pais, rol])
+  @@index([pais, activo])
 }
 
-// ── VERIFICACIÓN DE EMAIL (para solicitudes de acceso) ──
 model lms_verificacion_email {
   id         Int      @id @default(autoincrement())
   email      String
-  codigo     String   // Código de 6 dígitos
+  codigo     String // 6 dígitos
   verificado Boolean  @default(false)
   expires_at DateTime
   created_at DateTime @default(now())
 
   @@index([email])
+  @@index([expires_at])
 }
 
-// ── ENUMS LMS ──
+model lms_password_resets {
+  id         Int      @id @default(autoincrement())
+  email      String
+  token      String   @unique
+  usado      Boolean  @default(false)
+  expires_at DateTime
+  created_at DateTime @default(now())
+
+  @@index([email])
+  @@index([expires_at])
+}
+
+/// Tokens invalidados antes de su caducidad natural.
+/// Con `jti` se revoca una sola sesión (cerrar sesión en un dispositivo); con `jti` nulo
+/// se revocan todas las del usuario (cuenta borrada o contraseña cambiada).
+/// Se persiste —y no sólo se guarda en memoria— para que un reinicio del servidor no
+/// devuelva la validez a tokens ya revocados.
+model lms_token_revocations {
+  id           Int      @id @default(autoincrement())
+  usuario_guid String
+  jti          String?  @unique
+  revoked_at   DateTime @default(now())
+  expires_at   DateTime // Se purga al superar la vida máxima del JWT
+
+  @@index([usuario_guid])
+  @@index([expires_at])
+}
+
+// ── Solicitudes de acceso ──────────────────────────────────────────────────
+
+enum lms_estado_solicitud {
+  PENDIENTE
+  ACEPTADA
+  RECHAZADA
+}
+
+model lms_solicitudes_acceso {
+  id         Int                  @id @default(autoincrement())
+  email      String               @unique
+  nombre     String
+  apellido   String
+  rol_pedido lms_rol_usuario
+  pais       lms_pais
+  estado     lms_estado_solicitud @default(PENDIENTE)
+  // Motivo del rechazo, visible para el administrador que lo revise después
+  motivo     String?
+  created_at DateTime             @default(now())
+  updated_at DateTime             @updatedAt
+
+  @@index([pais, estado])
+}
+
+// ── Cursos y contenido ─────────────────────────────────────────────────────
 
 enum lms_estado_curso {
   BORRADOR
@@ -84,13 +163,172 @@ enum lms_tipo_recurso {
   TAREA
 }
 
+model lms_cursos {
+  guid              String               @id @default(uuid())
+  pais              lms_pais
+  titulo            String
+  descripcion       String?              @db.Text
+  descripcion_corta String?
+  imagen_portada    String?
+  nivel             lms_nivel_dificultad @default(PRINCIPIANTE)
+  estado            lms_estado_curso     @default(BORRADOR)
+  duracion_horas    Int?
+  fecha_inicio      DateTime?
+  fecha_fin         DateTime?
+  codigo_acceso     String?              @unique
+  max_estudiantes   Int?
+
+  // Reglas de negocio
+  // Nota mínima para aprobar, en escala 0–100 (ver common/domain/calificacion.ts)
+  nota_aprobacion   Decimal @default(80) @db.Decimal(5, 2)
+  orden_estricto    Boolean @default(true) // Obliga a avanzar sin saltarse recursos
+  emite_certificado Boolean @default(true)
+
+  created_at DateTime  @default(now())
+  updated_at DateTime  @updatedAt
+  deleted_at DateTime?
+
+  profesor_guid    String
+  profesor         usuarios            @relation(fields: [profesor_guid], references: [guid], onDelete: Restrict)
+  modulos          lms_modulos[]
+  matriculas       lms_matriculas[]
+  certificados     lms_certificados[]
+  sesiones_activas lms_sesion_activa[]
+
+  @@index([profesor_guid])
+  @@index([pais, estado])
+}
+
+model lms_modulos {
+  guid              String     @id @default(uuid())
+  curso_guid        String
+  curso             lms_cursos @relation(fields: [curso_guid], references: [guid], onDelete: Cascade)
+  titulo            String
+  descripcion       String?
+  orden             Int        @default(0)
+  requiere_anterior Boolean    @default(false)
+  created_at        DateTime   @default(now())
+  updated_at        DateTime   @updatedAt
+  deleted_at        DateTime?
+
+  recursos lms_recursos[]
+
+  @@index([curso_guid, orden])
+}
+
+model lms_recursos {
+  guid        String           @id @default(uuid())
+  modulo_guid String
+  modulo      lms_modulos      @relation(fields: [modulo_guid], references: [guid], onDelete: Cascade)
+  titulo      String
+  tipo        lms_tipo_recurso
+
+  contenido_html String? @db.Text
+  url_archivo    String?
+  url_referencia String? // Enlace externo complementario
+
+  // Clave del adjunto en el almacenamiento (ej. "recursos/1699-ab.pdf"), no el binario
+  archivo_adjunto        String?
+  archivo_adjunto_nombre String? // Nombre original, para la descarga
+  archivo_max_size_mb    Int? // Límite de subida para la entrega del alumno
+
+  // Configuración del cuestionario cuando tipo = TAREA. JSON serializado; su forma
+  // y validación están en `src/cursos/quiz-config.ts`. Contiene las respuestas
+  // correctas, por lo que nunca se envía íntegro a un estudiante.
+  quiz_config String? @db.Text
+
+  orden          Int       @default(0)
+  obligatorio    Boolean   @default(true)
+  tiempo_lectura Int? // Minutos estimados
+  created_at     DateTime  @default(now())
+  updated_at     DateTime  @updatedAt
+  deleted_at     DateTime?
+
+  progreso lms_progreso_recurso[]
+  entregas lms_entregas[]
+
+  @@index([modulo_guid, orden])
+}
+
+// ── Entregas y evaluación ──────────────────────────────────────────────────
+
 enum lms_estado_entrega {
-  BORRADOR
+  BORRADOR // Intento de cuestionario en curso
   ENTREGADA
   ENTREGADA_TARDE
   CALIFICADA
-  EN_REVISION
+  EN_REVISION // Reenvío tras una calificación insuficiente
 }
+
+model lms_entregas {
+  guid         String        @id @default(uuid())
+  usuario_guid String
+  usuario      usuarios      @relation(fields: [usuario_guid], references: [guid], onDelete: Cascade)
+  tarea_guid   String?
+  tarea        lms_recursos? @relation(fields: [tarea_guid], references: [guid], onDelete: SetNull)
+
+  url_archivo_adjunto String? // Clave en el almacenamiento
+  respuesta_texto     String? // Nombre original del archivo entregado
+
+  estado         lms_estado_entrega @default(ENTREGADA)
+  intento_numero Int                @default(1)
+  fecha_inicio   DateTime? // Inicio del intento, para el límite de tiempo
+  fecha_entrega  DateTime?
+
+  // Nota en escala 0–100. Nula mientras no se haya calificado.
+  calificacion            Decimal? @db.Decimal(5, 2)
+  comentario_calificacion String?  @db.Text
+
+  ip_address      String?
+  archivo_purgado Boolean @default(false) // El archivo se borró tras emitir el certificado
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@index([usuario_guid])
+  @@index([tarea_guid, usuario_guid])
+  @@index([estado, fecha_entrega])
+}
+
+model lms_progreso_recurso {
+  id               Int          @id @default(autoincrement())
+  usuario_guid     String
+  usuario          usuarios     @relation(fields: [usuario_guid], references: [guid], onDelete: Cascade)
+  recurso_guid     String
+  recurso          lms_recursos @relation(fields: [recurso_guid], references: [guid], onDelete: Cascade)
+  completado       Boolean      @default(true)
+  fecha_completado DateTime     @default(now())
+  tiempo_invertido Int? // Segundos
+
+  @@unique([usuario_guid, recurso_guid])
+  @@index([recurso_guid])
+  @@index([fecha_completado])
+}
+
+// ── Matrículas ─────────────────────────────────────────────────────────────
+
+enum lms_tipo_matricula {
+  MANUAL // Inscrito por un administrador
+  CODIGO_ACCESO // El alumno usó un código
+  SISTEMA // Inscripción automática por reglas
+}
+
+model lms_matriculas {
+  id              Int                @id @default(autoincrement())
+  usuario_guid    String
+  usuario         usuarios           @relation(fields: [usuario_guid], references: [guid], onDelete: Cascade)
+  curso_guid      String
+  curso           lms_cursos         @relation(fields: [curso_guid], references: [guid], onDelete: Cascade)
+  tipo            lms_tipo_matricula @default(MANUAL)
+  activa          Boolean            @default(true)
+  fecha_matricula DateTime           @default(now())
+  fecha_baja      DateTime?
+
+  @@unique([usuario_guid, curso_guid])
+  @@index([curso_guid])
+}
+
+// ── Comunicación ───────────────────────────────────────────────────────────
 
 enum lms_tipo_notificacion {
   EVALUACION_NUEVA
@@ -110,348 +348,39 @@ enum lms_tipo_notificacion {
   MENSAJE_NUEVO
 }
 
-enum lms_escala_calificacion {
-  NUMERICA   // 0.0-5.0 (default)
-  PORCENTAJE // 0-100
-  PUNTOS     // ej. 0-50
-  LETRAS     // A, B, C, D, F
-}
-
-enum lms_tipo_matricula {
-  MANUAL // Inscrito por profesor/admin
-  CODIGO_ACCESO // Estudiante usó un código unirse
-  SISTEMA // Inscripción automática por reglas
-}
-
-enum lms_estado_solicitud {
-  PENDIENTE
-  ACEPTADA
-  RECHAZADA
-}
-
-// ── SISTEMA DE SOLICITUDES DE ACCESO ──
-model lms_solicitudes_acceso {
-  id         Int                  @id @default(autoincrement())
-  email      String               @unique
-  nombre     String
-  apellido   String
-  rol_pedido lms_rol_usuario
-  estado     lms_estado_solicitud @default(PENDIENTE)
-  created_at DateTime             @default(now())
-}
-
-// ── MODELOS CORE LMS ──
-
-model lms_cursos {
-  guid              String             @id @default(uuid())
-  titulo            String
-  descripcion       String?            @db.Text
-  descripcion_corta String?
-  imagen_portada    String?
-  nivel             lms_nivel_dificultad @default(PRINCIPIANTE)
-  estado            lms_estado_curso   @default(BORRADOR)
-  duracion_horas    Int?
-  fecha_inicio      DateTime?
-  fecha_fin         DateTime?
-  codigo_acceso     String?            @unique
-  max_estudiantes   Int?
-
-  // Reglas de Negocio
-  escala            lms_escala_calificacion @default(NUMERICA)
-  nota_aprobacion   Decimal            @default(3.0) // Mínima para aprobar en escala 0.0-5.0
-  orden_estricto    Boolean            @default(true) // Fuerza linealidad (no saltar)
-  emite_certificado Boolean            @default(true)
-
-  // Auditoría
-  created_at        DateTime           @default(now())
-  updated_at        DateTime           @updatedAt
-  deleted_at        DateTime?
-
-  // Relaciones
-  profesor_guid     String
-  profesor          usuarios           @relation(fields: [profesor_guid], references: [guid], onDelete: Cascade)
-  modulos           lms_modulos[]
-  matriculas        lms_matriculas[]
-  certificados      lms_certificados[]
-  sesiones_activas  lms_sesion_activa[]
-
-  @@index([profesor_guid])
-}
-
-model lms_modulos {
-  guid              String             @id @default(uuid())
-  curso_guid        String
-  curso             lms_cursos         @relation(fields: [curso_guid], references: [guid], onDelete: Cascade)
-  titulo            String
-  descripcion       String?
-  orden             Int                @default(0)
-  requiere_anterior Boolean            @default(false)
-  created_at        DateTime           @default(now())
-  updated_at        DateTime           @updatedAt
-  deleted_at        DateTime?
-  lecciones         lms_lecciones[]
-
-  @@index([curso_guid])
-}
-
-model lms_lecciones {
-  guid        String         @id @default(uuid())
-  modulo_guid String
-  modulo      lms_modulos    @relation(fields: [modulo_guid], references: [guid], onDelete: Cascade)
-  titulo      String
-  descripcion String?
-  orden       Int            @default(0)
-  created_at  DateTime       @default(now())
-  updated_at  DateTime       @updatedAt
-  deleted_at  DateTime?
-  recursos    lms_recursos[]
-
-  @@index([modulo_guid])
-}
-
-model lms_recursos {
-  guid                  String                @id @default(uuid())
-  leccion_guid          String
-  leccion               lms_lecciones         @relation(fields: [leccion_guid], references: [guid], onDelete: Cascade)
-  titulo                String
-  tipo                  lms_tipo_recurso
-  contenido_html        String?            @db.Text
-  url_archivo           String?
-  url_referencia        String?               // URL externa opcional para recursos adicionales
-  archivo_adjunto       String?               @db.Text // Base64 del archivo adjunto (PDF, Word, PPT, etc.)
-  archivo_adjunto_nombre String?              // Nombre original del archivo adjunto
-  archivo_max_size_mb   Int?                  // Límite de peso de archivo en MB (admin y estudiante)
-  quiz_config           String?               @db.Text // JSON: { intentos_permitidos, tiempo_minutos, preguntas: [...] }
-  orden                 Int                   @default(0)
-  obligatorio           Boolean               @default(true)
-  tiempo_lectura        Int?                  // Estimado en minutos
-  created_at            DateTime              @default(now())
-  updated_at            DateTime              @updatedAt
-  deleted_at            DateTime?
-  progreso              lms_progreso_recurso[]
-  entregas              lms_entregas[]
-
-  @@index([leccion_guid])
-}
-
-// ── ENTREGAS ──
-
-model lms_entregas {
-  guid            String               @id @default(uuid())
-  usuario_guid    String
-  usuario         usuarios             @relation(fields: [usuario_guid], references: [guid], onDelete: Cascade)
-  tarea_guid      String?              // GUID del recurso tipo TAREA (lms_recursos)
-  tarea           lms_recursos?        @relation(fields: [tarea_guid], references: [guid], onDelete: SetNull)
-  url_archivo_adjunto String?          // Nombre del archivo subido en servidor (uploads/)
-  respuesta_texto String?              // Nombre original del archivo entregado
-
-  estado          lms_estado_entrega   @default(ENTREGADA)
-  intento_numero  Int                  @default(1)
-  fecha_inicio    DateTime?            // Para tracking de tiempo en examen
-  fecha_entrega   DateTime?
-  contenido_texto String?              @db.Text
-  calificacion    Decimal?             // Nota numérica (ej. 4.5) — reemplaza parseo de contenido_texto
-  comentario_calificacion String?      @db.Text // Comentario del examinador al calificar
-  ip_address      String?
-  archivo_purgado Boolean              @default(false) // true = archivo eliminado tras obtener certificado
-
-  created_at      DateTime             @default(now())
-  updated_at      DateTime             @updatedAt
-
-  @@index([usuario_guid])
-  @@index([tarea_guid])
-  @@index([tarea_guid, usuario_guid])
-  @@index([estado])
-}
-
-// ── PROGRESO Y MATRÍCULAS ──
-
-model lms_progreso_recurso {
-  id              Int          @id @default(autoincrement())
-  usuario_guid    String
-  usuario         usuarios     @relation(fields: [usuario_guid], references: [guid], onDelete: Cascade)
-  recurso_guid    String
-  recurso         lms_recursos @relation(fields: [recurso_guid], references: [guid], onDelete: Cascade)
-  completado      Boolean      @default(true)
-  fecha_completado DateTime    @default(now())
-  tiempo_invertido Int?        // Segundos
-
-  @@unique([usuario_guid, recurso_guid])
-}
-
-model lms_matriculas {
-  id              Int                @id @default(autoincrement())
-  usuario_guid    String
-  usuario         usuarios           @relation(fields: [usuario_guid], references: [guid], onDelete: Cascade)
-  curso_guid      String
-  curso           lms_cursos         @relation(fields: [curso_guid], references: [guid], onDelete: Cascade)
-  tipo            lms_tipo_matricula @default(MANUAL)
-  activa          Boolean            @default(true)
-  fecha_matricula DateTime           @default(now())
-  fecha_baja      DateTime?
-
-  @@unique([usuario_guid, curso_guid])
-}
-
-// ── COMUNICACIÓN ──
-
 model lms_notificaciones {
   id           Int                   @id @default(autoincrement())
   usuario_guid String
   usuario      usuarios              @relation(fields: [usuario_guid], references: [guid], onDelete: Cascade)
   tipo         lms_tipo_notificacion
   titulo       String
-  mensaje      String
+  mensaje      String                @db.Text
   leida        Boolean               @default(false)
-  url_accion   String?               // Link para ver detalle (ej. /lms/cursos/123)
-  ref_tipo     String?               // 'curso', 'evaluacion', 'entrega'
+  url_accion   String?
+  ref_tipo     String? // 'curso' | 'entrega' | 'quiz' | 'certificado' | 'mensaje'
   ref_guid     String?
   created_at   DateTime              @default(now())
 
-  @@index([usuario_guid])
+  @@index([usuario_guid, leida])
+  @@index([usuario_guid, created_at])
 }
-
-// ── MENSAJERÍA ──
 
 model lms_mensajes {
-  id              Int      @id @default(autoincrement())
-  remitente_guid  String
-  remitente       usuarios @relation("mensajes_enviados", fields: [remitente_guid], references: [guid], onDelete: Cascade)
+  id                Int      @id @default(autoincrement())
+  remitente_guid    String
+  remitente         usuarios @relation("mensajes_enviados", fields: [remitente_guid], references: [guid], onDelete: Cascade)
   destinatario_guid String
-  destinatario    usuarios @relation("mensajes_recibidos", fields: [destinatario_guid], references: [guid], onDelete: Cascade)
-  asunto          String
-  contenido       String               @db.Text
-  leido           Boolean  @default(false)
-  ref_tipo        String?  // 'quiz_retry', 'entrega_revision', 'general'
-  ref_guid        String?  // GUID del recurso/entrega relacionado
-  created_at      DateTime @default(now())
+  destinatario      usuarios @relation("mensajes_recibidos", fields: [destinatario_guid], references: [guid], onDelete: Cascade)
+  asunto            String
+  contenido         String   @db.Text
+  leido             Boolean  @default(false)
+  ref_tipo          String?
+  ref_guid          String?
+  created_at        DateTime @default(now())
 
-  @@index([remitente_guid])
-  @@index([destinatario_guid])
+  @@index([remitente_guid, destinatario_guid])
+  @@index([destinatario_guid, leido])
 }
-
-// ── RECUPERACIÓN DE CONTRASEÑA ──
-
-model lms_password_resets {
-  id         Int      @id @default(autoincrement())
-  email      String
-  token      String   @unique
-  usado      Boolean  @default(false)
-  expires_at DateTime
-  created_at DateTime @default(now())
-
-  @@index([email])
-}
-
-// ── MÉTRICAS PESV ──
-
-model lms_metricas_capacitacion {
-  id                     Int      @id @default(autoincrement())
-  usuario_guid           String   @unique
-  usuario                usuarios @relation(fields: [usuario_guid], references: [guid], onDelete: Cascade)
-  dias_consecutivos      Int      @default(0)
-  total_horas_invertidas Decimal  @default(0.0) // Tiempo total auditable
-  cursos_completados     Int      @default(0)
-  promedio_global        Decimal  @default(0.0)
-
-  updated_at             DateTime @updatedAt
-}
-
-// ── CONFIGURACIÓN ──
-
-model lms_configuracion {
-  id                 Int      @id @default(autoincrement()) // Solo habrá fila id=1
-  nombre_plataforma  String   @default("Campus Virtual")
-  logo_url           String?
-  favicon_url        String?
-  color_primario     String   @default("#4f46e5")
-  color_secundario   String   @default("#10b981")
-  fuente             String   @default("Inter")
-  border_radius      Int      @default(12)     // px
-  login_fondo_url    String?
-  mensaje_bienvenida String   @default("Bienvenido PESV")
-  idioma             String   @default("es")
-  zona_horaria       String   @default("America/Bogota")
-  max_archivo_mb     Int      @default(10)
-  contrasena_defecto String   @default("pesvauth2026") // Contraseña por defecto para nuevos usuarios
-  email_remitente    String?
-  email_nombre       String?
-  bienvenida_html    String?            @db.Text
-
-  // Certificados config
-  cert_titulo_personalizado String?
-  cert_subtitulo            String?
-  cert_texto_legal          String?
-  cert_mostrar_modulos      Boolean  @default(true)
-  cert_mostrar_recursos     Boolean  @default(true)
-  cert_mostrar_nota         Boolean  @default(true)
-  cert_mostrar_firma        Boolean  @default(true)
-  cert_mostrar_fecha_ingreso Boolean @default(false)
-
-  // Landing Page - Hero
-  landing_hero_titulo1   String   @default("Transporte Seguro,")
-  landing_hero_titulo2   String   @default("Personal Capacitado")
-  landing_hero_subtitulo String   @default("Plataforma integral para la gestión del Plan Estratégico de Seguridad Vial. Capacitación, evaluación y certificación de conductores con tecnología de vanguardia.")
-
-  // Landing Page - Contacto
-  landing_telefono       String   @default("+57 300 123 4567")
-  landing_telefono_sub   String   @default("Lun-Vie 8am-6pm")
-  landing_email          String   @default("contacto@pesveducation.com")
-  landing_email_sub      String   @default("Respuesta en 24h")
-  landing_oficina        String   @default("Bogotá, Colombia")
-  landing_oficina_sub    String   @default("Cra 7 #45-21, Oficina 302")
-
-  // Landing Page - Footer
-  landing_footer_texto   String   @default("Plataforma líder en capacitación y certificación de seguridad vial para empresas de transporte de carga.")
-
-  // Página Legal
-  legal_terminos         String?  @db.Text
-  legal_privacidad       String?  @db.Text
-  legal_datos            String?  @db.Text
-
-  updated_at         DateTime @updatedAt
-}
-
-// ── CERTIFICADOS ──
-
-model lms_certificados {
-  id                  Int      @id @default(autoincrement())
-  guid                String   @unique @default(uuid())
-  usuario_guid        String
-  usuario             usuarios @relation(fields: [usuario_guid], references: [guid], onDelete: Cascade)
-  curso_guid          String
-  curso               lms_cursos @relation(fields: [curso_guid], references: [guid], onDelete: Cascade)
-  codigo_verificacion String   @unique
-  archivo_pdf         String
-  fecha_inicio        DateTime
-  fecha_completado    DateTime @default(now())
-  tiempo_total_horas  Decimal  @default(0)
-  tiempo_activo_seg   Int      @default(0)
-  nota_promedio       Decimal?
-  created_at          DateTime @default(now())
-
-  @@unique([usuario_guid, curso_guid])
-  @@index([usuario_guid])
-  @@index([curso_guid])
-}
-
-// ── SESIONES ACTIVAS (Heartbeat tracking) ──
-
-model lms_sesion_activa {
-  id            Int       @id @default(autoincrement())
-  usuario_guid  String
-  usuario       usuarios  @relation(fields: [usuario_guid], references: [guid], onDelete: Cascade)
-  curso_guid    String
-  curso         lms_cursos @relation(fields: [curso_guid], references: [guid], onDelete: Cascade)
-  inicio_sesion DateTime  @default(now())
-  fin_sesion    DateTime?
-  duracion_seg  Int       @default(0)
-
-  @@index([usuario_guid, curso_guid])
-}
-
-
-// ── CONTACTOS DE CHAT (Aprobación mutua) ──
 
 enum lms_estado_contacto {
   PENDIENTE
@@ -460,51 +389,155 @@ enum lms_estado_contacto {
 }
 
 model lms_contacto_chat {
-  id                Int                  @id @default(autoincrement())
-  solicitante_guid  String
-  receptor_guid     String
-  curso_guid        String
-  estado            lms_estado_contacto  @default(PENDIENTE)
-  created_at        DateTime             @default(now())
-  updated_at        DateTime             @updatedAt
+  id               Int                 @id @default(autoincrement())
+  solicitante_guid String
+  receptor_guid    String
+  curso_guid       String
+  estado           lms_estado_contacto @default(PENDIENTE)
+  created_at       DateTime            @default(now())
+  updated_at       DateTime            @updatedAt
 
   @@unique([solicitante_guid, receptor_guid, curso_guid])
-  @@index([receptor_guid])
-  @@index([solicitante_guid])
+  @@index([receptor_guid, estado])
+  @@index([solicitante_guid, estado])
 }
 
-// ── TOKEN REVOCATIONS (for JWT blacklist persistence) ──
+// ── Métricas y seguimiento ─────────────────────────────────────────────────
 
-model lms_token_revocations {
-  id            Int      @id @default(autoincrement())
+model lms_metricas_capacitacion {
+  id                     Int      @id @default(autoincrement())
+  usuario_guid           String   @unique
+  usuario                usuarios @relation(fields: [usuario_guid], references: [guid], onDelete: Cascade)
+  dias_consecutivos      Int      @default(0)
+  total_horas_invertidas Decimal  @default(0) @db.Decimal(10, 2)
+  cursos_completados     Int      @default(0)
+  // Promedio en escala 0–100
+  promedio_global        Decimal  @default(0) @db.Decimal(5, 2)
+
+  updated_at DateTime @updatedAt
+}
+
+model lms_sesion_activa {
+  id            Int        @id @default(autoincrement())
   usuario_guid  String
-  revoked_at    DateTime @default(now())
-  expires_at    DateTime // Auto-cleanup: delete after JWT max lifetime (25h)
+  usuario       usuarios   @relation(fields: [usuario_guid], references: [guid], onDelete: Cascade)
+  curso_guid    String
+  curso         lms_cursos @relation(fields: [curso_guid], references: [guid], onDelete: Cascade)
+  inicio_sesion DateTime   @default(now())
+  fin_sesion    DateTime?
+  duracion_seg  Int        @default(0)
 
-  @@index([usuario_guid])
-  @@index([expires_at])
+  @@index([usuario_guid, curso_guid])
+  @@index([curso_guid])
 }
 
-// ── PLANTILLAS DE CORREO ──
+// ── Certificados ───────────────────────────────────────────────────────────
+
+model lms_certificados {
+  id                  Int        @id @default(autoincrement())
+  guid                String     @unique @default(uuid())
+  usuario_guid        String
+  usuario             usuarios   @relation(fields: [usuario_guid], references: [guid], onDelete: Cascade)
+  curso_guid          String
+  curso               lms_cursos @relation(fields: [curso_guid], references: [guid], onDelete: Cascade)
+  codigo_verificacion String     @unique
+  archivo_pdf         String // Clave en el almacenamiento
+  fecha_inicio        DateTime
+  fecha_completado    DateTime   @default(now())
+  tiempo_total_horas  Decimal    @default(0) @db.Decimal(10, 2)
+  tiempo_activo_seg   Int        @default(0)
+  // Promedio del curso en escala 0–100
+  nota_promedio       Decimal?   @db.Decimal(5, 2)
+  created_at          DateTime   @default(now())
+
+  @@unique([usuario_guid, curso_guid])
+  @@index([usuario_guid])
+  @@index([curso_guid])
+}
+
+// ── Configuración por sede ─────────────────────────────────────────────────
+
+/// Una fila por país. Marca, textos de la landing y textos legales son propios de
+/// cada sede: los datos de contacto, la dirección y la normativa difieren entre
+/// Colombia y México.
+model lms_configuracion {
+  id   Int      @id @default(autoincrement())
+  pais lms_pais @unique
+
+  // Identidad visual
+  nombre_plataforma String  @default("Campus Virtual")
+  logo_url          String?
+  favicon_url       String?
+  color_primario    String  @default("#1e3a8a")
+  color_secundario  String  @default("#ea580c")
+  fuente            String  @default("Inter")
+  border_radius     Int     @default(12)
+  login_fondo_url   String?
+
+  // Operativa
+  mensaje_bienvenida String  @default("Bienvenido")
+  idioma             String  @default("es")
+  zona_horaria       String  @default("America/Bogota")
+  max_archivo_mb     Int     @default(10)
+  contrasena_defecto String  @default("pesvauth2026") // Clave temporal de altas nuevas
+  email_remitente    String?
+  email_nombre       String?
+  bienvenida_html    String? @db.Text
+
+  // Certificados
+  cert_titulo_personalizado  String?
+  cert_subtitulo             String?
+  cert_texto_legal           String? @db.Text
+  cert_mostrar_modulos       Boolean @default(true)
+  cert_mostrar_recursos      Boolean @default(true)
+  cert_mostrar_nota          Boolean @default(true)
+  cert_mostrar_firma         Boolean @default(true)
+  cert_mostrar_fecha_ingreso Boolean @default(false)
+
+  // Landing
+  landing_hero_titulo1   String @default("Transporte Seguro,")
+  landing_hero_titulo2   String @default("Personal Capacitado")
+  landing_hero_subtitulo String @db.Text
+
+  landing_telefono     String
+  landing_telefono_sub String @default("Lun-Vie 8am-6pm")
+  landing_email        String
+  landing_email_sub    String @default("Respuesta en 24h")
+  landing_oficina      String
+  landing_oficina_sub  String
+
+  landing_footer_texto String @db.Text
+
+  // Legal
+  legal_terminos   String? @db.Text
+  legal_privacidad String? @db.Text
+  legal_datos      String? @db.Text
+
+  updated_at DateTime @updatedAt
+}
+
+// ── Plantillas de correo ───────────────────────────────────────────────────
 
 model lms_eventos_correo {
-  id               Int      @id @default(autoincrement())
-  identificador    String   @unique // Ej: 'RECUPERAR_PASSWORD', 'NUEVA_ENTREGA'
-  nombre_legible   String   
-  descripcion      String
-  variables        String   @db.Text // JSON array de variables permitidas ej: ["nombre", "token", "curso"]
-  plantillas       lms_plantillas_correo[]
+  id             Int                     @id @default(autoincrement())
+  identificador  String                  @unique // Ej: 'RECUPERAR_PASSWORD'
+  nombre_legible String
+  descripcion    String
+  variables      String                  @db.Text // JSON: ["nombre", "token", ...]
+  plantillas     lms_plantillas_correo[]
 }
 
 model lms_plantillas_correo {
-  id               Int      @id @default(autoincrement())
-  evento_id        Int
-  evento           lms_eventos_correo @relation(fields: [evento_id], references: [id], onDelete: Cascade)
-  nombre_interno   String   // Para que el admin lo identifique
-  asunto           String
-  cuerpo_html      String   @db.Text
-  activo           Boolean  @default(true)
-  es_sistema       Boolean  @default(false) // Las de sistema no se pueden borrar
-  created_at       DateTime @default(now())
-  updated_at       DateTime @updatedAt
+  id             Int                @id @default(autoincrement())
+  evento_id      Int
+  evento         lms_eventos_correo @relation(fields: [evento_id], references: [id], onDelete: Cascade)
+  nombre_interno String
+  asunto         String
+  cuerpo_html    String             @db.Text
+  activo         Boolean            @default(true)
+  es_sistema     Boolean            @default(false) // Las de sistema no se borran
+  created_at     DateTime           @default(now())
+  updated_at     DateTime           @updatedAt
+
+  @@index([evento_id])
 }

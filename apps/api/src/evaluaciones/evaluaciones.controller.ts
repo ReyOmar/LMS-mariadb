@@ -1,81 +1,67 @@
-import { Controller, Get, Post, Patch, Param, Body, UnauthorizedException, BadRequestException, Req } from '@nestjs/common';
+import { Body, Controller, Get, Param, Patch, Post, Req } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
+import type { FastifyRequest } from 'fastify';
 import { EvaluacionesService } from './evaluaciones.service';
-import { QuizService } from '../cursos/quiz.service';
 import { Roles } from '../common/decorators/roles.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { JwtPayload } from '../common/interfaces/jwt-payload.interface';
+import { leerArchivoDeLaPeticion } from '../storage/multipart';
 import { CalificarEntregaDto } from './dto/calificar-entrega.dto';
 
 @Controller('evaluaciones')
 export class EvaluacionesController {
-  constructor(
-    private readonly evaluacionesService: EvaluacionesService,
-    private readonly quizService: QuizService,
-  ) {}
+  constructor(private readonly evaluaciones: EvaluacionesService) {}
 
-  /**
-   * Submit a file for a task via multipart/form-data.
-   * Expects a 'file' field with the uploaded file.
-   */
+  // ── Alumno ───────────────────────────────────────────────────────────────
+
+  @Throttle({ default: { ttl: 60_000, limit: 10 } })
   @Post('/tareas/:tarea_guid/entregas')
   async submitEntrega(
     @CurrentUser() user: JwtPayload,
-    @Param('tarea_guid') tarea_guid: string,
-    @Req() req: any,
+    @Param('tarea_guid') tareaGuid: string,
+    @Req() req: FastifyRequest,
   ) {
-    const userGuid = user.sub;
-    if (!userGuid) throw new UnauthorizedException('Debes iniciar sesión para subir tu tarea.');
-
-    // SEC-06: Verify enrollment before allowing file submission
-    await this.quizService.verificarMatricula(tarea_guid, userGuid);
-
-    const data = await req.file();
-    if (!data) {
-      throw new BadRequestException('No se envió ningún archivo.');
-    }
-
-    const chunks: Buffer[] = [];
-    for await (const chunk of data.file) {
-      chunks.push(chunk);
-    }
-    const buffer = Buffer.concat(chunks);
-
-    if (buffer.length === 0) {
-      throw new BadRequestException('El archivo está vacío.');
-    }
-
-    return this.evaluacionesService.submitEntrega(tarea_guid, {
-      buffer,
-      nombre_archivo: data.filename || 'archivo.bin',
-      usuario_guid: userGuid,
-    });
+    const archivo = await leerArchivoDeLaPeticion(req);
+    return this.evaluaciones.registrarEntrega(tareaGuid, archivo, user);
   }
 
-  @Get('/tareas/:tarea_guid/entregas/mine')
-  async getEntrega(@CurrentUser() user: JwtPayload, @Param('tarea_guid') tarea_guid: string) {
-    const userGuid = user.sub;
-    if (!userGuid) throw new UnauthorizedException('Usuario no autenticado correctamente.');
-    const entrega = await this.evaluacionesService.getEntrega(tarea_guid, userGuid);
-    return entrega || { estado: 'PENDIENTE' };
+  @Get('/tareas/:tarea_guid/entregas/mia')
+  getMiEntrega(@CurrentUser() user: JwtPayload, @Param('tarea_guid') tareaGuid: string) {
+    return this.evaluaciones.getMiEntrega(tareaGuid, user);
+  }
+
+  // ── Examinador ───────────────────────────────────────────────────────────
+
+  @Roles('ADMINISTRADOR', 'PROFESOR')
+  @Get('/examinador/entregas')
+  getEntregasParaCalificar(@CurrentUser() user: JwtPayload) {
+    return this.evaluaciones.getEntregasParaCalificar(user);
   }
 
   @Roles('ADMINISTRADOR', 'PROFESOR')
   @Get('/tareas/:tarea_guid/entregas')
-  async getTodasEntregasParaTarea(@Param('tarea_guid') tarea_guid: string) {
-    return this.evaluacionesService.getTodasEntregasParaTarea(tarea_guid);
-  }
-
-  @Roles('ADMINISTRADOR', 'PROFESOR')
-  @Get('/examiner/entregas')
-  async getEntregasParaCalificar(@CurrentUser() user: JwtPayload) {
-    // BUG-07 FIX: Use the authenticated user's GUID from JWT instead of an untrusted query param.
-    // This prevents a professor from viewing another professor's submissions.
-    return this.evaluacionesService.getEntregasParaCalificar(user.sub);
+  getEntregasDeTarea(@CurrentUser() user: JwtPayload, @Param('tarea_guid') tareaGuid: string) {
+    return this.evaluaciones.getEntregasDeTarea(tareaGuid, user);
   }
 
   @Roles('ADMINISTRADOR', 'PROFESOR')
   @Patch('/entregas/:guid/calificar')
-  async calificarEntrega(@Param('guid') guid: string, @Body() body: CalificarEntregaDto) {
-    return this.evaluacionesService.calificarEntrega(guid, body);
+  calificarEntrega(
+    @CurrentUser() user: JwtPayload,
+    @Param('guid') guid: string,
+    @Body() dto: CalificarEntregaDto,
+  ) {
+    return this.evaluaciones.calificarEntrega(guid, dto, user);
+  }
+
+  /** Concede un intento adicional a un alumno que agotó los del cuestionario. */
+  @Roles('ADMINISTRADOR', 'PROFESOR')
+  @Post('/quiz/:recurso_guid/alumnos/:alumno_guid/nuevo-intento')
+  habilitarNuevoIntento(
+    @CurrentUser() user: JwtPayload,
+    @Param('recurso_guid') recursoGuid: string,
+    @Param('alumno_guid') alumnoGuid: string,
+  ) {
+    return this.evaluaciones.habilitarNuevoIntento(recursoGuid, alumnoGuid, user);
   }
 }

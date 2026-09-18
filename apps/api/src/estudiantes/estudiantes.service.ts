@@ -1,273 +1,321 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { PrismaService } from '../prisma/prisma.service';
-import { CertificadosService } from '../certificados/certificados.service';
+import { CursoAccesoService } from '../cursos/curso-acceso.service';
+import { aNota, promedioNotas } from '../common/domain/calificacion';
+import { JwtPayload } from '../common/interfaces/jwt-payload.interface';
 
-const AUTO_UNLOCK_HOURS = 48;
+/**
+ * Horas que una entrega puede llevar esperando calificación antes de que el sistema
+ * desbloquee el siguiente recurso por su cuenta.
+ *
+ * Existe para que un examinador ausente no deje a un alumno bloqueado indefinidamente. El
+ * desbloqueo no da la tarea por aprobada: sólo permite seguir estudiando mientras llega la
+ * corrección, y el certificado sigue exigiendo que todas las tareas estén calificadas.
+ */
+export const HORAS_DESBLOQUEO_AUTOMATICO = 48;
 
+/** Cada cuánto manda un latido el visor de curso. Debe coincidir con el cliente. */
+const LATIDO_SEGUNDOS = 60;
+
+/** Hueco a partir del cual se considera que empezó una sesión nueva. */
+const CORTE_SESION_SEGUNDOS = 150;
+
+/**
+ * Progreso, métricas y tiempo de estudio del alumno.
+ *
+ * Todos los métodos trabajan sobre el usuario en sesión. La versión anterior aceptaba un
+ * `?usuario_guid=` que, cuando venía, sustituía al del token: cualquier alumno podía leer
+ * el progreso de otro y, peor, marcar recursos como completados en su nombre.
+ */
 @Injectable()
 export class EstudiantesService {
   private readonly logger = new Logger(EstudiantesService.name);
+
   constructor(
-    private prisma: PrismaService,
-    private certificadosService: CertificadosService,
+    private readonly prisma: PrismaService,
+    private readonly acceso: CursoAccesoService,
+    private readonly eventos: EventEmitter2,
   ) {}
 
-  async getProgresoEstudiante(usuario_guid: string, curso_guid: string) {
-    const curso = await this.prisma.lms_cursos.findUnique({
-      where: { guid: curso_guid },
-      include: {
-        modulos: {
-          orderBy: { orden: 'asc' },
-          include: {
-            lecciones: {
-              include: {
-                recursos: { orderBy: { orden: 'asc' }, select: { guid: true, tipo: true, titulo: true } }
-              }
-            }
-          }
-        }
-      }
-    });
-    if (!curso) return { completados: [], desbloqueados_por_tiempo: [], tareas_pendientes_calificacion: [], total_recursos: 0 };
+  // ── Progreso ─────────────────────────────────────────────────────────────
 
-    const allRecursos = curso.modulos.flatMap((m: any) =>
-      m.lecciones.flatMap((l: any) => l.recursos)
-    );
-    const recursoGuids = allRecursos.map((r: any) => r.guid);
-    const tareaGuids = allRecursos.filter((r: any) => r.tipo === 'TAREA').map((r: any) => r.guid);
+  /**
+   * Estado de avance del alumno en un curso: qué tiene completado, qué se le desbloqueó
+   * por espera y qué tareas siguen pendientes de calificación.
+   */
+  async getProgreso(cursoGuid: string, user: JwtPayload) {
+    const curso = await this.acceso.cursoDeSede(cursoGuid, user.pais);
+    await this.acceso.asegurarMatricula(cursoGuid, user.sub);
 
-    // Fetch real completions
-    const progreso = await this.prisma.lms_progreso_recurso.findMany({
-      where: { usuario_guid, recurso_guid: { in: recursoGuids } }
-    });
-    const completados = progreso.map((p: any) => p.recurso_guid);
+    const recursos = await this.acceso.recursosDelCurso(cursoGuid);
+    if (recursos.length === 0) {
+      return {
+        completados: [],
+        desbloqueados_por_espera: [],
+        tareas_pendientes: [],
+        total_recursos: 0,
+        porcentaje: 0,
+        orden_estricto: true,
+      };
+    }
 
-    // Fetch pending submissions (ENTREGADA or EN_REVISION, not yet CALIFICADA)
-    const entregasPendientes = tareaGuids.length > 0
-      ? await this.prisma.lms_entregas.findMany({
-          where: {
-            usuario_guid,
-            tarea_guid: { in: tareaGuids },
-            estado: { in: ['ENTREGADA', 'EN_REVISION'] },
-          },
-          select: { tarea_guid: true, fecha_entrega: true, respuesta_texto: true },
-        })
-      : [];
+    const guids = recursos.map((r) => r.guid);
+    const [progreso, entregasPendientes] = await Promise.all([
+      this.prisma.lms_progreso_recurso.findMany({
+        where: { usuario_guid: user.sub, recurso_guid: { in: guids } },
+        select: { recurso_guid: true },
+      }),
+      this.prisma.lms_entregas.findMany({
+        where: {
+          usuario_guid: user.sub,
+          tarea_guid: { in: guids },
+          estado: { in: ['ENTREGADA', 'EN_REVISION'] },
+        },
+        select: { tarea_guid: true, fecha_entrega: true },
+      }),
+    ]);
 
-    const now = Date.now();
-    const unlockThreshold = AUTO_UNLOCK_HOURS * 60 * 60 * 1000;
+    const completados = progreso.map((p) => p.recurso_guid);
+    const completadosSet = new Set(completados);
+    const titulos = new Map(recursos.map((r) => [r.guid, r.titulo]));
 
-    // Resources auto-unlocked because submission is >48h old and still pending
-    const desbloqueados_por_tiempo: string[] = [];
-    const tareas_pendientes_calificacion: { recurso_guid: string; tarea_titulo: string; fecha_entrega: string }[] = [];
+    const limite = Date.now() - HORAS_DESBLOQUEO_AUTOMATICO * 60 * 60 * 1000;
+    const desbloqueados: string[] = [];
+    const pendientes: { recurso_guid: string; titulo: string; fecha_entrega: string | null }[] = [];
 
     for (const entrega of entregasPendientes) {
-      if (!entrega.tarea_guid || !entrega.fecha_entrega) continue;
-      const recursoInfo = allRecursos.find((r: any) => r.guid === entrega.tarea_guid);
-      const elapsed = now - new Date(entrega.fecha_entrega).getTime();
+      if (!entrega.tarea_guid) continue;
 
-      // Track pending tasks for certificate blocking info
-      tareas_pendientes_calificacion.push({
+      pendientes.push({
         recurso_guid: entrega.tarea_guid,
-        tarea_titulo: recursoInfo?.titulo || 'Tarea',
-        fecha_entrega: entrega.fecha_entrega.toISOString(),
+        titulo: titulos.get(entrega.tarea_guid) ?? 'Tarea',
+        fecha_entrega: entrega.fecha_entrega?.toISOString() ?? null,
       });
 
-      // Auto-unlock if >48h and not already marked as completed
-      if (elapsed >= unlockThreshold && !completados.includes(entrega.tarea_guid)) {
-        desbloqueados_por_tiempo.push(entrega.tarea_guid);
+      const esperandoDemasiado = entrega.fecha_entrega !== null && entrega.fecha_entrega.getTime() <= limite;
+      if (esperandoDemasiado && !completadosSet.has(entrega.tarea_guid)) {
+        desbloqueados.push(entrega.tarea_guid);
       }
     }
 
     return {
       completados,
-      desbloqueados_por_tiempo,
-      tareas_pendientes_calificacion,
-      total_recursos: recursoGuids.length,
+      desbloqueados_por_espera: desbloqueados,
+      tareas_pendientes: pendientes,
+      total_recursos: recursos.length,
+      porcentaje: Math.round((completados.length / recursos.length) * 100),
+      orden_estricto: true,
+      curso_titulo: curso.titulo,
     };
   }
 
-  async marcarRecursoCompletado(usuario_guid: string, recurso_guid: string) {
-    const result = await this.prisma.lms_progreso_recurso.upsert({
-      where: { usuario_guid_recurso_guid: { usuario_guid, recurso_guid } },
-      create: { usuario_guid, recurso_guid, completado: true },
+  /**
+   * Marca un recurso como completado.
+   *
+   * Sólo aplica a recursos de estudio: las tareas y los cuestionarios se completan al
+   * aprobarlos, no porque el navegador diga que se leyeron. Antes este endpoint aceptaba
+   * cualquier recurso y cualquier usuario, de modo que un alumno podía darse por
+   * completado un examen sin hacerlo.
+   */
+  async marcarRecursoCompletado(recursoGuid: string, user: JwtPayload) {
+    const curso = await this.acceso.asegurarAccesoARecurso(recursoGuid, user);
+
+    const recurso = await this.prisma.lms_recursos.findUnique({
+      where: { guid: recursoGuid },
+      select: { tipo: true, quiz_config: true },
+    });
+    if (!recurso) {
+      return { completado: false, motivo: 'El recurso ya no existe.' };
+    }
+    if (recurso.tipo === 'TAREA') {
+      return {
+        completado: false,
+        motivo: recurso.quiz_config
+          ? 'Este cuestionario se completa al aprobarlo.'
+          : 'Esta tarea se completa cuando el examinador la califica.',
+      };
+    }
+
+    await this.prisma.lms_progreso_recurso.upsert({
+      where: { usuario_guid_recurso_guid: { usuario_guid: user.sub, recurso_guid: recursoGuid } },
+      create: { usuario_guid: user.sub, recurso_guid: recursoGuid, completado: true },
       update: {},
     });
 
-    // ── Auto-detect course completion and generate certificate ──
-    // Fire-and-forget: don't block the student's response
-    this.certificadosService.checkCertificateAfterGrading(usuario_guid, recurso_guid).catch((err) => {
-      this.logger.error('Auto-certificate check error:', err?.message || err);
+    // Completar un recurso puede ser lo último que faltaba para el certificado.
+    this.eventos.emit('progreso.actualizado', {
+      usuario_guid: user.sub,
+      pais: user.pais,
+      curso_guid: curso.guid,
     });
 
-    return result;
+    return { completado: true };
   }
 
-  async getDiasActivos(usuario_guid: string, year: number, month: number) {
-    const start = new Date(year, month, 1);
-    const end = new Date(year, month + 1, 1);
+  // ── Métricas ─────────────────────────────────────────────────────────────
 
-    const [progresos, entregas] = await Promise.all([
+  /** Resumen del alumno: cursos, avance, horas de estudio y promedio sobre 100. */
+  async getMetricas(user: JwtPayload) {
+    const matriculas = await this.prisma.lms_matriculas.findMany({
+      where: { usuario_guid: user.sub, activa: true },
+      select: { curso_guid: true },
+    });
+    const cursoGuids = matriculas.map((m) => m.curso_guid);
+
+    if (cursoGuids.length === 0) {
+      return {
+        total_cursos: 0,
+        cursos_completados: 0,
+        recursos_completados: 0,
+        total_recursos: 0,
+        porcentaje: 0,
+        total_horas_invertidas: 0,
+        promedio_global: null,
+      };
+    }
+
+    const [recursos, progreso, tiempo, notas] = await Promise.all([
+      this.prisma.lms_recursos.findMany({
+        where: { modulo: { curso_guid: { in: cursoGuids } } },
+        select: { guid: true, modulo: { select: { curso_guid: true } } },
+      }),
       this.prisma.lms_progreso_recurso.findMany({
-        where: { usuario_guid, fecha_completado: { gte: start, lt: end } },
-        select: { fecha_completado: true }
+        where: { usuario_guid: user.sub },
+        select: { recurso_guid: true },
+      }),
+      this.prisma.lms_sesion_activa.aggregate({
+        where: { usuario_guid: user.sub, curso_guid: { in: cursoGuids } },
+        _sum: { duracion_seg: true },
       }),
       this.prisma.lms_entregas.findMany({
-        where: { usuario_guid, fecha_entrega: { gte: start, lt: end } },
-        select: { fecha_entrega: true }
-      })
-    ]);
-
-    const days = new Set<number>();
-    for (const p of progresos) {
-      days.add(new Date(p.fecha_completado).getDate());
-    }
-    for (const e of entregas) {
-      if (e.fecha_entrega) days.add(new Date(e.fecha_entrega).getDate());
-    }
-
-    return { dias: Array.from(days).sort((a, b) => a - b) };
-  }
-
-  async getNotificacionesEstudiante(usuario_guid: string) {
-    return this.prisma.lms_notificaciones.findMany({
-      where: { usuario_guid },
-      orderBy: { created_at: 'desc' },
-      take: 20
-    });
-  }
-
-  async marcarNotificacionLeida(id: number) {
-    return this.prisma.lms_notificaciones.update({
-      where: { id },
-      data: { leida: true }
-    });
-  }
-
-  async getMetricasEstudiante(usuario_guid: string) {
-    const [metricas, matriculas] = await Promise.all([
-      this.prisma.lms_metricas_capacitacion.upsert({
-        where: { usuario_guid },
-        create: { usuario_guid },
-        update: {},
-      }),
-      this.prisma.lms_matriculas.findMany({
-        where: { usuario_guid },
-        include: {
-          curso: {
-            include: {
-              modulos: {
-                include: {
-                  lecciones: {
-                    include: {
-                      recursos: { select: { guid: true } }
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
+        where: { usuario_guid: user.sub, estado: 'CALIFICADA', calificacion: { not: null } },
+        select: { calificacion: true },
       }),
     ]);
 
-    const allResourceGuids: string[] = [];
-    const courseTotals: { courseIndex: number; guids: string[] }[] = [];
+    const completados = new Set(progreso.map((p) => p.recurso_guid));
 
-    for (let i = 0; i < matriculas.length; i++) {
-      const recursoGuids = matriculas[i].curso.modulos.flatMap((m: any) =>
-        m.lecciones.flatMap((l: any) => l.recursos.map((r: any) => r.guid))
-      );
-      allResourceGuids.push(...recursoGuids);
-      courseTotals.push({ courseIndex: i, guids: recursoGuids });
+    const porCurso = new Map<string, { total: number; hechos: number }>();
+    for (const recurso of recursos) {
+      const cursoGuid = recurso.modulo.curso_guid;
+      const acumulado = porCurso.get(cursoGuid) ?? { total: 0, hechos: 0 };
+      acumulado.total++;
+      if (completados.has(recurso.guid)) acumulado.hechos++;
+      porCurso.set(cursoGuid, acumulado);
     }
 
-    const completedSet = new Set<string>();
-    if (allResourceGuids.length > 0) {
-      const completed = await this.prisma.lms_progreso_recurso.findMany({
-        where: { usuario_guid, recurso_guid: { in: allResourceGuids } },
-        select: { recurso_guid: true },
-      });
-      for (const c of completed) completedSet.add(c.recurso_guid);
-    }
-
-    let cursos_completados = 0;
-    const total_recursos_completados = completedSet.size;
-
-    for (const ct of courseTotals) {
-      if (ct.guids.length === 0) continue;
-      const courseCompleted = ct.guids.filter(g => completedSet.has(g)).length;
-      if (courseCompleted === ct.guids.length) cursos_completados++;
-    }
-
-    // Use real session time from lms_sesion_activa
-    const sessionAggregate = await this.prisma.lms_sesion_activa.aggregate({
-      where: { usuario_guid },
-      _sum: { duracion_seg: true },
-    });
-    const horasReales = (sessionAggregate._sum.duracion_seg || 0) / 3600;
+    const cursosCompletados = [...porCurso.values()].filter((c) => c.total > 0 && c.hechos === c.total).length;
+    const recursosCompletados = [...porCurso.values()].reduce((suma, c) => suma + c.hechos, 0);
+    const totalRecursos = recursos.length;
 
     return {
-      ...metricas,
-      cursos_completados,
-      total_cursos: matriculas.length,
-      total_horas_invertidas: Math.round(horasReales * 10) / 10
+      total_cursos: cursoGuids.length,
+      cursos_completados: cursosCompletados,
+      recursos_completados: recursosCompletados,
+      total_recursos: totalRecursos,
+      porcentaje: totalRecursos > 0 ? Math.round((recursosCompletados / totalRecursos) * 100) : 0,
+      total_horas_invertidas: Math.round(((tiempo._sum.duracion_seg ?? 0) / 3600) * 10) / 10,
+      promedio_global: promedioNotas(notas.map((n) => n.calificacion)),
     };
   }
 
-  /**
-   * Register a heartbeat for active time tracking.
-   * Called every 60 seconds from the course viewer while the tab is visible.
-   * If last heartbeat was < 2 min ago, extend the session. Otherwise create a new one.
-   */
-  async registrarHeartbeat(usuario_guid: string, curso_guid: string) {
-    const HEARTBEAT_INTERVAL = 60; // seconds
-    const SESSION_TIMEOUT = 120; // seconds - if gap > 2min, start new session
-    const cutoff = new Date(Date.now() - SESSION_TIMEOUT * 1000);
+  /** Días del mes con actividad registrada, para el calendario del panel del alumno. */
+  async getDiasActivos(user: JwtPayload, anio: number, mes: number) {
+    // `mes` llega como índice 0–11 desde el cliente, igual que `Date.getMonth()`.
+    const inicio = new Date(anio, mes, 1);
+    const fin = new Date(anio, mes + 1, 1);
 
-    // Find the most recent active session
-    const lastSession = await this.prisma.lms_sesion_activa.findFirst({
-      where: {
-        usuario_guid,
-        curso_guid,
-        fin_sesion: { gte: cutoff },
-      },
+    const [progreso, entregas] = await Promise.all([
+      this.prisma.lms_progreso_recurso.findMany({
+        where: { usuario_guid: user.sub, fecha_completado: { gte: inicio, lt: fin } },
+        select: { fecha_completado: true },
+      }),
+      this.prisma.lms_entregas.findMany({
+        where: { usuario_guid: user.sub, fecha_entrega: { gte: inicio, lt: fin } },
+        select: { fecha_entrega: true },
+      }),
+    ]);
+
+    const dias = new Set<number>();
+    for (const p of progreso) dias.add(p.fecha_completado.getDate());
+    for (const e of entregas) if (e.fecha_entrega) dias.add(e.fecha_entrega.getDate());
+
+    return { dias: [...dias].sort((a, b) => a - b) };
+  }
+
+  // ── Tiempo de estudio ────────────────────────────────────────────────────
+
+  /**
+   * Registra un latido del visor de curso para contabilizar tiempo real de estudio.
+   *
+   * Si el último latido llegó hace poco se alarga la sesión abierta; si hubo un hueco
+   * largo se abre una nueva. Así una pestaña olvidada no suma horas: el cliente deja de
+   * latir cuando la pestaña no está visible.
+   */
+  async registrarLatido(cursoGuid: string, user: JwtPayload) {
+    await this.acceso.asegurarMatricula(cursoGuid, user.sub);
+
+    const corte = new Date(Date.now() - CORTE_SESION_SEGUNDOS * 1000);
+    const abierta = await this.prisma.lms_sesion_activa.findFirst({
+      where: { usuario_guid: user.sub, curso_guid: cursoGuid, fin_sesion: { gte: corte } },
       orderBy: { fin_sesion: 'desc' },
+      select: { id: true, duracion_seg: true },
     });
 
-    if (lastSession) {
-      // Extend existing session
+    if (abierta) {
       await this.prisma.lms_sesion_activa.update({
-        where: { id: lastSession.id },
-        data: {
-          fin_sesion: new Date(),
-          duracion_seg: lastSession.duracion_seg + HEARTBEAT_INTERVAL,
-        },
+        where: { id: abierta.id },
+        data: { fin_sesion: new Date(), duracion_seg: abierta.duracion_seg + LATIDO_SEGUNDOS },
       });
     } else {
-      // Start new session
       await this.prisma.lms_sesion_activa.create({
         data: {
-          usuario_guid,
-          curso_guid,
+          usuario_guid: user.sub,
+          curso_guid: cursoGuid,
           inicio_sesion: new Date(),
           fin_sesion: new Date(),
-          duracion_seg: HEARTBEAT_INTERVAL,
+          duracion_seg: LATIDO_SEGUNDOS,
         },
       });
     }
 
-    return { ok: true };
+    return { registrado: true };
   }
 
-  /**
-   * Get total active time for a user in a course (in seconds).
-   */
-  async getTiempoActivoCurso(usuario_guid: string, curso_guid: string): Promise<number> {
-    const result = await this.prisma.lms_sesion_activa.aggregate({
-      where: { usuario_guid, curso_guid },
+  /** Segundos de estudio acumulados por el alumno en un curso. */
+  async getTiempoEnCurso(cursoGuid: string, usuarioGuid: string): Promise<number> {
+    const total = await this.prisma.lms_sesion_activa.aggregate({
+      where: { usuario_guid: usuarioGuid, curso_guid: cursoGuid },
       _sum: { duracion_seg: true },
     });
-    return result._sum.duracion_seg || 0;
+    return total._sum.duracion_seg ?? 0;
+  }
+
+  /** Notas del alumno en un curso, para su boletín. */
+  async getNotasDeCurso(cursoGuid: string, user: JwtPayload) {
+    await this.acceso.asegurarMatricula(cursoGuid, user.sub);
+
+    const entregas = await this.prisma.lms_entregas.findMany({
+      where: { usuario_guid: user.sub, estado: 'CALIFICADA', tarea: { modulo: { curso_guid: cursoGuid } } },
+      select: {
+        calificacion: true,
+        comentario_calificacion: true,
+        fecha_entrega: true,
+        tarea: { select: { guid: true, titulo: true } },
+      },
+      orderBy: { fecha_entrega: 'asc' },
+    });
+
+    return {
+      notas: entregas.map((e) => ({
+        recurso_guid: e.tarea?.guid ?? null,
+        titulo: e.tarea?.titulo ?? 'Evaluación',
+        calificacion: aNota(e.calificacion),
+        comentario: e.comentario_calificacion,
+        fecha: e.fecha_entrega,
+      })),
+      promedio: promedioNotas(entregas.map((e) => e.calificacion)),
+    };
   }
 }

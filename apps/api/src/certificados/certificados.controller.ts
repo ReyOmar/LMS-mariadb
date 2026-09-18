@@ -1,84 +1,58 @@
-import { Controller, Get, Post, Param, Body, Res, Query } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Res } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
+import type { FastifyReply } from 'fastify';
 import { CertificadosService } from './certificados.service';
+import { Public } from '../common/decorators/public.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { JwtPayload } from '../common/interfaces/jwt-payload.interface';
-import { Public } from '../common/decorators/public.decorator';
-import { FastifyReply } from 'fastify';
-import * as fs from 'fs';
+import { EmitirCertificadoDto } from './dto/emitir-certificado.dto';
 
-@Controller('estudiantes/student/certificados')
+@Controller('certificados')
 export class CertificadosController {
-  constructor(private readonly certificadosService: CertificadosService) {}
+  constructor(private readonly certificados: CertificadosService) {}
 
-  /**
-   * Generate a certificate for a completed course.
-   * Idempotent: returns existing certificate if already generated.
-   */
-  @Post('/generar')
-  async generarCertificado(
-    @CurrentUser() user: JwtPayload,
-    @Body() body: { curso_guid: string },
-    @Query('usuario_guid') usuario_guid?: string,
-  ) {
-    const guid = usuario_guid || user.sub;
-    return this.certificadosService.generarCertificado(guid, body.curso_guid);
-  }
-
-  /**
-   * Verify course completion status for a student.
-   * Must be defined BEFORE /:guid to avoid route conflict.
-   */
-  @Get('/verificar/:curso_guid')
-  async verificarCurso(
-    @Param('curso_guid') curso_guid: string,
-    @CurrentUser() user: JwtPayload,
-    @Query('usuario_guid') usuario_guid?: string,
-  ) {
-    const guid = usuario_guid || user.sub;
-    return this.certificadosService.verificarCursoCompleto(guid, curso_guid);
-  }
-
-  /**
-   * List all certificates for the authenticated student.
-   */
+  /** Certificados del alumno en sesión. */
   @Get()
-  async getCertificados(
-    @CurrentUser() user: JwtPayload,
-    @Query('usuario_guid') usuario_guid?: string,
-  ) {
-    const guid = usuario_guid || user.sub;
-    return this.certificadosService.getCertificadosEstudiante(guid);
+  getMisCertificados(@CurrentUser() user: JwtPayload) {
+    return this.certificados.getMisCertificados(user);
+  }
+
+  /** Requisitos que faltan para obtener el certificado de un curso. */
+  @Get('/finalizacion/:curso_guid')
+  comprobarFinalizacion(@CurrentUser() user: JwtPayload, @Param('curso_guid') cursoGuid: string) {
+    return this.certificados.comprobarFinalizacion(cursoGuid, user.sub);
+  }
+
+  /** Emite el certificado del alumno en sesión. Idempotente. */
+  @Post('/emitir')
+  emitir(@CurrentUser() user: JwtPayload, @Body() dto: EmitirCertificadoDto) {
+    return this.certificados.emitirParaUsuario(dto.curso_guid, user);
   }
 
   /**
-   * Download the PDF file for a certificate.
-   */
-  @Get('/:guid/pdf')
-  async downloadPDF(@Param('guid') guid: string, @Res() reply: FastifyReply) {
-    const cert = await this.certificadosService.getCertificado(guid);
-    const filePath = this.certificadosService.getArchivoPDF(cert.archivo_pdf);
-
-    const stream = fs.createReadStream(filePath);
-    reply.header('Content-Type', 'application/pdf');
-    reply.header('Content-Disposition', `attachment; filename="Certificado-${cert.curso.titulo.replace(/[^a-zA-Z0-9áéíóúñÁÉÍÓÚÑ ]/g, '')}.pdf"`);
-    return reply.send(stream);
-  }
-
-  /**
-   * Public certificate verification by verification code.
-   * No authentication required — for third-party validation.
+   * Verificación pública de autenticidad por código.
+   * Es la única ruta abierta del módulo y devuelve datos mínimos.
    */
   @Public()
-  @Get('/publico/verificar/:codigo')
-  async verificarPublico(@Param('codigo') codigo: string) {
-    return this.certificadosService.verificarPublico(codigo);
+  @Throttle({ default: { ttl: 60_000, limit: 20 } })
+  @Get('/verificar/:codigo')
+  verificar(@Param('codigo') codigo: string) {
+    return this.certificados.verificarPorCodigo(codigo);
   }
 
-  /**
-   * Get details for a specific certificate.
-   */
   @Get('/:guid')
-  async getCertificado(@Param('guid') guid: string) {
-    return this.certificadosService.getCertificado(guid);
+  getCertificado(@CurrentUser() user: JwtPayload, @Param('guid') guid: string) {
+    return this.certificados.getCertificado(guid, user);
+  }
+
+  /** Descarga del PDF. Comprueba la propiedad antes de servir el archivo. */
+  @Get('/:guid/pdf')
+  async descargarPdf(@CurrentUser() user: JwtPayload, @Param('guid') guid: string, @Res() reply: FastifyReply) {
+    const { contenido, nombre } = await this.certificados.getPdf(guid, user);
+
+    reply.header('Content-Type', 'application/pdf');
+    reply.header('Content-Disposition', `attachment; filename="${nombre.replace(/"/g, '')}"`);
+    reply.header('Cache-Control', 'private, no-store');
+    return reply.send(contenido);
   }
 }

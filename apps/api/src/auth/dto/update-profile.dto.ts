@@ -1,22 +1,26 @@
-import { IsEmail, IsNotEmpty, IsOptional, IsString, MinLength, MaxLength } from 'class-validator';
+import { IsNotEmpty, IsOptional, IsString, MaxLength } from 'class-validator';
+import { Transform } from 'class-transformer';
 
+/**
+ * Datos editables del propio perfil.
+ *
+ * El correo no está: identifica la cuenta en recuperación de contraseña y en los avisos,
+ * y cambiarlo sin re-verificar abriría una vía para apropiarse de una cuenta ajena.
+ */
 export class UpdateProfileDto {
   @IsOptional()
   @IsString()
-  @IsNotEmpty({ message: 'El nombre es obligatorio.' })
+  @IsNotEmpty({ message: 'El nombre no puede quedar vacío.' })
   @MaxLength(100)
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   nombre?: string;
 
   @IsOptional()
   @IsString()
-  @IsNotEmpty({ message: 'El apellido es obligatorio.' })
+  @IsNotEmpty({ message: 'El apellido no puede quedar vacío.' })
   @MaxLength(100)
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   apellido?: string;
-
-  @IsOptional()
-  @IsEmail({}, { message: 'El correo electrónico no es válido.' })
-  @MaxLength(255)
-  email?: string;
 
   @IsOptional()
   @IsString()
@@ -25,7 +29,6 @@ export class UpdateProfileDto {
 
   @IsOptional()
   @IsString()
-  @MinLength(8, { message: 'La nueva contraseña debe tener al menos 8 caracteres.' })
   @MaxLength(128)
   nueva_contrasena?: string;
 }

@@ -1,313 +1,252 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { LmsGateway } from '../ws/lms.gateway';
+import { RealtimeService } from '../realtime/realtime.service';
 import { NotificacionesService } from './notificaciones.service';
+import { JwtPayload } from '../common/interfaces/jwt-payload.interface';
+import { EnviarMensajeDto } from './dto/mensajes.dto';
+
+/** Mensajes que devuelve una conversación. Basta para el historial visible. */
+const LIMITE_CONVERSACION = 200;
 
 /**
- * ChatService — Manages direct messaging between users and contact approval.
- * Extracted from NotificacionesService to follow Single Responsibility Principle.
+ * Mensajería entre usuarios, con aprobación previa.
+ *
+ * Existían dos reglas declaradas pero no aplicadas: sólo se puede hablar con alguien de un
+ * curso compartido, y sólo tras aceptar la solicitud de contacto. `enviarMensaje` no
+ * consultaba ninguna de las dos, de modo que conociendo el identificador de una persona se
+ * le podía escribir directamente. Con la separación por sedes eso habría sido además una
+ * vía de contacto entre Colombia y México.
+ *
+ * Ahora ambas reglas se comprueban en el servidor, en `asegurarContactoAceptado`.
  */
 @Injectable()
 export class ChatService {
   constructor(
-    private prisma: PrismaService,
-    private lmsGateway: LmsGateway,
-    private notificacionesService: NotificacionesService,
+    private readonly prisma: PrismaService,
+    private readonly realtime: RealtimeService,
+    private readonly notificaciones: NotificacionesService,
   ) {}
 
-  /**
-   * Send a message between users and create a notification for the recipient.
-   */
-  async enviarMensaje(data: {
-    remitente_guid: string;
-    destinatario_guid: string;
-    asunto: string;
-    contenido: string;
-    ref_tipo?: string;
-    ref_guid?: string;
-  }) {
-    const mensaje = await this.prisma.lms_mensajes.create({ data });
+  // ── Mensajes ─────────────────────────────────────────────────────────────
 
-    // Look up sender name for the notification
+  /** Envía un mensaje a un contacto aceptado. */
+  async enviarMensaje(dto: EnviarMensajeDto, user: JwtPayload) {
+    if (dto.destinatario_guid === user.sub) {
+      throw new BadRequestException('No puedes enviarte mensajes a ti mismo.');
+    }
+
+    const destinatario = await this.asegurarContactoAceptado(user, dto.destinatario_guid);
+
+    const mensaje = await this.prisma.lms_mensajes.create({
+      data: {
+        remitente_guid: user.sub,
+        destinatario_guid: dto.destinatario_guid,
+        asunto: dto.asunto,
+        contenido: dto.contenido,
+        ref_tipo: dto.ref_tipo,
+        ref_guid: dto.ref_guid,
+      },
+    });
+
     const remitente = await this.prisma.usuarios.findUnique({
-      where: { guid: data.remitente_guid },
+      where: { guid: user.sub },
       select: { nombre: true, apellido: true },
     });
-    const nombreRemitente = remitente ? `${remitente.nombre} ${remitente.apellido}` : 'Usuario';
+    const nombreRemitente = remitente ? `${remitente.nombre} ${remitente.apellido}` : 'Un usuario';
 
-    // Create in-app notification for the recipient
-    await this.notificacionesService.crearNotificacion({
-      usuario_guid: data.destinatario_guid,
+    await this.notificaciones.crear({
+      usuario_guid: dto.destinatario_guid,
+      pais: destinatario.pais,
       tipo: 'MENSAJE_NUEVO',
       titulo: `Mensaje de ${nombreRemitente}`,
-      mensaje: data.asunto,
+      mensaje: dto.asunto,
       url_accion: '/dashboard/mensajes',
       ref_tipo: 'mensaje',
-      ref_guid: mensaje.id.toString(),
+      ref_guid: String(mensaje.id),
     });
 
-    // Also broadcast the message event directly
-    this.lmsGateway.broadcast('message:new', {
-      id: mensaje.id,
-      remitente_guid: data.remitente_guid,
-      remitente_nombre: nombreRemitente,
-      asunto: data.asunto,
-      contenido: data.contenido,
-      ref_tipo: data.ref_tipo,
-      ref_guid: data.ref_guid,
-      created_at: mensaje.created_at,
-    }, [data.destinatario_guid]);
+    this.realtime.emitirAUsuarios(
+      'message:new',
+      {
+        id: mensaje.id,
+        remitente_guid: user.sub,
+        remitente_nombre: nombreRemitente,
+        asunto: mensaje.asunto,
+        contenido: mensaje.contenido,
+        created_at: mensaje.created_at,
+      },
+      destinatario.pais,
+      [dto.destinatario_guid],
+    );
 
     return mensaje;
   }
 
-  /**
-   * Get conversation history between two users.
-   */
-  async getConversacion(usuario1_guid: string, usuario2_guid: string) {
-    return this.prisma.lms_mensajes.findMany({
-      where: {
-        OR: [
-          { remitente_guid: usuario1_guid, destinatario_guid: usuario2_guid },
-          { remitente_guid: usuario2_guid, destinatario_guid: usuario1_guid },
-        ],
-      },
-      orderBy: { created_at: 'asc' },
-      include: {
-        remitente: { select: { guid: true, nombre: true, apellido: true, rol: true } },
-      },
-    });
-  }
+  /** Historial con un contacto. */
+  async getConversacion(contactoGuid: string, user: JwtPayload) {
+    await this.asegurarContactoAceptado(user, contactoGuid);
 
-  /**
-   * Get list of conversations (unique contacts) for a user.
-   */
-  async getContactos(usuario_guid: string) {
     const mensajes = await this.prisma.lms_mensajes.findMany({
       where: {
         OR: [
-          { remitente_guid: usuario_guid },
-          { destinatario_guid: usuario_guid },
+          { remitente_guid: user.sub, destinatario_guid: contactoGuid },
+          { remitente_guid: contactoGuid, destinatario_guid: user.sub },
         ],
       },
-      orderBy: { created_at: 'desc' },
-      include: {
-        remitente: { select: { guid: true, nombre: true, apellido: true, rol: true } },
-        destinatario: { select: { guid: true, nombre: true, apellido: true, rol: true } },
+      orderBy: { created_at: 'asc' },
+      take: LIMITE_CONVERSACION,
+      select: {
+        id: true,
+        remitente_guid: true,
+        asunto: true,
+        contenido: true,
+        leido: true,
+        created_at: true,
       },
     });
 
-    const contactGuids = new Set<string>();
-    const contactMap = new Map<string, any>();
-    for (const m of mensajes) {
-      const otherUser = m.remitente_guid === usuario_guid ? m.destinatario : m.remitente;
-      if (!contactMap.has(otherUser.guid)) {
-        contactGuids.add(otherUser.guid);
-        contactMap.set(otherUser.guid, {
-          ...otherUser,
-          ultimo_mensaje: m.contenido,
-          ultimo_mensaje_fecha: m.created_at,
-          no_leidos: 0,
-        });
-      }
-    }
-
-    if (contactGuids.size > 0) {
-      const unreadCounts = await this.prisma.lms_mensajes.groupBy({
-        by: ['remitente_guid'],
-        where: {
-          remitente_guid: { in: Array.from(contactGuids) },
-          destinatario_guid: usuario_guid,
-          leido: false,
-        },
-        _count: { id: true },
-      });
-      for (const uc of unreadCounts) {
-        const contact = contactMap.get(uc.remitente_guid);
-        if (contact) contact.no_leidos = uc._count.id;
-      }
-    }
-
-    return Array.from(contactMap.values());
+    return mensajes.map((m) => ({ ...m, es_mio: m.remitente_guid === user.sub }));
   }
 
-  /**
-   * Mark all messages from a sender as read.
-   */
-  async marcarMensajesLeidos(remitente_guid: string, destinatario_guid: string) {
-    await this.prisma.lms_mensajes.updateMany({
-      where: { remitente_guid, destinatario_guid, leido: false },
+  async marcarConversacionLeida(contactoGuid: string, user: JwtPayload) {
+    const { count } = await this.prisma.lms_mensajes.updateMany({
+      where: { remitente_guid: contactoGuid, destinatario_guid: user.sub, leido: false },
       data: { leido: true },
     });
-    return { message: 'Mensajes marcados como leídos.' };
+    return { message: `${count} mensaje(s) marcados como leídos.` };
   }
 
-  /**
-   * Delete conversation history between two users.
-   */
-  async eliminarConversacion(usuario1_guid: string, usuario2_guid: string) {
-    await this.prisma.lms_mensajes.deleteMany({
+  /** Borra la conversación para ambas partes. */
+  async eliminarConversacion(contactoGuid: string, user: JwtPayload) {
+    const { count } = await this.prisma.lms_mensajes.deleteMany({
       where: {
         OR: [
-          { remitente_guid: usuario1_guid, destinatario_guid: usuario2_guid },
-          { remitente_guid: usuario2_guid, destinatario_guid: usuario1_guid },
+          { remitente_guid: user.sub, destinatario_guid: contactoGuid },
+          { remitente_guid: contactoGuid, destinatario_guid: user.sub },
         ],
       },
     });
-    return { message: 'Conversación eliminada.' };
+    return { message: `Conversación eliminada (${count} mensaje(s)).` };
   }
 
-  // ─── CONTACTOS DE CHAT (Aprobación mutua) ────────────
+  // ── Contactos ────────────────────────────────────────────────────────────
 
   /**
-   * Search for users in the same course(s) to start a conversation.
+   * Personas con las que el usuario comparte curso y con las que, por tanto, puede abrir
+   * una conversación. La consulta ya está acotada a la sede porque un curso pertenece a
+   * una sola sede y sólo se mira entre los cursos del propio usuario.
    */
-  async buscarContactosCurso(usuario_guid: string, search: string) {
-    const user = await this.prisma.usuarios.findUnique({
-      where: { guid: usuario_guid },
-      select: { rol: true },
+  async buscarPosiblesContactos(busqueda: string, user: JwtPayload) {
+    const cursoGuids = await this.cursosDelUsuario(user);
+    if (cursoGuids.length === 0) return [];
+
+    const termino = busqueda.trim();
+
+    const candidatos = await this.prisma.usuarios.findMany({
+      where: {
+        pais: user.pais,
+        activo: true,
+        guid: { not: user.sub },
+        OR: [
+          { matriculas: { some: { curso_guid: { in: cursoGuids }, activa: true } } },
+          { cursos_impartidos: { some: { guid: { in: cursoGuids } } } },
+        ],
+        ...(termino
+          ? {
+              OR: [
+                { nombre: { contains: termino } },
+                { apellido: { contains: termino } },
+                { email: { contains: termino } },
+              ],
+            }
+          : {}),
+      },
+      select: { guid: true, nombre: true, apellido: true, email: true, rol: true },
+      take: 50,
+      orderBy: [{ nombre: 'asc' }],
     });
-    if (!user) return [];
 
-    let courseGuids: string[] = [];
+    const relaciones = await this.prisma.lms_contacto_chat.findMany({
+      where: {
+        OR: [{ solicitante_guid: user.sub }, { receptor_guid: user.sub }],
+      },
+      select: { solicitante_guid: true, receptor_guid: true, estado: true },
+    });
 
-    if (user.rol === 'ESTUDIANTE') {
-      const matriculas = await this.prisma.lms_matriculas.findMany({
-        where: { usuario_guid },
-        select: { curso_guid: true },
-      });
-      courseGuids = matriculas.map(m => m.curso_guid);
-    } else {
-      const cursos = await this.prisma.lms_cursos.findMany({
-        where: { profesor_guid: usuario_guid },
-        select: { guid: true },
-      });
-      courseGuids = cursos.map(c => c.guid);
-      const matriculas = await this.prisma.lms_matriculas.findMany({
-        where: { usuario_guid },
-        select: { curso_guid: true },
-      });
-      courseGuids.push(...matriculas.map(m => m.curso_guid));
-    }
-
-    if (courseGuids.length === 0) return [];
-
-    const [enrolledStudents, courseProfs] = await Promise.all([
-      this.prisma.lms_matriculas.findMany({
-        where: {
-          curso_guid: { in: courseGuids },
-          usuario_guid: { not: usuario_guid },
-        },
-        select: {
-          curso_guid: true,
-          usuario: { select: { guid: true, nombre: true, apellido: true, email: true, rol: true } },
-        },
-      }),
-      this.prisma.lms_cursos.findMany({
-        where: {
-          guid: { in: courseGuids },
-          profesor_guid: { not: usuario_guid },
-        },
-        select: {
-          guid: true,
-          profesor_guid: true,
-          profesor: { select: { guid: true, nombre: true, apellido: true, email: true, rol: true } },
-        },
-      }),
-    ]);
-
-    const userMap = new Map<string, { guid: string; nombre: string; apellido: string; email: string; rol: string; cursos: string[] }>();
-    for (const m of enrolledStudents) {
-      const u = m.usuario;
-      if (!userMap.has(u.guid)) {
-        userMap.set(u.guid, { ...u, cursos: [m.curso_guid] });
-      } else {
-        userMap.get(u.guid)!.cursos.push(m.curso_guid);
-      }
-    }
-    for (const c of courseProfs) {
-      if (c.profesor_guid && c.profesor) {
-        const u = c.profesor;
-        if (!userMap.has(u.guid)) {
-          userMap.set(u.guid, { ...u, cursos: [c.guid] });
-        } else {
-          userMap.get(u.guid)!.cursos.push(c.guid);
-        }
-      }
-    }
-
-    const searchLower = search.toLowerCase();
-    const results = Array.from(userMap.values()).filter(u =>
-      `${u.nombre} ${u.apellido} ${u.email}`.toLowerCase().includes(searchLower)
+    const estadoPorContacto = new Map(
+      relaciones.map((r) => [r.solicitante_guid === user.sub ? r.receptor_guid : r.solicitante_guid, r.estado]),
     );
 
-    const existingContacts = await this.prisma.lms_contacto_chat.findMany({
-      where: {
-        OR: [
-          { solicitante_guid: usuario_guid },
-          { receptor_guid: usuario_guid },
-        ],
-      },
-    });
-
-    return results.map(u => {
-      const contact = existingContacts.find(c =>
-        (c.solicitante_guid === usuario_guid && c.receptor_guid === u.guid) ||
-        (c.receptor_guid === usuario_guid && c.solicitante_guid === u.guid)
-      );
-      return {
-        ...u,
-        contacto_estado: contact?.estado || null,
-        es_examinador: u.rol === 'PROFESOR',
-      };
-    });
+    return candidatos.map((candidato) => ({
+      ...candidato,
+      contacto_estado: estadoPorContacto.get(candidato.guid) ?? null,
+      es_examinador: candidato.rol !== 'ESTUDIANTE',
+    }));
   }
 
   /**
-   * Send a contact request to another user in a shared course.
+   * Pide contacto con alguien de un curso compartido.
+   * Escribir a un examinador del curso no necesita aprobación: es la vía por la que un
+   * alumno pide ayuda y exigir que el profesor la acepte primero la bloquearía.
    */
-  async solicitarContacto(solicitante_guid: string, receptor_guid: string, curso_guid: string) {
-    const curso = await this.prisma.lms_cursos.findUnique({
-      where: { guid: curso_guid },
-      select: { profesor_guid: true },
-    });
-    const isProfesor = curso?.profesor_guid === receptor_guid;
+  async solicitarContacto(receptorGuid: string, cursoGuid: string, user: JwtPayload) {
+    if (receptorGuid === user.sub) {
+      throw new BadRequestException('No puedes añadirte a ti mismo como contacto.');
+    }
 
-    const existing = await this.prisma.lms_contacto_chat.findFirst({
+    const curso = await this.prisma.lms_cursos.findFirst({
+      where: { guid: cursoGuid, pais: user.pais },
+      select: { guid: true, profesor_guid: true },
+    });
+    if (!curso) throw new NotFoundException('Curso no encontrado.');
+
+    const compartenCurso = await this.compartenCurso(user.sub, receptorGuid, cursoGuid);
+    if (!compartenCurso) {
+      throw new ForbiddenException('Sólo puedes contactar con personas de un curso que compartáis.');
+    }
+
+    const esExaminador = curso.profesor_guid === receptorGuid;
+    const estadoInicial = esExaminador ? 'ACEPTADO' : 'PENDIENTE';
+
+    const existente = await this.prisma.lms_contacto_chat.findFirst({
       where: {
+        curso_guid: cursoGuid,
         OR: [
-          { solicitante_guid, receptor_guid, curso_guid },
-          { solicitante_guid: receptor_guid, receptor_guid: solicitante_guid, curso_guid },
+          { solicitante_guid: user.sub, receptor_guid: receptorGuid },
+          { solicitante_guid: receptorGuid, receptor_guid: user.sub },
         ],
       },
     });
 
-    if (existing) {
-      if (existing.estado === 'RECHAZADO') {
-        return this.prisma.lms_contacto_chat.update({
-          where: { id: existing.id },
-          data: { estado: isProfesor ? 'ACEPTADO' : 'PENDIENTE', solicitante_guid, receptor_guid },
-        });
+    if (existente) {
+      if (existente.estado === 'ACEPTADO') return existente;
+      if (existente.estado === 'PENDIENTE') {
+        throw new BadRequestException('Ya hay una solicitud pendiente con esta persona.');
       }
-      return existing;
+      // Una solicitud rechazada puede reintentarse; se reinicia la dirección.
+      return this.prisma.lms_contacto_chat.update({
+        where: { id: existente.id },
+        data: { solicitante_guid: user.sub, receptor_guid: receptorGuid, estado: estadoInicial },
+      });
     }
 
     const contacto = await this.prisma.lms_contacto_chat.create({
       data: {
-        solicitante_guid,
-        receptor_guid,
-        curso_guid,
-        estado: isProfesor ? 'ACEPTADO' : 'PENDIENTE',
+        solicitante_guid: user.sub,
+        receptor_guid: receptorGuid,
+        curso_guid: cursoGuid,
+        estado: estadoInicial,
       },
     });
 
-    if (!isProfesor) {
+    if (!esExaminador) {
       const solicitante = await this.prisma.usuarios.findUnique({
-        where: { guid: solicitante_guid },
+        where: { guid: user.sub },
         select: { nombre: true, apellido: true },
       });
-      await this.notificacionesService.crearNotificacion({
-        usuario_guid: receptor_guid,
+      await this.notificaciones.crear({
+        usuario_guid: receptorGuid,
+        pais: user.pais,
         tipo: 'MENSAJE_NUEVO',
         titulo: 'Solicitud de conversación',
         mensaje: `${solicitante?.nombre} ${solicitante?.apellido} quiere iniciar una conversación contigo.`,
@@ -318,90 +257,80 @@ export class ChatService {
     return contacto;
   }
 
-  /**
-   * Accept or reject a contact request.
-   */
-  async responderContacto(receptor_guid: string, contacto_id: number, aceptar: boolean) {
+  /** Acepta o rechaza una solicitud recibida. */
+  async responderSolicitud(contactoId: number, aceptar: boolean, user: JwtPayload) {
     const contacto = await this.prisma.lms_contacto_chat.findFirst({
-      where: { id: contacto_id, receptor_guid },
+      where: { id: contactoId, receptor_guid: user.sub, estado: 'PENDIENTE' },
     });
-    if (!contacto) return null;
+    if (!contacto) throw new NotFoundException('Solicitud no encontrada.');
 
-    const updated = await this.prisma.lms_contacto_chat.update({
-      where: { id: contacto_id },
+    const actualizado = await this.prisma.lms_contacto_chat.update({
+      where: { id: contactoId },
       data: { estado: aceptar ? 'ACEPTADO' : 'RECHAZADO' },
     });
 
     if (aceptar) {
       const receptor = await this.prisma.usuarios.findUnique({
-        where: { guid: receptor_guid },
+        where: { guid: user.sub },
         select: { nombre: true, apellido: true },
       });
-      await this.notificacionesService.crearNotificacion({
+      await this.notificaciones.crear({
         usuario_guid: contacto.solicitante_guid,
+        pais: user.pais,
         tipo: 'MENSAJE_NUEVO',
         titulo: 'Solicitud aceptada',
-        mensaje: `${receptor?.nombre} ${receptor?.apellido} ha aceptado tu solicitud. Ya pueden conversar.`,
+        mensaje: `${receptor?.nombre} ${receptor?.apellido} aceptó tu solicitud. Ya podéis conversar.`,
         url_accion: '/dashboard/mensajes',
       });
     }
 
-    return updated;
+    return actualizado;
   }
 
-  /**
-   * Get pending contact requests for a user.
-   */
-  async getSolicitudesPendientes(usuario_guid: string) {
+  /** Solicitudes recibidas pendientes de respuesta. */
+  async getSolicitudesPendientes(user: JwtPayload) {
     const solicitudes = await this.prisma.lms_contacto_chat.findMany({
-      where: { receptor_guid: usuario_guid, estado: 'PENDIENTE' },
+      where: { receptor_guid: user.sub, estado: 'PENDIENTE' },
       orderBy: { created_at: 'desc' },
     });
+    if (solicitudes.length === 0) return [];
 
-    const guids = solicitudes.map(s => s.solicitante_guid);
-    const usuarios = guids.length > 0 ? await this.prisma.usuarios.findMany({
-      where: { guid: { in: guids } },
+    const usuarios = await this.prisma.usuarios.findMany({
+      where: { guid: { in: solicitudes.map((s) => s.solicitante_guid) } },
       select: { guid: true, nombre: true, apellido: true, email: true, rol: true },
-    }) : [];
+    });
+    const porGuid = new Map(usuarios.map((u) => [u.guid, u]));
 
-    const userMap = new Map(usuarios.map(u => [u.guid, u]));
-
-    return solicitudes.map(s => ({
-      ...s,
-      solicitante: userMap.get(s.solicitante_guid) || null,
+    return solicitudes.map((solicitud) => ({
+      id: solicitud.id,
+      curso_guid: solicitud.curso_guid,
+      created_at: solicitud.created_at,
+      solicitante: porGuid.get(solicitud.solicitante_guid) ?? null,
     }));
   }
 
-  /**
-   * Get approved contacts with last message and unread count.
-   */
-  async getContactosAprobados(usuario_guid: string) {
-    const contactos = await this.prisma.lms_contacto_chat.findMany({
-      where: {
-        estado: 'ACEPTADO',
-        OR: [
-          { solicitante_guid: usuario_guid },
-          { receptor_guid: usuario_guid },
-        ],
-      },
+  /** Contactos aceptados con su último mensaje y los pendientes de leer. */
+  async getContactos(user: JwtPayload) {
+    const relaciones = await this.prisma.lms_contacto_chat.findMany({
+      where: { estado: 'ACEPTADO', OR: [{ solicitante_guid: user.sub }, { receptor_guid: user.sub }] },
+      select: { solicitante_guid: true, receptor_guid: true },
     });
 
-    const contactGuids = [...new Set(contactos.map(c =>
-      c.solicitante_guid === usuario_guid ? c.receptor_guid : c.solicitante_guid
-    ))];
+    const guids = [
+      ...new Set(relaciones.map((r) => (r.solicitante_guid === user.sub ? r.receptor_guid : r.solicitante_guid))),
+    ];
+    if (guids.length === 0) return [];
 
-    if (contactGuids.length === 0) return [];
-
-    const [usuarios, allMessages, unreadCounts] = await Promise.all([
+    const [usuarios, mensajes, noLeidos] = await Promise.all([
       this.prisma.usuarios.findMany({
-        where: { guid: { in: contactGuids } },
-        select: { guid: true, nombre: true, apellido: true, email: true, rol: true },
+        where: { guid: { in: guids } },
+        select: { guid: true, nombre: true, apellido: true, rol: true, foto_url: true },
       }),
       this.prisma.lms_mensajes.findMany({
         where: {
           OR: [
-            { remitente_guid: usuario_guid, destinatario_guid: { in: contactGuids } },
-            { remitente_guid: { in: contactGuids }, destinatario_guid: usuario_guid },
+            { remitente_guid: user.sub, destinatario_guid: { in: guids } },
+            { remitente_guid: { in: guids }, destinatario_guid: user.sub },
           ],
         },
         orderBy: { created_at: 'desc' },
@@ -409,43 +338,105 @@ export class ChatService {
       }),
       this.prisma.lms_mensajes.groupBy({
         by: ['remitente_guid'],
-        where: {
-          remitente_guid: { in: contactGuids },
-          destinatario_guid: usuario_guid,
-          leido: false,
-        },
-        _count: true,
+        where: { remitente_guid: { in: guids }, destinatario_guid: user.sub, leido: false },
+        _count: { id: true },
       }),
     ]);
 
-    const unreadMap = new Map<string, number>();
-    for (const uc of unreadCounts) {
-      unreadMap.set(uc.remitente_guid, uc._count);
-    }
+    const sinLeerPor = new Map(noLeidos.map((n) => [n.remitente_guid, n._count.id]));
 
-    const lastMsgMap = new Map<string, { contenido: string; created_at: Date }>();
-    for (const msg of allMessages) {
-      const contactGuid = msg.remitente_guid === usuario_guid ? msg.destinatario_guid : msg.remitente_guid;
-      if (!lastMsgMap.has(contactGuid)) {
-        lastMsgMap.set(contactGuid, { contenido: msg.contenido, created_at: msg.created_at });
+    // Los mensajes llegan ordenados de más reciente a más antiguo, así que el primero de
+    // cada contacto es el último de la conversación.
+    const ultimoPor = new Map<string, { contenido: string; created_at: Date }>();
+    for (const mensaje of mensajes) {
+      const contacto = mensaje.remitente_guid === user.sub ? mensaje.destinatario_guid : mensaje.remitente_guid;
+      if (!ultimoPor.has(contacto)) {
+        ultimoPor.set(contacto, { contenido: mensaje.contenido, created_at: mensaje.created_at });
       }
     }
 
-    const result = usuarios.map(u => {
-      const lastMsg = lastMsgMap.get(u.guid);
-      return {
-        guid: u.guid,
-        nombre: u.nombre,
-        apellido: u.apellido,
-        rol: u.rol,
-        ultimo_mensaje: lastMsg?.contenido || '',
-        ultimo_mensaje_fecha: lastMsg?.created_at?.toISOString() || new Date().toISOString(),
-        no_leidos: unreadMap.get(u.guid) || 0,
-      };
+    return usuarios
+      .map((usuario) => ({
+        guid: usuario.guid,
+        nombre: usuario.nombre,
+        apellido: usuario.apellido,
+        rol: usuario.rol,
+        foto_url: usuario.foto_url,
+        ultimo_mensaje: ultimoPor.get(usuario.guid)?.contenido ?? '',
+        ultimo_mensaje_fecha: ultimoPor.get(usuario.guid)?.created_at ?? null,
+        no_leidos: sinLeerPor.get(usuario.guid) ?? 0,
+      }))
+      .sort((a, b) => (b.ultimo_mensaje_fecha?.getTime() ?? 0) - (a.ultimo_mensaje_fecha?.getTime() ?? 0));
+  }
+
+  // ── Comprobaciones ───────────────────────────────────────────────────────
+
+  /**
+   * Exige que exista un contacto aceptado entre ambos.
+   * De paso devuelve la sede del destinatario, necesaria para dirigirle los avisos en
+   * tiempo real.
+   */
+  private async asegurarContactoAceptado(user: JwtPayload, otroGuid: string) {
+    const destinatario = await this.prisma.usuarios.findFirst({
+      where: { guid: otroGuid, pais: user.pais, activo: true },
+      select: { guid: true, pais: true },
     });
+    if (!destinatario) throw new NotFoundException('Usuario no encontrado.');
 
-    result.sort((a, b) => new Date(b.ultimo_mensaje_fecha).getTime() - new Date(a.ultimo_mensaje_fecha).getTime());
+    const contacto = await this.prisma.lms_contacto_chat.findFirst({
+      where: {
+        estado: 'ACEPTADO',
+        OR: [
+          { solicitante_guid: user.sub, receptor_guid: otroGuid },
+          { solicitante_guid: otroGuid, receptor_guid: user.sub },
+        ],
+      },
+      select: { id: true },
+    });
+    if (!contacto) {
+      throw new ForbiddenException('Necesitáis aceptar la solicitud de contacto antes de poder escribiros.');
+    }
 
-    return result;
+    return destinatario;
+  }
+
+  /** Cursos en los que el usuario participa, como alumno o como responsable. */
+  private async cursosDelUsuario(user: JwtPayload): Promise<string[]> {
+    const [matriculas, impartidos] = await Promise.all([
+      this.prisma.lms_matriculas.findMany({
+        where: { usuario_guid: user.sub, activa: true },
+        select: { curso_guid: true },
+      }),
+      this.prisma.lms_cursos.findMany({
+        where: { profesor_guid: user.sub, pais: user.pais },
+        select: { guid: true },
+      }),
+    ]);
+
+    return [...new Set([...matriculas.map((m) => m.curso_guid), ...impartidos.map((c) => c.guid)])];
+  }
+
+  /** Comprueba que ambas personas participan en el curso indicado. */
+  private async compartenCurso(unoGuid: string, otroGuid: string, cursoGuid: string): Promise<boolean> {
+    const participantes = await this.prisma.lms_cursos.findFirst({
+      where: {
+        guid: cursoGuid,
+        OR: [
+          { profesor_guid: { in: [unoGuid, otroGuid] } },
+          { matriculas: { some: { usuario_guid: { in: [unoGuid, otroGuid] }, activa: true } } },
+        ],
+      },
+      select: {
+        profesor_guid: true,
+        matriculas: {
+          where: { usuario_guid: { in: [unoGuid, otroGuid] }, activa: true },
+          select: { usuario_guid: true },
+        },
+      },
+    });
+    if (!participantes) return false;
+
+    const dentro = new Set([participantes.profesor_guid, ...participantes.matriculas.map((m) => m.usuario_guid)]);
+    return dentro.has(unoGuid) && dentro.has(otroGuid);
   }
 }

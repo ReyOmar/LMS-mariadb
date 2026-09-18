@@ -1,18 +1,21 @@
-import { IsEmail, IsString, IsNotEmpty, MinLength, MaxLength } from 'class-validator';
+import { IsEmail, IsNotEmpty, IsString, MaxLength } from 'class-validator';
+import { Transform } from 'class-transformer';
 
 export class RequestPasswordResetDto {
   @IsEmail({}, { message: 'El correo electrónico no es válido.' })
   @MaxLength(255)
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim().toLowerCase() : value))
   email: string;
 }
 
 export class ResetPasswordDto {
   @IsString()
-  @IsNotEmpty({ message: 'El token es obligatorio.' })
+  @IsNotEmpty({ message: 'El enlace de recuperación no es válido.' })
+  @MaxLength(128)
   token: string;
 
   @IsString()
-  @MinLength(8, { message: 'La contraseña debe tener al menos 8 caracteres.' })
+  @IsNotEmpty({ message: 'La nueva contraseña es obligatoria.' })
   @MaxLength(128)
   nuevaContrasena: string;
 }

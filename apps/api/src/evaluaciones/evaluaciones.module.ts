@@ -1,16 +1,14 @@
 import { Module } from '@nestjs/common';
 import { EvaluacionesController } from './evaluaciones.controller';
 import { EvaluacionesService } from './evaluaciones.service';
-import { PrismaModule } from '../prisma/prisma.module';
-import { StorageModule } from '../storage/storage.module';
-import { NotificacionesModule } from '../notificaciones/notificaciones.module';
-import { CertificadosModule } from '../certificados/certificados.module';
 import { CursosModule } from '../cursos/cursos.module';
+import { StorageModule } from '../storage/storage.module';
+import { ConfiguracionModule } from '../configuracion/configuracion.module';
 
 @Module({
-  imports: [PrismaModule, StorageModule, NotificacionesModule, CertificadosModule, CursosModule],
+  imports: [CursosModule, StorageModule, ConfiguracionModule],
   controllers: [EvaluacionesController],
-  providers: [EvaluacionesService]
+  providers: [EvaluacionesService],
+  exports: [EvaluacionesService],
 })
 export class EvaluacionesModule {}
-

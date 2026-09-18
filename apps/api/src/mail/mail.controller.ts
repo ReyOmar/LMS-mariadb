@@ -1,36 +1,27 @@
-import { Controller, Get, Put, Body, Param, UseGuards } from '@nestjs/common';
-import { IsOptional, IsString, IsBoolean } from 'class-validator';
+import { Body, Controller, Get, Param, ParseIntPipe, Put } from '@nestjs/common';
 import { MailService } from './mail.service';
 import { Roles } from '../common/decorators/roles.decorator';
-import { RolesGuard } from '../common/guards/roles.guard';
+import { UpdateTemplateDto } from './dto/update-template.dto';
 
-export class UpdateTemplateDto {
-  @IsOptional()
-  @IsString()
-  asunto?: string;
-
-  @IsOptional()
-  @IsString()
-  cuerpo_html?: string;
-
-  @IsOptional()
-  @IsBoolean()
-  activo?: boolean;
-}
-
-@Controller('mail-templates')
-@UseGuards(RolesGuard)
+/**
+ * Plantillas de correo.
+ *
+ * Son comunes a las dos sedes: la marca (logotipo, color, nombre) se aplica al enviar
+ * según el país del destinatario, de modo que un solo texto sirve para ambas. Editarlas
+ * queda reservado al administrador.
+ */
 @Roles('ADMINISTRADOR')
+@Controller('mail-templates')
 export class MailController {
-  constructor(private readonly mailService: MailService) {}
+  constructor(private readonly mail: MailService) {}
 
-  @Get('eventos')
-  async getAllEventos() {
-    return this.mailService.getAllEventos();
+  @Get('/eventos')
+  getEventos() {
+    return this.mail.getEventos();
   }
 
-  @Put(':id')
-  async updateTemplate(@Param('id') id: string, @Body() dto: UpdateTemplateDto) {
-    return this.mailService.updateTemplate(Number(id), dto);
+  @Put('/:id')
+  actualizarPlantilla(@Param('id', ParseIntPipe) id: number, @Body() dto: UpdateTemplateDto) {
+    return this.mail.actualizarPlantilla(id, dto);
   }
 }

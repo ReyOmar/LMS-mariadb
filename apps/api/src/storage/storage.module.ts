@@ -1,12 +1,15 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { StorageService } from './storage.service';
 import { StorageController } from './storage.controller';
-import { PrismaModule } from '../prisma/prisma.module';
+import { ConfiguracionModule } from '../configuracion/configuracion.module';
 
+// La referencia diferida rompe el ciclo con configuración: el almacenamiento necesita
+// saber el límite de subida de la sede y la configuración necesita borrar los archivos
+// que reemplaza.
 @Module({
-  imports: [PrismaModule],
-  providers: [StorageService],
+  imports: [forwardRef(() => ConfiguracionModule)],
   controllers: [StorageController],
-  exports: [StorageService]
+  providers: [StorageService],
+  exports: [StorageService],
 })
 export class StorageModule {}

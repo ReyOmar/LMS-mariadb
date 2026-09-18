@@ -1,104 +1,152 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { lms_tipo_matricula } from '@prisma/client';
-import { LmsGateway } from '../ws/lms.gateway';
+import { RealtimeService } from '../realtime/realtime.service';
 import { MailService } from '../mail/mail.service';
+import { CursoAccesoService } from '../cursos/curso-acceso.service';
+import { JwtPayload } from '../common/interfaces/jwt-payload.interface';
 
+/**
+ * Matrículas de alumnos en cursos.
+ *
+ * La invariante que se defiende aquí es que **alumno y curso pertenecen a la misma sede**.
+ * Es el único punto del sistema donde podrían cruzarse los datos de Colombia y México, ya
+ * que todo lo demás (progreso, entregas, certificados) cuelga de una matrícula.
+ */
 @Injectable()
 export class MatriculasService {
   private readonly logger = new Logger(MatriculasService.name);
+
   constructor(
-    private prisma: PrismaService,
-    private lmsGateway: LmsGateway,
-    private mailService: MailService,
+    private readonly prisma: PrismaService,
+    private readonly acceso: CursoAccesoService,
+    private readonly realtime: RealtimeService,
+    private readonly mail: MailService,
   ) {}
 
-  async matricularEstudiante(curso_guid: string, usuario_guid: string) {
-    const existing = await this.prisma.lms_matriculas.findUnique({
-      where: { usuario_guid_curso_guid: { usuario_guid, curso_guid } },
-    });
-    if (existing) return existing;
+  /** Alumnos matriculados en un curso. */
+  async getMatriculados(cursoGuid: string, user: JwtPayload) {
+    await this.acceso.cursoQueGestiona(cursoGuid, user);
 
-    const result = await this.prisma.lms_matriculas.create({
-      data: { usuario_guid, curso_guid, tipo: 'MANUAL' as lms_tipo_matricula },
-    });
-
-    this.lmsGateway.broadcast('enrollment:changed', { action: 'enrolled', curso_guid, usuario_guid }, [usuario_guid]);
-    this.lmsGateway.broadcast('dashboard:refresh', { reason: 'enrollment_changed' }, [usuario_guid]);
-    this.lmsGateway.broadcastToRole('dashboard:refresh', { reason: 'enrollment_changed' }, 'ADMINISTRADOR');
-
-    // Fire-and-forget: Send enrollment email notification
-    (async () => {
-      try {
-        const [student, course] = await Promise.all([
-          this.prisma.usuarios.findUnique({ where: { guid: usuario_guid }, select: { email: true, nombre: true } }),
-          this.prisma.lms_cursos.findUnique({ where: { guid: curso_guid }, select: { titulo: true } }),
-        ]);
-        if (student && course) {
-          this.mailService
-            .sendEnrollmentNotification(student.email, student.nombre, course.titulo, curso_guid)
-            .catch(() => {});
-        }
-      } catch (err) {
-        this.logger.error('Enrollment email error:', err);
-      }
-    })();
-
-    return result;
-  }
-
-  async desmatricularEstudiante(curso_guid: string, usuario_guid: string) {
-    const result = await this.prisma.lms_matriculas.delete({
-      where: { usuario_guid_curso_guid: { usuario_guid, curso_guid } },
-    });
-
-    this.lmsGateway.broadcast('enrollment:changed', { action: 'unenrolled', curso_guid, usuario_guid }, [usuario_guid]);
-    this.lmsGateway.broadcast('dashboard:refresh', { reason: 'enrollment_changed' }, [usuario_guid]);
-    this.lmsGateway.broadcastToRole('dashboard:refresh', { reason: 'enrollment_changed' }, 'ADMINISTRADOR');
-
-    return result;
-  }
-
-  async getMatriculasCurso(curso_guid: string) {
-    return this.prisma.lms_matriculas.findMany({
-      where: { curso_guid },
-      include: {
-        usuario: { select: { guid: true, nombre: true, apellido: true, email: true } },
+    const matriculas = await this.prisma.lms_matriculas.findMany({
+      where: { curso_guid: cursoGuid },
+      select: {
+        activa: true,
+        fecha_matricula: true,
+        usuario: { select: { guid: true, nombre: true, apellido: true, email: true, ultimo_acceso: true } },
       },
-      take: 1000,
+      orderBy: { fecha_matricula: 'desc' },
     });
+
+    return matriculas.map((m) => ({ ...m.usuario, activa: m.activa, fecha_matricula: m.fecha_matricula }));
   }
 
-  async getEstudiantesDisponibles() {
+  /** Alumnos de la sede que todavía no están en el curso. */
+  async getCandidatos(cursoGuid: string, user: JwtPayload) {
+    await this.acceso.cursoQueGestiona(cursoGuid, user);
+
     return this.prisma.usuarios.findMany({
-      where: { rol: 'ESTUDIANTE' },
+      where: {
+        pais: user.pais,
+        rol: 'ESTUDIANTE',
+        activo: true,
+        matriculas: { none: { curso_guid: cursoGuid } },
+      },
       select: { guid: true, nombre: true, apellido: true, email: true },
+      orderBy: [{ nombre: 'asc' }, { apellido: 'asc' }],
     });
   }
 
-  async seedMatriculas() {
-    // COD-07: Guard against accidental execution in production
-    if (process.env.NODE_ENV === 'production') {
-      throw new Error('seedMatriculas no está disponible en producción.');
+  /**
+   * Matricula a un alumno.
+   * Comprueba la sede del alumno, su rol y el cupo del curso antes de crear la matrícula.
+   */
+  async matricular(cursoGuid: string, alumnoGuid: string, user: JwtPayload) {
+    const curso = await this.acceso.cursoQueGestiona(cursoGuid, user);
+
+    const alumno = await this.prisma.usuarios.findFirst({
+      where: { guid: alumnoGuid, pais: user.pais, rol: 'ESTUDIANTE', activo: true },
+      select: { guid: true, email: true, nombre: true },
+    });
+    if (!alumno) {
+      throw new BadRequestException('El alumno debe ser un estudiante activo de tu misma sede.');
     }
 
-    const estudiantes = await this.prisma.usuarios.findMany({ where: { rol: 'ESTUDIANTE' } });
-    const cursos = await this.prisma.lms_cursos.findMany({ where: { estado: 'PUBLICADO' } });
+    const yaMatriculado = await this.prisma.lms_matriculas.findUnique({
+      where: { usuario_guid_curso_guid: { usuario_guid: alumnoGuid, curso_guid: cursoGuid } },
+      select: { id: true, activa: true },
+    });
+    if (yaMatriculado?.activa) {
+      throw new ConflictException('Este alumno ya está matriculado en el curso.');
+    }
 
-    let count = 0;
-    for (const est of estudiantes) {
-      for (const curso of cursos) {
-        const existing = await this.prisma.lms_matriculas.findUnique({
-          where: { usuario_guid_curso_guid: { usuario_guid: est.guid, curso_guid: curso.guid } },
+    await this.comprobarCupo(cursoGuid);
+
+    const matricula = yaMatriculado
+      ? await this.prisma.lms_matriculas.update({
+          where: { id: yaMatriculado.id },
+          data: { activa: true, fecha_baja: null, fecha_matricula: new Date() },
+        })
+      : await this.prisma.lms_matriculas.create({
+          data: { usuario_guid: alumnoGuid, curso_guid: cursoGuid, tipo: 'MANUAL' },
         });
-        if (!existing) {
-          await this.prisma.lms_matriculas.create({
-            data: { usuario_guid: est.guid, curso_guid: curso.guid, tipo: 'MANUAL' as lms_tipo_matricula },
-          });
-          count++;
-        }
-      }
+
+    this.realtime.emitirAUsuarios(
+      'enrollment:changed',
+      { accion: 'matriculado', curso_guid: cursoGuid, curso_titulo: curso.titulo },
+      user.pais,
+      [alumnoGuid],
+    );
+    this.realtime.emitirARol('dashboard:refresh', { motivo: 'matricula' }, user.pais, 'ADMINISTRADOR');
+
+    void this.mail
+      .sendEnrollmentNotification(alumno.email, alumno.nombre, curso.titulo, cursoGuid, user.pais)
+      .catch((error) => this.logger.error('No se pudo avisar de la matrícula', error));
+
+    return matricula;
+  }
+
+  /**
+   * Da de baja a un alumno conservando su historial.
+   *
+   * No se borra la fila: el progreso, las entregas y los certificados cuelgan de ella y
+   * eliminarla destruiría el registro documental de una capacitación ya realizada.
+   */
+  async darDeBaja(cursoGuid: string, alumnoGuid: string, user: JwtPayload) {
+    await this.acceso.cursoQueGestiona(cursoGuid, user);
+
+    const matricula = await this.prisma.lms_matriculas.findUnique({
+      where: { usuario_guid_curso_guid: { usuario_guid: alumnoGuid, curso_guid: cursoGuid } },
+      select: { id: true, activa: true },
+    });
+    if (!matricula) throw new NotFoundException('Este alumno no está matriculado en el curso.');
+    if (!matricula.activa) throw new BadRequestException('Esta matrícula ya está dada de baja.');
+
+    await this.prisma.lms_matriculas.update({
+      where: { id: matricula.id },
+      data: { activa: false, fecha_baja: new Date() },
+    });
+
+    this.realtime.emitirAUsuarios('enrollment:changed', { accion: 'baja', curso_guid: cursoGuid }, user.pais, [
+      alumnoGuid,
+    ]);
+    this.realtime.emitirARol('dashboard:refresh', { motivo: 'matricula' }, user.pais, 'ADMINISTRADOR');
+
+    return { message: 'Matrícula dada de baja. El historial del alumno se conserva.' };
+  }
+
+  /** Impide superar el cupo declarado del curso. */
+  private async comprobarCupo(cursoGuid: string): Promise<void> {
+    const curso = await this.prisma.lms_cursos.findUnique({
+      where: { guid: cursoGuid },
+      select: { max_estudiantes: true },
+    });
+    if (!curso?.max_estudiantes) return;
+
+    const matriculados = await this.prisma.lms_matriculas.count({ where: { curso_guid: cursoGuid, activa: true } });
+    if (matriculados >= curso.max_estudiantes) {
+      throw new BadRequestException(
+        `El curso ha alcanzado su cupo máximo de ${curso.max_estudiantes} estudiantes. Amplíalo desde la ficha del curso para poder matricular a más.`,
+      );
     }
-    return { matriculas_creadas: count };
   }
 }

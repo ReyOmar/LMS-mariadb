@@ -1,202 +1,215 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-import { lms_tipo_recurso } from '@prisma/client';
+import { StorageService } from '../storage/storage.service';
+import { CursoAccesoService } from './curso-acceso.service';
+import { validarConfiguracionQuiz } from './quiz-config';
+import { JwtPayload } from '../common/interfaces/jwt-payload.interface';
+import { CreateBloqueDto, UpdateBloqueDto } from './dto/bloques.dto';
+import { CreateModuloDto, UpdateModuloDto } from './dto/cursos.dto';
 
 /**
- * BloqueService — Manages course content blocks (recursos) and modules.
- * Extracted from CursosService to follow Single Responsibility Principle.
+ * Contenido de un curso: módulos y los recursos que cuelgan de ellos.
  *
- * Performance: Validation helpers use combined queries to minimize round-trips.
+ * La jerarquía es `curso → módulo → recurso`. Antes había una capa intermedia,
+ * `lms_lecciones`, de la que cada módulo creaba exactamente una instancia artificial
+ * llamada «Lección Interna Módulo <guid>». No aportaba nada: sumaba un JOIN a cada lectura
+ * y un `flatMap` anidado a cada recorrido, y hacía que el modelo del código no coincidiera
+ * con el modelo mental de quien usa la aplicación. Se eliminó y los recursos cuelgan
+ * directamente del módulo.
+ *
+ * Todas las operaciones exigen que el curso esté en BORRADOR: un curso publicado tiene
+ * alumnos avanzando por él y cambiarle el contenido invalidaría su progreso.
  */
 @Injectable()
 export class BloqueService {
-  constructor(private prisma: PrismaService) {}
+  private readonly logger = new Logger(BloqueService.name);
 
-  /**
-   * Combined validation: checks course exists, is BORRADOR, and ownership in ONE query.
-   * Replaces the old 3-query pattern (ensureDraft + ensureOwnership + find).
-   */
-  private assertDraftAndOwnership(curso: { estado: string; profesor_guid: string } | null, requestUser?: any): void {
-    if (!curso) throw new NotFoundException('Curso no encontrado');
-    if (curso.estado !== 'BORRADOR') {
-      throw new BadRequestException('El curso debe estar en estado Borrador para realizar cambios.');
-    }
-    if (requestUser?.role === 'PROFESOR' && curso.profesor_guid !== requestUser.sub) {
-      throw new BadRequestException('Solo puedes modificar cursos asignados a ti.');
-    }
-  }
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly acceso: CursoAccesoService,
+    private readonly storage: StorageService,
+  ) {}
 
-  async createModuloParaCurso(curso_guid: string, data: { titulo: string; orden?: number }, requestUser?: any) {
-    // Single query: fetch course + validate
-    const curso = await this.prisma.lms_cursos.findUnique({
-      where: { guid: curso_guid },
-      select: { estado: true, profesor_guid: true },
-    });
-    this.assertDraftAndOwnership(curso, requestUser);
+  // ── Módulos ──────────────────────────────────────────────────────────────
 
-    const orden = data.orden ?? (await this.prisma.lms_modulos.count({ where: { curso_guid } }));
+  async crearModulo(cursoGuid: string, dto: CreateModuloDto, user: JwtPayload) {
+    await this.acceso.cursoEditable(cursoGuid, user);
 
-    return this.prisma.$transaction(async (tx) => {
-      const modulo = await tx.lms_modulos.create({
-        data: { curso_guid, titulo: data.titulo, orden },
-      });
-
-      await tx.lms_lecciones.create({
-        data: { modulo_guid: modulo.guid, titulo: 'Lección Interna Módulo ' + modulo.guid, orden: 0 },
-      });
-
-      return modulo;
+    const orden = dto.orden ?? (await this.prisma.lms_modulos.count({ where: { curso_guid: cursoGuid } }));
+    return this.prisma.lms_modulos.create({
+      data: { curso_guid: cursoGuid, titulo: dto.titulo, orden },
     });
   }
 
-  async updateModulo(modulo_guid: string, data: { titulo: string }, requestUser?: any) {
-    // Single query: fetch module + course state + ownership
-    const modulo = await this.prisma.lms_modulos.findUnique({
-      where: { guid: modulo_guid },
-      select: { curso_guid: true, curso: { select: { estado: true, profesor_guid: true } } },
-    });
-    if (!modulo) throw new NotFoundException('Módulo no encontrado');
-    this.assertDraftAndOwnership(modulo.curso, requestUser);
+  async actualizarModulo(moduloGuid: string, dto: UpdateModuloDto, user: JwtPayload) {
+    const curso = await this.acceso.cursoDeModulo(moduloGuid, user.pais);
+    await this.acceso.cursoEditable(curso.guid, user);
 
     return this.prisma.lms_modulos.update({
-      where: { guid: modulo_guid },
-      data: { titulo: data.titulo },
-    });
-  }
-
-  async getBloque(guid: string) {
-    const bloque = await this.prisma.lms_recursos.findUnique({
-      where: { guid },
-    });
-    if (!bloque) throw new NotFoundException('Recurso no encontrado');
-    return bloque;
-  }
-
-  async addBloqueToModulo(
-    modulo_guid: string,
-    data: { tipo: lms_tipo_recurso; contenido_html?: string; titulo?: string },
-    requestUser?: any,
-  ) {
-    // Single query: fetch module + lessons + course validation data
-    const modulo = await this.prisma.lms_modulos.findUnique({
-      where: { guid: modulo_guid },
-      include: {
-        lecciones: { select: { guid: true }, take: 1, orderBy: { orden: 'asc' } },
-        curso: { select: { estado: true, profesor_guid: true } },
+      where: { guid: moduloGuid },
+      data: {
+        ...(dto.titulo !== undefined && { titulo: dto.titulo }),
+        ...(dto.descripcion !== undefined && { descripcion: dto.descripcion }),
+        ...(dto.requiere_anterior !== undefined && { requiere_anterior: dto.requiere_anterior }),
       },
     });
+  }
 
-    if (!modulo) throw new NotFoundException('Módulo no encontrado');
-    this.assertDraftAndOwnership(modulo.curso, requestUser);
+  /** Elimina un módulo y, con él, sus recursos y los archivos que tuvieran adjuntos. */
+  async eliminarModulo(moduloGuid: string, user: JwtPayload) {
+    const curso = await this.acceso.cursoDeModulo(moduloGuid, user.pais);
+    await this.acceso.cursoEditable(curso.guid, user);
 
-    if (!modulo.lecciones || modulo.lecciones.length === 0) {
-      throw new BadRequestException('Módulo corrupto sin lección interna base.');
-    }
+    const adjuntos = await this.prisma.lms_recursos.findMany({
+      where: { modulo_guid: moduloGuid, archivo_adjunto: { not: null } },
+      select: { archivo_adjunto: true },
+    });
 
-    const leccion_guid = modulo.lecciones[0].guid;
-    const count = await this.prisma.lms_recursos.count({ where: { leccion_guid } });
+    await this.prisma.lms_modulos.delete({ where: { guid: moduloGuid } });
+    void this.borrarArchivos(adjuntos.map((r) => r.archivo_adjunto));
 
+    return { message: 'Módulo eliminado.' };
+  }
+
+  /** Reordena los módulos de un curso según la lista recibida. */
+  async reordenarModulos(cursoGuid: string, guids: string[], user: JwtPayload) {
+    await this.acceso.cursoEditable(cursoGuid, user);
+    await this.reordenar('lms_modulos', { curso_guid: cursoGuid }, guids);
+    return { message: 'Orden actualizado.' };
+  }
+
+  // ── Recursos ─────────────────────────────────────────────────────────────
+
+  async crearRecurso(moduloGuid: string, dto: CreateBloqueDto, user: JwtPayload) {
+    const curso = await this.acceso.cursoDeModulo(moduloGuid, user.pais);
+    await this.acceso.cursoEditable(curso.guid, user);
+
+    const orden = await this.prisma.lms_recursos.count({ where: { modulo_guid: moduloGuid } });
     return this.prisma.lms_recursos.create({
       data: {
-        leccion_guid,
-        titulo: data.titulo || 'Bloque',
-        tipo: data.tipo,
-        contenido_html: data.contenido_html,
-        orden: count,
-        obligatorio: true,
+        modulo_guid: moduloGuid,
+        titulo: dto.titulo || 'Nuevo bloque',
+        tipo: dto.tipo,
+        contenido_html: dto.contenido_html,
+        orden,
       },
     });
   }
 
-  async updateBloque(
-    guid: string,
-    data: {
-      titulo?: string;
-      contenido_html?: string;
-      url_archivo?: string;
-      url_referencia?: string;
-      archivo_adjunto?: string;
-      archivo_adjunto_nombre?: string;
-      quiz_config?: string;
-      archivo_max_size_mb?: number;
-    },
-    requestUser?: any,
-  ) {
-    // Single query: fetch resource + course state via joins
-    const recurso = await this.prisma.lms_recursos.findUnique({
-      where: { guid },
-      select: {
-        guid: true,
-        leccion: { select: { modulo: { select: { curso: { select: { estado: true, profesor_guid: true } } } } } },
-      },
-    });
-    if (!recurso) throw new NotFoundException('Recurso no encontrado');
-    this.assertDraftAndOwnership(recurso.leccion.modulo.curso, requestUser);
+  /** Ficha de un recurso para el editor, con la configuración completa del cuestionario. */
+  async getRecurso(recursoGuid: string, user: JwtPayload) {
+    const curso = await this.acceso.cursoDeRecurso(recursoGuid, user.pais);
+    await this.acceso.cursoQueGestiona(curso.guid, user);
 
-    return this.prisma.lms_recursos.update({
-      where: { guid },
+    const recurso = await this.prisma.lms_recursos.findUnique({ where: { guid: recursoGuid } });
+    if (!recurso) throw new NotFoundException('Recurso no encontrado.');
+    return recurso;
+  }
+
+  /**
+   * Actualiza un recurso.
+   * La configuración del cuestionario se valida antes de guardarla: así el error aparece
+   * en el editor, donde se puede corregir, y no delante del alumno al empezar el examen.
+   */
+  async actualizarRecurso(recursoGuid: string, dto: UpdateBloqueDto, user: JwtPayload) {
+    const curso = await this.acceso.cursoDeRecurso(recursoGuid, user.pais);
+    await this.acceso.cursoEditable(curso.guid, user);
+
+    if (dto.quiz_config) validarConfiguracionQuiz(dto.quiz_config);
+
+    const anterior = await this.prisma.lms_recursos.findUnique({
+      where: { guid: recursoGuid },
+      select: { archivo_adjunto: true, url_archivo: true },
+    });
+
+    const actualizado = await this.prisma.lms_recursos.update({
+      where: { guid: recursoGuid },
       data: {
-        titulo: data.titulo,
-        contenido_html: data.contenido_html,
-        url_archivo: data.url_archivo,
-        url_referencia: data.url_referencia,
-        archivo_adjunto: data.archivo_adjunto,
-        archivo_adjunto_nombre: data.archivo_adjunto_nombre,
-        quiz_config: data.quiz_config,
-        archivo_max_size_mb: data.archivo_max_size_mb,
+        ...(dto.titulo !== undefined && { titulo: dto.titulo }),
+        ...(dto.contenido_html !== undefined && { contenido_html: dto.contenido_html }),
+        ...(dto.url_archivo !== undefined && { url_archivo: dto.url_archivo }),
+        ...(dto.url_referencia !== undefined && { url_referencia: dto.url_referencia }),
+        ...(dto.archivo_adjunto !== undefined && { archivo_adjunto: dto.archivo_adjunto }),
+        ...(dto.archivo_adjunto_nombre !== undefined && { archivo_adjunto_nombre: dto.archivo_adjunto_nombre }),
+        ...(dto.quiz_config !== undefined && { quiz_config: dto.quiz_config }),
+        ...(dto.archivo_max_size_mb !== undefined && { archivo_max_size_mb: dto.archivo_max_size_mb }),
+        ...(dto.tiempo_lectura !== undefined && { tiempo_lectura: dto.tiempo_lectura }),
       },
     });
+
+    // Los archivos que quedan sustituidos se borran después de guardar: si el borrado
+    // falla, el recurso ya está bien y sólo sobra un archivo que recogerá el mantenimiento.
+    void this.borrarArchivos([
+      this.reemplazado(anterior?.archivo_adjunto, dto.archivo_adjunto),
+      this.reemplazado(anterior?.url_archivo, dto.url_archivo),
+    ]);
+
+    return actualizado;
   }
 
-  async deleteBloque(guid: string, requestUser?: any) {
-    // Single query: fetch resource + course state via joins
+  async eliminarRecurso(recursoGuid: string, user: JwtPayload) {
+    const curso = await this.acceso.cursoDeRecurso(recursoGuid, user.pais);
+    await this.acceso.cursoEditable(curso.guid, user);
+
     const recurso = await this.prisma.lms_recursos.findUnique({
-      where: { guid },
-      select: {
-        guid: true,
-        leccion: { select: { modulo: { select: { curso: { select: { estado: true, profesor_guid: true } } } } } },
-      },
+      where: { guid: recursoGuid },
+      select: { archivo_adjunto: true, url_archivo: true },
     });
-    if (!recurso) throw new NotFoundException('Recurso no encontrado');
-    this.assertDraftAndOwnership(recurso.leccion.modulo.curso, requestUser);
 
-    return this.prisma.lms_recursos.delete({ where: { guid } });
+    await this.prisma.lms_recursos.delete({ where: { guid: recursoGuid } });
+    void this.borrarArchivos([recurso?.archivo_adjunto, recurso?.url_archivo]);
+
+    return { message: 'Bloque eliminado.' };
   }
 
-  async reorderBloques(modulo_guid: string, recursos_guids: string[], requestUser?: any) {
-    // Single query: module + course validation
-    const modulo = await this.prisma.lms_modulos.findUnique({
-      where: { guid: modulo_guid },
-      select: {
-        curso_guid: true,
-        curso: { select: { estado: true, profesor_guid: true } },
-        lecciones: { select: { guid: true }, take: 1 },
-      },
-    });
-    if (!modulo || !modulo.lecciones || modulo.lecciones.length === 0) {
-      throw new NotFoundException('Módulo o lección no encontrada.');
+  async reordenarRecursos(moduloGuid: string, guids: string[], user: JwtPayload) {
+    const curso = await this.acceso.cursoDeModulo(moduloGuid, user.pais);
+    await this.acceso.cursoEditable(curso.guid, user);
+
+    await this.reordenar('lms_recursos', { modulo_guid: moduloGuid }, guids);
+    return { message: 'Orden actualizado.' };
+  }
+
+  // ── Utilidades ───────────────────────────────────────────────────────────
+
+  /**
+   * Aplica un nuevo orden dentro de un contenedor.
+   * Filtra los identificadores que no pertenezcan al contenedor: una lista manipulada no
+   * puede reordenar elementos de otro curso.
+   */
+  private async reordenar(
+    tabla: 'lms_modulos' | 'lms_recursos',
+    filtro: Record<string, string>,
+    guids: string[],
+  ): Promise<void> {
+    const delegado = this.prisma[tabla] as unknown as {
+      findMany(args: unknown): Promise<{ guid: string }[]>;
+      update(args: unknown): Prisma.PrismaPromise<unknown>;
+    };
+
+    const existentes = await delegado.findMany({ where: filtro, select: { guid: true } });
+    const permitidos = new Set(existentes.map((e) => e.guid));
+    const orden = guids.filter((guid) => permitidos.has(guid));
+    if (orden.length === 0) return;
+
+    await this.prisma.$transaction(
+      orden.map((guid, indice) => delegado.update({ where: { guid }, data: { orden: indice } })),
+    );
+  }
+
+  /** Devuelve la clave anterior sólo si el campo se está sustituyendo por otra distinta. */
+  private reemplazado(anterior: string | null | undefined, nuevo: string | null | undefined): string | null {
+    if (nuevo === undefined || !anterior || anterior === nuevo) return null;
+    return anterior;
+  }
+
+  private async borrarArchivos(claves: (string | null | undefined)[]): Promise<void> {
+    for (const clave of claves) {
+      if (!clave) continue;
+      await this.storage
+        .deleteFile(clave)
+        .catch((error) => this.logger.warn(`No se pudo borrar el archivo ${clave}`, error));
     }
-    this.assertDraftAndOwnership(modulo.curso, requestUser);
-
-    const queries = recursos_guids.map((guid, index) => {
-      return this.prisma.lms_recursos.update({
-        where: { guid },
-        data: { orden: index },
-      });
-    });
-
-    return this.prisma.$transaction(queries);
-  }
-
-  async deleteModulo(guid: string, requestUser?: any) {
-    // Single query: module + course validation
-    const modulo = await this.prisma.lms_modulos.findUnique({
-      where: { guid },
-      select: { curso_guid: true, curso: { select: { estado: true, profesor_guid: true } } },
-    });
-    if (!modulo) throw new NotFoundException('Módulo no encontrado');
-    this.assertDraftAndOwnership(modulo.curso, requestUser);
-
-    return this.prisma.lms_modulos.delete({ where: { guid } });
   }
 }
