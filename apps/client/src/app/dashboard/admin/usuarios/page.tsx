@@ -23,9 +23,9 @@ import {
 import { PageLoader } from '@/components/ui/PageLoader';
 import { useRole } from '@/contexts/RoleContext';
 import Link from 'next/link';
-import api, { resolveFileUrl } from '@/lib/api';
+import api, { mensajeDeError, urlDeMarca } from '@/lib/api';
 import { useAlert } from '@/contexts/AlertContext';
-import { useWS } from '@/contexts/WebSocketContext';
+import { useEventoRealtime, useRealtime } from '@/contexts/RealtimeContext';
 
 interface Usuario {
   guid: string;
@@ -35,6 +35,9 @@ interface Usuario {
   rol: string;
   activo: boolean;
   usa_clave_defecto?: boolean;
+  /** Cursos de los que la cuenta es responsable; impide borrarla sin traspasarlos. */
+  cursos_impartidos?: number;
+  matriculas?: number;
   created_at: string;
   ultimo_acceso?: string | null;
   foto_url?: string | null;
@@ -51,8 +54,24 @@ interface CursoAsignado {
 
 type TabType = 'ADMINISTRADOR' | 'PROFESOR' | 'ESTUDIANTE';
 
+/** Candidato a heredar los cursos de una cuenta que se elimina. */
+interface Destino {
+  guid: string;
+  nombre: string;
+  apellido: string;
+  email: string;
+  rol: string;
+}
+
+interface EstadoDeTraspaso {
+  usuario: Usuario;
+  destinos: Destino[];
+  destinoElegido: string;
+  cargando: boolean;
+}
+
 export default function BaseUsuarios() {
-  const { realRole, user } = useRole();
+  const { rolReal, user } = useRole();
   const [usuarios, setUsuarios] = useState<Usuario[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedUser, setSelectedUser] = useState<Usuario | null>(null);
@@ -62,7 +81,7 @@ export default function BaseUsuarios() {
   const [activeTab, setActiveTab] = useState<TabType>('PROFESOR');
   const [searchQuery, setSearchQuery] = useState('');
   const { showAlert, showConfirm, showToast } = useAlert();
-  const { subscribe, onlineUsers } = useWS();
+  const { usuariosEnLinea } = useRealtime();
 
   // Create admin modal state
   const [showCreate, setShowCreate] = useState(false);
@@ -70,56 +89,25 @@ export default function BaseUsuarios() {
   const [creating, setCreating] = useState(false);
   const [defaultPassword, setDefaultPassword] = useState('');
 
-  useEffect(() => {
-    if (realRole === 'admin') {
-      fetchUsuarios();
-      // Fetch the default password to use for new admin accounts
-      api
-        .get('/configuracion/full')
-        .then((res) => setDefaultPassword(res.data?.contrasena_defecto || 'pesvauth2026'))
-        .catch(() => setDefaultPassword('pesvauth2026'));
-    }
-  }, [realRole]);
+  // Diálogo para decidir a quién pasan los cursos de una cuenta que se va a eliminar.
+  const [traspaso, setTraspaso] = useState<EstadoDeTraspaso | null>(null);
 
   useEffect(() => {
-    if (realRole !== 'admin') return;
+    if (rolReal !== 'admin') return;
 
-    // Auto-refresh user list when new users are created or deleted via WS
-    const unsub1 = subscribe('user:created', fetchUsuarios);
-    const unsub2 = subscribe('user:deleted', fetchUsuarios);
-    const unsub_updated = subscribe('user:updated', () => {
-      fetchUsuarios();
-      if (selectedUser) {
-        // Also refresh selected user profile? Actually just fetchUsuarios will update the list
-        // and selectedUser is just state. Let's rely on dashboard:refresh for deep refresh.
-      }
-    });
-    const unsub4 = subscribe('dashboard:refresh', () => {
-      fetchUsuarios();
-      if (selectedUser) {
-        api
-          .get(`/cursos/usuario-cursos?usuario_guid=${selectedUser.guid}&rol=${selectedUser.rol}`)
-          .then((res) => setUserCourses(Array.isArray(res.data) ? res.data : []))
-          .catch(console.error);
-        if (selectedUser.rol === 'ADMINISTRADOR') {
-          api
-            .get('/auth/admin-stats')
-            .then((res) => setAdminStats(res.data))
-            .catch(console.error);
-        }
-      }
-    });
-    // Re-fetch users when presence changes so ultimo_acceso is fresh from the DB
-    const unsub_presence = subscribe('presence:update', fetchUsuarios);
+    fetchUsuarios();
+    // La clave temporal con la que se crean las cuentas nuevas la define la sede.
+    api
+      .get('/configuracion/full')
+      .then((res) => setDefaultPassword(res.data?.contrasena_defecto ?? ''))
+      .catch(() => setDefaultPassword(''));
+  }, [rolReal]);
 
-    return () => {
-      unsub1();
-      unsub2();
-      unsub_updated();
-      unsub4();
-      unsub_presence();
-    };
-  }, [realRole, subscribe, selectedUser]);
+  useEventoRealtime('user:created', () => fetchUsuarios());
+  useEventoRealtime('user:deleted', () => fetchUsuarios());
+  useEventoRealtime('user:updated', () => fetchUsuarios());
+  // La presencia cambia `ultimo_acceso`, así que conviene releer la lista.
+  useEventoRealtime('presence:update', () => fetchUsuarios());
 
   // Tick every 60s to re-render relative time labels ("Hace X min")
   const [, setTick] = useState(0);
@@ -146,7 +134,7 @@ export default function BaseUsuarios() {
     setAdminStats(null);
 
     try {
-      const res = await api.get(`/cursos/usuario-cursos?usuario_guid=${user.guid}&rol=${user.rol}`);
+      const res = await api.get(`/cursos/usuario/${user.guid}`);
       const data = res.data;
       setUserCourses(Array.isArray(data) ? data : []);
 
@@ -163,7 +151,7 @@ export default function BaseUsuarios() {
   };
 
   const renderUltimoAcceso = (guid: string, d: string | null | undefined) => {
-    const isOnline = onlineUsers.includes(guid);
+    const isOnline = usuariosEnLinea.includes(guid);
 
     if (isOnline) {
       return (
@@ -214,27 +202,52 @@ export default function BaseUsuarios() {
     );
   };
 
-  const handleDeleteUser = async (guid: string) => {
-    // Prevent admin from deleting their own account
-    if (guid === user?.guid) {
-      showAlert.warning('Operación no permitida', 'No puedes eliminar tu propia cuenta mientras estás autenticado.');
+  /**
+   * Elimina una cuenta.
+   *
+   * Si tiene cursos asignados hay que decir antes a quién pasan: la relación del curso con
+   * su responsable es obligatoria en la base de datos, de modo que borrar sin traspasar ya
+   * no arrastra los cursos por cascada como ocurría antes.
+   */
+  const handleDeleteUser = async (usuario: Usuario) => {
+    if (usuario.guid === user?.guid) {
+      showAlert.warning('Operación no permitida', 'No puedes eliminar tu propia cuenta.');
       return;
     }
 
-    const isConfirmed = await showConfirm(
-      '¿Eliminar cuenta?',
-      'Esta acción es permanente. Si el usuario es estudiante, perderá todo su progreso. Si es examinador o administrador, sus cursos creados permanecerán en el sistema.',
+    if ((usuario.cursos_impartidos ?? 0) > 0) {
+      setTraspaso({ usuario, destinos: [], destinoElegido: '', cargando: true });
+      try {
+        const { data } = await api.get(`/auth/usuarios/${usuario.guid}/destinos-cursos`);
+        const destinos: Destino[] = Array.isArray(data) ? data : [];
+        setTraspaso({ usuario, destinos, destinoElegido: destinos[0]?.guid ?? '', cargando: false });
+      } catch (error) {
+        setTraspaso(null);
+        showAlert.error('No se pudo preparar la eliminación', mensajeDeError(error));
+      }
+      return;
+    }
+
+    const confirmado = await showConfirm(
+      `¿Eliminar la cuenta de ${usuario.nombre} ${usuario.apellido}?`,
+      'Se borrarán su progreso, sus entregas y sus certificados. No se puede deshacer. Si sólo quieres impedirle el acceso, desactiva la cuenta en su lugar.',
     );
+    if (!confirmado) return;
 
-    if (!isConfirmed) return;
+    await eliminarCuenta(usuario.guid);
+  };
 
+  const eliminarCuenta = async (guid: string, destinoCursos?: string) => {
     try {
-      await api.delete(`/auth/usuarios/${guid}`);
-      showToast.success('Cuenta eliminada exitosamente.');
+      await api.delete(`/auth/usuarios/${guid}`, {
+        params: destinoCursos ? { destino_cursos: destinoCursos } : undefined,
+      });
+      showToast.success('Cuenta eliminada.');
       setSelectedUser(null);
+      setTraspaso(null);
       fetchUsuarios();
-    } catch (err: any) {
-      showAlert.error('Error', err.response?.data?.message || 'Error al eliminar la cuenta');
+    } catch (error) {
+      showAlert.error('No se pudo eliminar', mensajeDeError(error));
     }
   };
 
@@ -244,7 +257,7 @@ export default function BaseUsuarios() {
     return matchesSearch && matchesTab;
   });
 
-  if (realRole !== 'admin') {
+  if (rolReal !== 'admin') {
     return (
       <div className="flex flex-col items-center justify-center h-[70vh] animate-in fade-in">
         <ShieldAlert className="h-16 w-16 text-red-500 mb-4" />
@@ -369,7 +382,7 @@ export default function BaseUsuarios() {
                           <div className="h-8 w-8 rounded-full shrink-0 overflow-hidden">
                             {user.foto_url ? (
                               <img
-                                src={resolveFileUrl(user.foto_url) || ''}
+                                src={urlDeMarca(user.foto_url) || ''}
                                 alt=""
                                 className="h-full w-full object-cover"
                               />
@@ -442,7 +455,7 @@ export default function BaseUsuarios() {
                 >
                   <div className="h-10 w-10 rounded-full shrink-0 overflow-hidden">
                     {user.foto_url ? (
-                      <img src={resolveFileUrl(user.foto_url) || ''} alt="" className="h-full w-full object-cover" />
+                      <img src={urlDeMarca(user.foto_url) || ''} alt="" className="h-full w-full object-cover" />
                     ) : (
                       <div
                         className={`h-full w-full flex items-center justify-center text-white font-bold text-sm ${user.rol === 'ADMINISTRADOR' ? 'bg-red-500' : user.rol === 'PROFESOR' ? 'bg-blue-500' : 'bg-emerald-500'}`}
@@ -499,7 +512,7 @@ export default function BaseUsuarios() {
                 <div className="h-12 w-12 rounded-full shrink-0 overflow-hidden">
                   {selectedUser.foto_url ? (
                     <img
-                      src={resolveFileUrl(selectedUser.foto_url) || ''}
+                      src={urlDeMarca(selectedUser.foto_url) || ''}
                       alt=""
                       className="h-full w-full object-cover"
                     />
@@ -523,7 +536,7 @@ export default function BaseUsuarios() {
               </div>
               <div className="flex items-center gap-2">
                 <button
-                  onClick={() => handleDeleteUser(selectedUser.guid)}
+                  onClick={() => handleDeleteUser(selectedUser)}
                   className="p-2 hover:bg-red-500/10 hover:text-red-500 rounded-xl transition-colors text-muted-foreground"
                   title="Eliminar cuenta"
                 >
@@ -784,7 +797,7 @@ export default function BaseUsuarios() {
                   }
                   setCreating(true);
                   try {
-                    await api.post('/auth/usuarios/crear', {
+                    await api.post('/auth/usuarios', {
                       ...createForm,
                       rol: 'ADMINISTRADOR',
                       contrasena_temporal: defaultPassword,
@@ -795,8 +808,8 @@ export default function BaseUsuarios() {
                     setShowCreate(false);
                     setCreateForm({ nombre: '', apellido: '', email: '' });
                     fetchUsuarios();
-                  } catch (err: any) {
-                    showAlert.error('Error', err.response?.data?.message || 'Error al crear el administrador.');
+                  } catch (error) {
+                    showAlert.error('No se pudo crear la cuenta', mensajeDeError(error));
                   } finally {
                     setCreating(false);
                   }
@@ -806,6 +819,67 @@ export default function BaseUsuarios() {
               >
                 {creating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Shield className="h-4 w-4" />}
                 Registrar Admin
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Traspaso de cursos antes de eliminar una cuenta responsable de alguno. */}
+      {traspaso && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <div className="w-full max-w-md rounded-3xl border border-border bg-card p-6 shadow-2xl">
+            <h3 className="text-lg font-bold mb-2">
+              Traspasar los cursos de {traspaso.usuario.nombre} {traspaso.usuario.apellido}
+            </h3>
+            <p className="text-sm text-muted-foreground mb-5 leading-relaxed">
+              Esta cuenta es responsable de {traspaso.usuario.cursos_impartidos} curso(s). Antes de eliminarla, elige
+              quién se hará cargo de ellos: los cursos, sus alumnos y sus entregas se conservan.
+            </p>
+
+            {traspaso.cargando ? (
+              <p className="text-sm text-muted-foreground">Buscando destinos disponibles…</p>
+            ) : traspaso.destinos.length === 0 ? (
+              <p className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-700 dark:text-amber-400">
+                No hay ninguna otra cuenta activa de examinador o administrador en esta sede a la que traspasar los
+                cursos. Crea una antes de eliminar esta.
+              </p>
+            ) : (
+              <label className="block">
+                <span className="text-xs font-bold text-muted-foreground uppercase tracking-wider">
+                  Nuevo responsable
+                </span>
+                <select
+                  value={traspaso.destinoElegido}
+                  onChange={(evento) =>
+                    setTraspaso((actual) => (actual ? { ...actual, destinoElegido: evento.target.value } : actual))
+                  }
+                  className="mt-2 h-11 w-full rounded-xl border border-border bg-background px-3 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                >
+                  {traspaso.destinos.map((destino) => (
+                    <option key={destino.guid} value={destino.guid}>
+                      {destino.nombre} {destino.apellido} · {destino.email}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+
+            <div className="mt-6 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setTraspaso(null)}
+                className="h-10 rounded-xl border border-border px-4 text-sm font-bold hover:bg-muted transition-colors"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                disabled={traspaso.cargando || !traspaso.destinoElegido}
+                onClick={() => eliminarCuenta(traspaso.usuario.guid, traspaso.destinoElegido)}
+                className="h-10 rounded-xl bg-destructive px-5 text-sm font-bold text-white hover:bg-destructive/90 disabled:opacity-50 transition-colors"
+              >
+                Traspasar y eliminar
               </button>
             </div>
           </div>

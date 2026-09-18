@@ -6,6 +6,7 @@ import { MailService } from '../mail/mail.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { CursoAccesoService } from './curso-acceso.service';
 import { parsearConfiguracionQuiz, sinRespuestas } from './quiz-config';
+import { recursoParaElCliente } from './recurso.vista';
 import { Pais } from '../common/domain/pais';
 import { JwtPayload } from '../common/interfaces/jwt-payload.interface';
 import { CreateCursoDto, UpdateCursoDto } from './dto/cursos.dto';
@@ -106,7 +107,15 @@ export class CursosService {
    */
   async getCursoParaGestion(cursoGuid: string, user: JwtPayload) {
     await this.acceso.cursoQueGestiona(cursoGuid, user);
-    return this.cargarCursoConContenido(cursoGuid);
+    const curso = await this.cargarCursoConContenido(cursoGuid);
+
+    return {
+      ...curso,
+      modulos: curso.modulos.map((modulo) => ({
+        ...modulo,
+        recursos: modulo.recursos.map((recurso) => recursoParaElCliente(recurso, this.storage)),
+      })),
+    };
   }
 
   /**
@@ -132,7 +141,7 @@ export class CursosService {
       modulos: completo.modulos.map((modulo) => ({
         ...modulo,
         recursos: modulo.recursos.map((recurso) => ({
-          ...recurso,
+          ...recursoParaElCliente(recurso, this.storage),
           quiz_config: this.quizConfigParaAlumno(recurso.quiz_config, recurso.guid),
         })),
       })),

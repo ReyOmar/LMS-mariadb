@@ -1,6 +1,6 @@
 'use client';
 
-import React, { createContext, useContext, useState, useCallback, useRef, useEffect, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useCallback, useMemo, useRef, useEffect, ReactNode } from 'react';
 import { AlertTriangle, CheckCircle, Info, XCircle, X } from 'lucide-react';
 
 let toastIdCounter = 0;
@@ -119,26 +119,21 @@ export function AlertProvider({ children }: { children: ReactNode }) {
     setAlert({ open: true, type, title, message: message || '', autoClose: resolvedAutoClose });
   }, []);
 
-  const showAlertObj = {
-    success: useCallback(
-      (title: string, message?: string, autoClose?: number | false) =>
+  // El objeto se memoriza: si cambiara de identidad en cada render, cualquier efecto o
+  // `useCallback` que lo tenga como dependencia se repetiría en bucle.
+  const showAlertObj = useMemo(
+    () => ({
+      success: (title: string, message?: string, autoClose?: number | false) =>
         displayAlert('success', title, message, autoClose),
-      [displayAlert],
-    ),
-    error: useCallback(
-      (title: string, message?: string, autoClose?: number | false) => displayAlert('error', title, message, autoClose),
-      [displayAlert],
-    ),
-    warning: useCallback(
-      (title: string, message?: string, autoClose?: number | false) =>
+      error: (title: string, message?: string, autoClose?: number | false) =>
+        displayAlert('error', title, message, autoClose),
+      warning: (title: string, message?: string, autoClose?: number | false) =>
         displayAlert('warning', title, message, autoClose),
-      [displayAlert],
-    ),
-    info: useCallback(
-      (title: string, message?: string, autoClose?: number | false) => displayAlert('info', title, message, autoClose),
-      [displayAlert],
-    ),
-  };
+      info: (title: string, message?: string, autoClose?: number | false) =>
+        displayAlert('info', title, message, autoClose),
+    }),
+    [displayAlert],
+  );
 
   const dismissToast = useCallback((id: number) => {
     setToasts((prev) => prev.map((t) => (t.id === id ? { ...t, closing: true } : t)));
@@ -181,12 +176,15 @@ export function AlertProvider({ children }: { children: ReactNode }) {
     [dismissToast],
   );
 
-  const showToastObj = {
-    success: useCallback((title: string, message?: string) => addToast('success', title, message), [addToast]),
-    error: useCallback((title: string, message?: string) => addToast('error', title, message), [addToast]),
-    warning: useCallback((title: string, message?: string) => addToast('warning', title, message), [addToast]),
-    info: useCallback((title: string, message?: string) => addToast('info', title, message), [addToast]),
-  };
+  const showToastObj = useMemo(
+    () => ({
+      success: (title: string, message?: string) => addToast('success', title, message),
+      error: (title: string, message?: string) => addToast('error', title, message),
+      warning: (title: string, message?: string) => addToast('warning', title, message),
+      info: (title: string, message?: string) => addToast('info', title, message),
+    }),
+    [addToast],
+  );
 
   const showConfirm = useCallback(
     (
@@ -307,8 +305,13 @@ export function AlertProvider({ children }: { children: ReactNode }) {
 
   const confirmColors = getConfirmColors(confirm.variant);
 
+  const valorDelContexto = useMemo(
+    () => ({ showAlert: showAlertObj, showToast: showToastObj, showConfirm }),
+    [showAlertObj, showToastObj, showConfirm],
+  );
+
   return (
-    <AlertContext.Provider value={{ showAlert: showAlertObj, showToast: showToastObj, showConfirm }}>
+    <AlertContext.Provider value={valorDelContexto}>
       {children}
 
       {/* Alert Modal */}

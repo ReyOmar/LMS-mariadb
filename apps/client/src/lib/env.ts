@@ -1,58 +1,60 @@
 /**
- * Runtime environment validation for the client.
- * Validates that required environment variables are set and have valid formats.
- * Automatically infers production API URL when deployed if build-time env defaults to localhost.
+ * Resolución de la URL de la API.
+ *
+ * `NEXT_PUBLIC_API_URL` se incrusta en tiempo de compilación, lo que obliga a rehacer el
+ * build para cada dominio. Para no depender de eso en cPanel, cuando la variable apunta a
+ * localhost pero la página se sirve desde un dominio real, la URL se deduce del propio
+ * host: así el mismo artefacto vale para cualquier despliegue.
+ *
+ * Antes esta deducción estaba repetida en tres sitios con reglas distintas (aquí, en el
+ * layout del servidor y en el contexto de WebSocket, que además reescribía el protocolo
+ * con expresiones regulares). Ahora es este único punto.
  */
 
-function validateUrl(value: string, name: string): void {
-  try {
-    new URL(value);
-  } catch {
-    throw new Error(
-      `❌ ENV ERROR: ${name}="${value}" is not a valid URL. ` +
-      `Expected format: http://localhost:3200/api or https://your-domain.com/api`
-    );
-  }
+/** Prefijos de host y el prefijo equivalente de la API. */
+const EQUIVALENCIAS: readonly { prefijo: string; api: string }[] = [
+  { prefijo: 'lms.', api: 'api-lms.' },
+  { prefijo: 'lms-', api: 'api-lms-' },
+  { prefijo: 'campus.', api: 'api-campus.' },
+];
+
+const POR_DEFECTO = 'http://localhost:3200/api';
+
+function esLocal(host: string): boolean {
+  return host === 'localhost' || host === '127.0.0.1' || host.endsWith('.local');
 }
 
-export function validateEnv(): { apiUrl: string } {
-  let apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3200/api';
-
-  if (typeof window !== 'undefined') {
-    const isLocalhost =
-      window.location.hostname === 'localhost' ||
-      window.location.hostname === '127.0.0.1';
-
-    // If running in browser in production but build-time env hardcoded localhost
-    if (!isLocalhost && (apiUrl.includes('localhost') || apiUrl.includes('127.0.0.1'))) {
-      const protocol = window.location.protocol;
-      const hostname = window.location.hostname;
-
-      if (hostname.startsWith('lms.')) {
-        apiUrl = `${protocol}//${hostname.replace(/^lms\./, 'api-lms.')}/api`;
-      } else if (hostname.startsWith('lms-')) {
-        apiUrl = `${protocol}//${hostname.replace(/^lms-/, 'api-lms-')}/api`;
-      } else {
-        apiUrl = `${protocol}//api.${hostname}/api`;
-      }
-    }
-  }
-
-  // Validate URL format
-  validateUrl(apiUrl, 'NEXT_PUBLIC_API_URL');
-
-  return { apiUrl };
+function apiDeducida(protocolo: string, host: string): string {
+  const equivalencia = EQUIVALENCIAS.find((e) => host.startsWith(e.prefijo));
+  const hostApi = equivalencia ? host.replace(equivalencia.prefijo, equivalencia.api) : `api.${host}`;
+  return `${protocolo}//${hostApi}/api`;
 }
 
-// Singleton — validated once, reused everywhere
-let _env: ReturnType<typeof validateEnv> | null = null;
+/**
+ * URL base de la API, sin barra final.
+ * Se calcula en cada llamada en el navegador porque el host sólo se conoce allí; en el
+ * servidor se usa tal cual la variable de entorno.
+ */
+export function apiUrl(): string {
+  const configurada = (process.env.NEXT_PUBLIC_API_URL || POR_DEFECTO).replace(/\/+$/, '');
 
-export function getEnv() {
-  if (typeof window !== 'undefined') {
-    return validateEnv();
+  if (typeof window === 'undefined') return configurada;
+
+  const apuntaALocal = configurada.includes('localhost') || configurada.includes('127.0.0.1');
+  if (apuntaALocal && !esLocal(window.location.hostname)) {
+    return apiDeducida(window.location.protocol, window.location.hostname);
   }
-  if (!_env) {
-    _env = validateEnv();
-  }
-  return _env;
+
+  return configurada;
+}
+
+/** URL absoluta de un recurso de la API a partir de una ruta relativa (`/storage/...`). */
+export function urlAbsoluta(ruta: string): string {
+  if (!ruta) return '';
+  if (ruta.startsWith('http://') || ruta.startsWith('https://')) return ruta;
+
+  const base = apiUrl();
+  // Las rutas firmadas por la API ya vienen con el prefijo `/api`.
+  const origen = base.replace(/\/api$/, '');
+  return `${origen}${ruta.startsWith('/') ? '' : '/'}${ruta}`;
 }

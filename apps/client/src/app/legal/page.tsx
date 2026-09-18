@@ -3,9 +3,11 @@
 import { ArrowLeft, Shield } from "lucide-react";
 import Link from "next/link";
 import { useConfig } from "@/contexts/ConfigContext";
+import { useSede } from "@/contexts/SedeContext";
 
 export default function LegalPage() {
   const { config } = useConfig();
+  const { nombre: nombreSede } = useSede();
   const platformName = config?.nombre_plataforma || "PESV Education";
 
   const defaultTerminos = `Bienvenido a ${platformName}. Al acceder y utilizar nuestra plataforma de capacitación y certificación, aceptas estar sujeto a estos términos y condiciones. Todo el contenido educativo, evaluaciones y recursos disponibles en esta plataforma son propiedad intelectual exclusiva o están licenciados a nuestra organización.\n\nEl usuario se compromete a hacer un uso adecuado de los contenidos y servicios ofrecidos, no empleándolos para incurrir en actividades ilícitas o contrarias a la buena fe y al orden público.`;
@@ -38,29 +40,40 @@ export default function LegalPage() {
       <main className="flex-1 py-16 px-6">
         <div className="max-w-3xl mx-auto">
           <h1 className="text-3xl md:text-5xl font-black mb-8">Información Legal y Privacidad</h1>
-          <p className="text-muted-foreground text-lg mb-12">
+          <p className="text-muted-foreground text-lg mb-4">
             Última actualización: {new Date().toLocaleDateString('es-ES')}
           </p>
+          {nombreSede && (
+            <p className="mb-12 rounded-xl border border-border bg-muted/40 px-4 py-3 text-sm text-muted-foreground">
+              Estos textos corresponden a la sede de <strong className="text-foreground">{nombreSede}</strong>. Cada
+              sede se rige por la normativa de su país y publica sus propias condiciones.
+            </p>
+          )}
 
-          <section className="mb-12">
-            <h2 className="text-2xl font-bold mb-4">1. Términos de Uso</h2>
+          <section id="terminos" className="mb-12 scroll-mt-24">
+            <h2 className="text-2xl font-bold mb-4">1. Términos de uso</h2>
             <p className="text-muted-foreground leading-relaxed whitespace-pre-line">{terminos}</p>
           </section>
 
-          <section className="mb-12">
-            <h2 className="text-2xl font-bold mb-4">2. Política de Privacidad</h2>
+          <section id="privacidad" className="mb-12 scroll-mt-24">
+            <h2 className="text-2xl font-bold mb-4">2. Política de privacidad</h2>
             <p className="text-muted-foreground leading-relaxed whitespace-pre-line">{privacidad}</p>
           </section>
 
-          <section className="mb-12">
-            <h2 className="text-2xl font-bold mb-4">3. Protección de Datos (Habeas Data)</h2>
+          <section id="datos" className="mb-12 scroll-mt-24">
+            <h2 className="text-2xl font-bold mb-4">3. Protección de datos</h2>
             <p className="text-muted-foreground leading-relaxed whitespace-pre-line">{datos}</p>
           </section>
 
-          <section>
-            <h2 className="text-2xl font-bold mb-4">4. Emisión de Certificados</h2>
+          <section id="certificados" className="scroll-mt-24">
+            <h2 className="text-2xl font-bold mb-4">4. Emisión de certificados</h2>
             <p className="text-muted-foreground leading-relaxed">
-              Los certificados emitidos por la plataforma contienen un código de verificación único que garantiza su autenticidad. La falsificación o alteración de estos documentos constituye una violación a estos términos y puede acarrear sanciones legales.
+              Los certificados emitidos por la plataforma llevan un código de verificación único. Cualquiera puede
+              comprobar su autenticidad en{' '}
+              <Link href="/verificar" className="font-bold text-primary hover:underline">
+                la página de verificación
+              </Link>
+              . La falsificación o alteración de estos documentos constituye una violación de estos términos.
             </p>
           </section>
         </div>

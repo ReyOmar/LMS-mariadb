@@ -19,7 +19,7 @@ import {
   Trash2,
 } from 'lucide-react';
 import { useRole } from '@/contexts/RoleContext';
-import { useWS } from '@/contexts/WebSocketContext';
+import { useEventoRealtime } from '@/contexts/RealtimeContext';
 import api from '@/lib/api';
 import { PageLoader } from '@/components/ui/PageLoader';
 import { useAlert } from '@/contexts/AlertContext';
@@ -67,7 +67,6 @@ interface PendingRequest {
 
 export default function MensajesPage() {
   const { user } = useRole();
-  const { subscribe } = useWS();
   const { showConfirm } = useAlert();
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -92,7 +91,7 @@ export default function MensajesPage() {
 
   const fetchContacts = useCallback(async () => {
     try {
-      const res = await api.get('/notificaciones/chat/contactos');
+      const res = await api.get('/notificaciones/mensajes/contactos');
       setContacts(res.data || []);
     } catch (err) {
       console.error(err);
@@ -103,7 +102,7 @@ export default function MensajesPage() {
 
   const fetchPendingRequests = useCallback(async () => {
     try {
-      const res = await api.get('/notificaciones/chat/solicitudes');
+      const res = await api.get('/notificaciones/mensajes/solicitudes');
       setPendingRequests(res.data || []);
     } catch {}
   }, []);
@@ -113,38 +112,37 @@ export default function MensajesPage() {
     fetchPendingRequests();
   }, [fetchContacts, fetchPendingRequests]);
 
-  // Listen for new messages in real-time
-  useEffect(() => {
-    if (!user?.guid) return;
-    const unsub = subscribe('message:new', (data: any) => {
-      fetchContacts();
-      if (selectedContact && data.remitente_guid === selectedContact.guid) {
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: data.id,
-            contenido: data.contenido,
-            asunto: data.asunto,
-            created_at: data.created_at,
-            remitente: {
-              guid: data.remitente_guid,
-              nombre: data.remitente_nombre?.split(' ')[0] || '',
-              apellido: data.remitente_nombre?.split(' ').slice(1).join(' ') || '',
-              rol: '',
-            },
-          },
-        ]);
-        api.patch(`/notificaciones/mensajes/${data.remitente_guid}/leer`).catch(() => {});
-      }
-    });
-    const unsub2 = subscribe('notification:new', () => {
-      fetchPendingRequests();
-    });
-    return () => {
-      unsub();
-      unsub2();
+  // Un mensaje entrante se añade a la conversación abierta sin recargarla entera.
+  useEventoRealtime('message:new', (datos) => {
+    const mensaje = datos as {
+      id: number;
+      remitente_guid: string;
+      remitente_nombre?: string;
+      asunto: string;
+      contenido: string;
+      created_at: string;
     };
-  }, [user?.guid, subscribe, selectedContact, fetchContacts, fetchPendingRequests]);
+
+    fetchContacts();
+    if (!selectedContact || mensaje.remitente_guid !== selectedContact.guid) return;
+
+    const [nombre = '', ...resto] = (mensaje.remitente_nombre ?? '').split(' ');
+    setMessages((previos) => [
+      ...previos,
+      {
+        id: mensaje.id,
+        contenido: mensaje.contenido,
+        asunto: mensaje.asunto,
+        created_at: mensaje.created_at,
+        remitente: { guid: mensaje.remitente_guid, nombre, apellido: resto.join(' '), rol: '' },
+      },
+    ]);
+
+    // Ya está a la vista: se marca como leído para que el contador no crezca.
+    void api.patch(`/notificaciones/mensajes/${mensaje.remitente_guid}/leer`).catch(() => undefined);
+  });
+
+  useEventoRealtime('notification:new', () => fetchPendingRequests());
 
   // Scroll to bottom on new messages
   useEffect(() => {
@@ -223,7 +221,7 @@ export default function MensajesPage() {
     setUserSearch(term);
     setSearching(true);
     try {
-      const res = await api.get(`/notificaciones/chat/buscar?q=${encodeURIComponent(term)}`);
+      const res = await api.get('/notificaciones/mensajes/buscar', { params: { q: term } });
       setSearchResults(res.data || []);
     } catch {
       setSearchResults([]);
@@ -235,7 +233,7 @@ export default function MensajesPage() {
   // Send contact request
   const sendContactRequest = async (receptor_guid: string, curso_guid: string) => {
     try {
-      await api.post('/notificaciones/chat/solicitar', { receptor_guid, curso_guid });
+      await api.post('/notificaciones/mensajes/solicitudes', { receptor_guid, curso_guid });
       // Refresh search results to update status
       handleSearch(userSearch);
       fetchContacts();
@@ -245,7 +243,7 @@ export default function MensajesPage() {
   // Respond to a contact request
   const respondToRequest = async (id: number, aceptar: boolean) => {
     try {
-      await api.patch(`/notificaciones/chat/responder/${id}`, { aceptar });
+      await api.patch(`/notificaciones/mensajes/solicitudes/${id}`, { aceptar });
       setPendingRequests((prev) => prev.filter((r) => r.id !== id));
       if (aceptar) fetchContacts();
     } catch {}

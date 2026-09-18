@@ -1,47 +1,38 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { BookOpen, ArrowRight, Loader2, AlertTriangle } from "lucide-react";
 import { PageLoader } from "@/components/ui/PageLoader";
 import { useRouter } from "next/navigation";
 import { useRole } from "@/contexts/RoleContext";
-import { useWS } from "@/contexts/WebSocketContext";
-import api, { API_BASE_URL } from "@/lib/api";
+import { useEventoRealtime, useRealtime } from "@/contexts/RealtimeContext";
+import api, { urlDeMarca } from "@/lib/api";
 
 export default function StudentCursosActivos() {
   const { user } = useRole();
   const router = useRouter();
   const [cursos, setCursos] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  const { subscribe, maintenanceCourses } = useWS();
+  const { cursosEnMantenimiento } = useRealtime();
 
-  const fetchCursos = async () => {
+  const fetchCursos = useCallback(async () => {
     try {
-      const res = await api.get('/cursos');
-      const data = res.data;
+      const { data } = await api.get('/cursos');
       setCursos(Array.isArray(data) ? data : []);
-    } catch (err) {
-      console.error(err);
+    } catch (error) {
+      console.error('No se pudieron cargar los cursos', error);
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
-    if (!user?.guid) return;
-    
-    fetchCursos();
+    if (user?.guid) void fetchCursos();
+  }, [user?.guid, fetchCursos]);
 
-    const unsub1 = subscribe('course:updated', fetchCursos);
-    const unsub2 = subscribe('dashboard:refresh', fetchCursos);
-    const unsub3 = subscribe('enrollment:changed', fetchCursos);
-    
-    return () => {
-      unsub1();
-      unsub2();
-      unsub3();
-    };
-  }, [user?.guid, subscribe]);
+  useEventoRealtime('course:updated', fetchCursos);
+  useEventoRealtime('course:maintenance', fetchCursos);
+  useEventoRealtime('enrollment:changed', fetchCursos);
 
   return (
     <div className="animate-in slide-in-from-bottom-4 duration-700">
@@ -61,7 +52,7 @@ export default function StudentCursosActivos() {
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {cursos.map(curso => {
-                const isInMaintenance = !!maintenanceCourses[curso.guid] || curso.estado === 'BORRADOR';
+                const isInMaintenance = !!cursosEnMantenimiento[curso.guid] || curso.estado === 'BORRADOR';
                 return (
                 <div 
                   key={curso.guid} 
@@ -89,7 +80,7 @@ export default function StudentCursosActivos() {
                     <div className="h-32 bg-primary/10 relative flex items-center justify-center overflow-hidden">
                         {curso.imagen_portada ? (
                            // eslint-disable-next-line @next/next/no-img-element
-                           <img src={`${API_BASE_URL}/storage/download/${curso.imagen_portada}`} alt={curso.titulo} className="w-full h-full object-cover opacity-80 group-hover:opacity-100 transition-opacity" />
+                           <img src={urlDeMarca(curso.imagen_portada) ?? ''} alt={curso.titulo} className="w-full h-full object-cover opacity-80 group-hover:opacity-100 transition-opacity" />
                         ) : (
                            <BookOpen className="h-12 w-12 text-primary/30 group-hover:scale-110 transition-transform" />
                         )}

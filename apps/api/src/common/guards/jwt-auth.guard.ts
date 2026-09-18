@@ -99,7 +99,7 @@ export class JwtAuthGuard implements CanActivate, OnModuleDestroy {
 
     const cuenta = await this.prisma.usuarios.findUnique({
       where: { guid: payload.sub },
-      select: { guid: true, email: true, activo: true, rol: true, pais: true },
+      select: { guid: true, email: true, activo: true, rol: true, pais: true, sesion_actual_jti: true },
     });
 
     if (!cuenta) {
@@ -107,6 +107,12 @@ export class JwtAuthGuard implements CanActivate, OnModuleDestroy {
     }
     if (!cuenta.activo) {
       throw new UnauthorizedException('Tu cuenta ha sido desactivada.');
+    }
+
+    // Una sola sesión por cuenta: si alguien entró después desde otro dispositivo, este
+    // token deja de valer. Se distingue del resto de casos para poder explicárselo.
+    if (cuenta.sesion_actual_jti && payload.jti !== cuenta.sesion_actual_jti) {
+      throw new UnauthorizedException('Tu sesión se cerró porque iniciaste sesión en otro dispositivo.');
     }
 
     this.marcarAcceso(cuenta.guid);

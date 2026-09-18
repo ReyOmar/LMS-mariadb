@@ -230,6 +230,9 @@ export class ConfiguracionService implements OnModuleInit {
   /**
    * Firma de un usuario. El `pais` acota la búsqueda: pedir la firma de alguien de otra
    * sede devuelve "no encontrado", igual que si el usuario no existiera.
+   *
+   * La imagen sale como URL firmada y caducable: una firma digital no puede quedar
+   * accesible para cualquiera que conserve el enlace.
    */
   async getFirma(usuarioGuid: string, pais?: Pais) {
     const usuario = await this.prisma.usuarios.findFirst({
@@ -237,10 +240,14 @@ export class ConfiguracionService implements OnModuleInit {
       select: { firma_url: true, firma_nombre: true, firma_cargo: true, nombre: true, apellido: true },
     });
     if (!usuario) throw new NotFoundException('Usuario no encontrado.');
-    return usuario;
+
+    return { ...usuario, firma_url: usuario.firma_url ? this.storage.urlDeDescarga(usuario.firma_url) : null };
   }
 
-  /** Guarda la firma del examinador y retira del almacenamiento la imagen anterior. */
+  /**
+   * Guarda la firma del examinador y retira del almacenamiento la imagen anterior.
+   * `firma_url` llega como clave de almacenamiento, tal y como la devolvió la subida.
+   */
   async updateFirma(usuarioGuid: string, dto: UpdateFirmaDto) {
     const actual = await this.prisma.usuarios.findUnique({
       where: { guid: usuarioGuid },
@@ -260,7 +267,10 @@ export class ConfiguracionService implements OnModuleInit {
         .catch((error) => this.logger.warn(`No se pudo borrar la firma anterior ${actual.firma_url}`, error));
     }
 
-    return actualizado;
+    return {
+      ...actualizado,
+      firma_url: actualizado.firma_url ? this.storage.urlDeDescarga(actualizado.firma_url) : null,
+    };
   }
 
   /** Firma del examinador responsable de un curso, para previsualizar el certificado. */
@@ -275,6 +285,13 @@ export class ConfiguracionService implements OnModuleInit {
       },
     });
     if (!curso) throw new NotFoundException('Curso no encontrado.');
-    return curso;
+
+    return {
+      ...curso,
+      profesor: {
+        ...curso.profesor,
+        firma_url: curso.profesor.firma_url ? this.storage.urlDeDescarga(curso.profesor.firma_url) : null,
+      },
+    };
   }
 }

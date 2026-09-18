@@ -1,21 +1,20 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Check, X, ShieldAlert, Clock, KeyRound, Eye, EyeOff, Save, Loader2 } from 'lucide-react';
 import { PageLoader } from '@/components/ui/PageLoader';
 import { useRole } from '@/contexts/RoleContext';
 import Link from 'next/link';
-import api from '@/lib/api';
+import api, { mensajeDeError } from '@/lib/api';
 import { useAlert } from '@/contexts/AlertContext';
-import { useWS } from '@/contexts/WebSocketContext';
+import { useEventoRealtime } from '@/contexts/RealtimeContext';
 
 export default function SolicitudesPendientes() {
-  const { realRole } = useRole();
+  const { rolReal } = useRole();
   const [solicitudes, setSolicitudes] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [processing, setProcessing] = useState<number | null>(null);
   const { showAlert } = useAlert();
-  const { subscribe } = useWS();
 
   // Default password state
   const [defaultPassword, setDefaultPassword] = useState('');
@@ -24,52 +23,40 @@ export default function SolicitudesPendientes() {
   const [savingPassword, setSavingPassword] = useState(false);
   const [passwordSaved, setPasswordSaved] = useState(false);
 
-  useEffect(() => {
-    if (realRole === 'admin') {
-      fetchSolicitudes();
-      fetchDefaultPassword();
-    }
-  }, [realRole]);
-
-  useEffect(() => {
-    if (realRole !== 'admin') return;
-
-    // Subscribe to new requests or resolutions to auto-update the list
-    const unsub1 = subscribe('request:new', fetchSolicitudes);
-    const unsub2 = subscribe('request:resolved', fetchSolicitudes);
-
-    return () => {
-      unsub1();
-      unsub2();
-    };
-  }, [realRole, subscribe]);
-
-  const fetchSolicitudes = async () => {
+  const fetchSolicitudes = useCallback(async () => {
     try {
-      const res = await api.get('/auth/solicitudes');
-      const data = res.data;
-      setSolicitudes(data);
-    } catch (err) {
-      console.error(err);
+      const { data } = await api.get('/auth/solicitudes');
+      setSolicitudes(Array.isArray(data) ? data : []);
+    } catch (error) {
+      showAlert.error('No se pudo cargar', mensajeDeError(error));
     } finally {
       setLoading(false);
     }
-  };
+  }, [showAlert]);
 
-  const fetchDefaultPassword = async () => {
+  const fetchDefaultPassword = useCallback(async () => {
     try {
-      const res = await api.get('/configuracion/full');
-      const data = res.data;
-      setDefaultPassword(data?.contrasena_defecto || 'pesvauth2026');
-      setNewPassword(data?.contrasena_defecto || 'pesvauth2026');
-    } catch (err) {
-      console.error(err);
+      const { data } = await api.get('/configuracion/full');
+      setDefaultPassword(data?.contrasena_defecto ?? '');
+      setNewPassword(data?.contrasena_defecto ?? '');
+    } catch (error) {
+      console.error('No se pudo cargar la contraseña temporal', error);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    if (rolReal !== 'admin') return;
+    void fetchSolicitudes();
+    void fetchDefaultPassword();
+  }, [rolReal, fetchSolicitudes, fetchDefaultPassword]);
+
+  useEventoRealtime('request:new', fetchSolicitudes);
+  useEventoRealtime('request:resolved', fetchSolicitudes);
 
   const handleSavePassword = async () => {
-    if (!newPassword || newPassword.length < 6) {
-      showAlert.warning('Atención', 'La contraseña debe tener al menos 6 caracteres.');
+    // Mismo mínimo que aplica el servidor al crear la cuenta con esta clave.
+    if (!newPassword || newPassword.length < 8) {
+      showAlert.warning('Contraseña demasiado corta', 'La contraseña temporal debe tener al menos 8 caracteres.');
       return;
     }
     setSavingPassword(true);
@@ -78,9 +65,8 @@ export default function SolicitudesPendientes() {
       setDefaultPassword(newPassword);
       setPasswordSaved(true);
       setTimeout(() => setPasswordSaved(false), 3000);
-    } catch (err) {
-      console.error(err);
-      showAlert.error('Error', 'Error al guardar la contraseña.');
+    } catch (error) {
+      showAlert.error('No se pudo guardar', mensajeDeError(error));
     } finally {
       setSavingPassword(false);
     }
@@ -89,16 +75,22 @@ export default function SolicitudesPendientes() {
   const handleAction = async (id: number, action: 'aprobar' | 'rechazar') => {
     setProcessing(id);
     try {
-      await api.post(`/auth/solicitudes/${id}/${action}`);
-      setSolicitudes(solicitudes.filter((s) => s.id !== id));
-    } catch (err) {
-      console.error(err);
+      await api.post(`/auth/solicitudes/${id}/${action}`, {});
+      setSolicitudes((previas) => previas.filter((solicitud) => solicitud.id !== id));
+      showAlert.success(
+        action === 'aprobar' ? 'Solicitud aprobada' : 'Solicitud rechazada',
+        action === 'aprobar'
+          ? 'La cuenta se creó y el usuario recibirá un correo con su contraseña temporal.'
+          : 'El solicitante no podrá acceder con este correo.',
+      );
+    } catch (error) {
+      showAlert.error('No se pudo procesar', mensajeDeError(error));
     } finally {
       setProcessing(null);
     }
   };
 
-  if (realRole !== 'admin') {
+  if (rolReal !== 'admin') {
     return (
       <div className="flex flex-col items-center justify-center h-[70vh] animate-in fade-in">
         <ShieldAlert className="h-16 w-16 text-red-500 mb-4" />
@@ -173,17 +165,17 @@ export default function SolicitudesPendientes() {
                 </button>
               </div>
               <p className="text-xs text-muted-foreground mt-2">
-                Mínimo 6 caracteres. Los usuarios deberán cambiarla en su primer inicio de sesión.
+                Mínimo 8 caracteres, con letra y número. Los usuarios deberán cambiarla en su primer inicio de sesión.
               </p>
             </div>
             <button
               type="submit"
-              disabled={savingPassword || newPassword === defaultPassword || newPassword.length < 6}
+              disabled={savingPassword || newPassword === defaultPassword || newPassword.length < 8}
               className={`flex items-center gap-2 px-6 py-3 rounded-xl font-bold text-sm transition-all shadow-sm whitespace-nowrap
                 ${
                   passwordSaved
                     ? 'bg-emerald-500 text-white'
-                    : newPassword !== defaultPassword && newPassword.length >= 6
+                    : newPassword !== defaultPassword && newPassword.length >= 8
                       ? 'bg-amber-500 hover:bg-amber-600 text-white hover:-translate-y-0.5'
                       : 'bg-muted text-muted-foreground cursor-not-allowed'
                 }`}
@@ -203,7 +195,7 @@ export default function SolicitudesPendientes() {
               )}
             </button>
           </form>
-          {newPassword !== defaultPassword && newPassword.length >= 6 && (
+          {newPassword !== defaultPassword && newPassword.length >= 8 && (
             <div className="mt-4 p-3 bg-amber-500/5 border border-amber-500/20 rounded-xl text-sm text-amber-600 dark:text-amber-400 font-medium animate-in fade-in duration-300">
               ⚠️ Has modificado la contraseña. Presiona <strong>&quot;Guardar Contraseña&quot;</strong> para que los
               próximos usuarios aprobados reciban esta nueva clave.

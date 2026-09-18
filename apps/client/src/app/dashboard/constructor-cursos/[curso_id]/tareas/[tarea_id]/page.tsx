@@ -16,7 +16,7 @@ import {
   UploadCloud,
   Loader2,
 } from 'lucide-react';
-import api, { API_BASE_URL } from '@/lib/api';
+import api, { urlDeArchivo } from '@/lib/api';
 import { useAlert } from '@/contexts/AlertContext';
 import dynamic from 'next/dynamic';
 import 'react-quill-new/dist/quill.snow.css';
@@ -38,6 +38,8 @@ export default function ConfigurarTareaPage() {
   const [fechaEntrega, setFechaEntrega] = useState('');
   const [urlReferencia, setUrlReferencia] = useState('');
   const [archivoAdjunto, setArchivoAdjunto] = useState('');
+  // La API firma la descarga; el editor sólo la muestra, nunca la construye.
+  const [archivoAdjuntoUrl, setArchivoAdjuntoUrl] = useState('');
   const [archivoAdjuntoNombre, setArchivoAdjuntoNombre] = useState('');
   const [archivoMaxSizeMb, setArchivoMaxSizeMb] = useState<number>(5);
 
@@ -49,7 +51,7 @@ export default function ConfigurarTareaPage() {
 
   const fetchTarea = async () => {
     try {
-      const res = await api.get(`/cursos/${curso_id}`);
+      const res = await api.get(`/cursos/${curso_id}/gestion`);
       const data = res.data;
 
       let foundTarea = null;
@@ -70,6 +72,7 @@ export default function ConfigurarTareaPage() {
         setFechaEntrega(foundTarea.url_archivo || '');
         setUrlReferencia(foundTarea.url_referencia || '');
         setArchivoAdjunto(foundTarea.archivo_adjunto || '');
+        setArchivoAdjuntoUrl(foundTarea.archivo_adjunto_url || '');
         setArchivoAdjuntoNombre(foundTarea.archivo_adjunto_nombre || '');
         setArchivoMaxSizeMb(foundTarea.archivo_max_size_mb ?? 5);
       }
@@ -89,6 +92,7 @@ export default function ConfigurarTareaPage() {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
       setArchivoAdjunto(res.data.filename);
+      setArchivoAdjuntoUrl(res.data.url || '');
       setArchivoAdjuntoNombre(file.name);
     } catch (err) {
       console.error(err);
@@ -217,7 +221,7 @@ export default function ConfigurarTareaPage() {
                 <div className="flex items-center gap-3 p-3 bg-blue-500/5 border border-blue-500/20 rounded-xl">
                   <Paperclip className="h-4 w-4 text-blue-500 shrink-0" />
                   <a
-                    href={`${API_BASE_URL}/storage/download/${archivoAdjunto}?originalName=${encodeURIComponent(archivoAdjuntoNombre)}`}
+                    href={`${urlDeArchivo(archivoAdjuntoUrl) ?? ''}`}
                     target="_blank"
                     className="text-sm font-bold text-blue-600 hover:underline flex-1 truncate"
                   >
@@ -226,6 +230,7 @@ export default function ConfigurarTareaPage() {
                   <button
                     onClick={() => {
                       setArchivoAdjunto('');
+                      setArchivoAdjuntoUrl('');
                       setArchivoAdjuntoNombre('');
                     }}
                     className="text-muted-foreground hover:text-red-500 transition-colors"

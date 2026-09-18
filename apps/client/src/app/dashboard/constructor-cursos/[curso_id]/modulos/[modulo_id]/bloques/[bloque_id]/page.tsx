@@ -21,9 +21,9 @@ import {
   Settings,
   Lock,
 } from 'lucide-react';
-import api, { API_BASE_URL } from '@/lib/api';
+import api, { urlDeArchivo } from '@/lib/api';
 import { useAlert } from '@/contexts/AlertContext';
-import { useWS } from '@/contexts/WebSocketContext';
+import { useBloqueoDeCurso } from '@/hooks/useBloqueoDeCurso';
 import { useRole } from '@/contexts/RoleContext';
 import dynamic from 'next/dynamic';
 import 'react-quill-new/dist/quill.snow.css';
@@ -65,12 +65,13 @@ export default function EditBlockPage({
 
   // New optional fields
   const [urlReferencia, setUrlReferencia] = useState('');
-  const [archivoAdjunto, setArchivoAdjunto] = useState(''); // filename on server
+  const [archivoAdjunto, setArchivoAdjunto] = useState(''); // clave en el almacenamiento
+  // La API firma la descarga del adjunto; aquí sólo se muestra.
+  const [archivoAdjuntoUrl, setArchivoAdjuntoUrl] = useState('');
   const [archivoAdjuntoNombre, setArchivoAdjuntoNombre] = useState(''); // original name
   const [archivoMaxSizeMb, setArchivoMaxSizeMb] = useState<number>(5); // default 5MB
   const [uploading, setUploading] = useState(false);
   const { showAlert } = useAlert();
-  const { send, editingCourses } = useWS();
   const { user } = useRole();
 
   // Quiz config
@@ -88,7 +89,7 @@ export default function EditBlockPage({
       try {
         const [bloqueRes, cursoRes] = await Promise.all([
           api.get(`/cursos/bloques/${resolvedParams.bloque_id}`),
-          api.get(`/cursos/${resolvedParams.curso_id}`),
+          api.get(`/cursos/${resolvedParams.curso_id}/gestion`),
         ]);
         const data = bloqueRes.data;
         setBloque(data);
@@ -104,6 +105,7 @@ export default function EditBlockPage({
         setContenidoHtml(data.contenido_html || '');
         setUrlReferencia(data.url_referencia || '');
         setArchivoAdjunto(data.archivo_adjunto || '');
+        setArchivoAdjuntoUrl(data.archivo_adjunto_url || '');
         setArchivoAdjuntoNombre(data.archivo_adjunto_nombre || '');
         setArchivoMaxSizeMb(data.archivo_max_size_mb || 5);
 
@@ -123,24 +125,9 @@ export default function EditBlockPage({
     fetchBlock();
   }, [resolvedParams.bloque_id, resolvedParams.curso_id]);
 
-  const editorInfo = resolvedParams?.curso_id ? editingCourses[resolvedParams.curso_id] : null;
-  const isLockedByOther = editorInfo && editorInfo.guid !== user?.guid;
-
-  useEffect(() => {
-    if (!resolvedParams?.curso_id) return;
-
-    send('course:lock', { curso_guid: resolvedParams.curso_id });
-
-    const handleBeforeUnload = () => {
-      send('course:unlock', { curso_guid: resolvedParams.curso_id });
-    };
-    window.addEventListener('beforeunload', handleBeforeUnload);
-
-    return () => {
-      send('course:unlock', { curso_guid: resolvedParams.curso_id });
-      window.removeEventListener('beforeunload', handleBeforeUnload);
-    };
-  }, [resolvedParams?.curso_id, send]);
+  // Avisa a los demás de que este curso se está editando y lo libera al salir.
+  const editorInfo = useBloqueoDeCurso(resolvedParams?.curso_id);
+  const isLockedByOther = Boolean(editorInfo);
 
   const isReadOnly = cursoEstado === 'PUBLICADO';
 
@@ -200,6 +187,7 @@ export default function EditBlockPage({
         headers: { 'Content-Type': 'multipart/form-data' },
       });
       setArchivoAdjunto(res.data.filename);
+      setArchivoAdjuntoUrl(res.data.url || '');
       setArchivoAdjuntoNombre(file.name);
     } catch (err) {
       console.error('Error uploading file:', err);
@@ -433,7 +421,7 @@ export default function EditBlockPage({
                 <div className="flex items-center gap-3 bg-background border border-border rounded-xl px-4 py-3">
                   <Paperclip className="h-5 w-5 text-primary flex-shrink-0" />
                   <a
-                    href={`${API_BASE_URL}/storage/download/${archivoAdjunto}?originalName=${encodeURIComponent(archivoAdjuntoNombre)}`}
+                    href={urlDeArchivo(archivoAdjuntoUrl) ?? ''}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="font-medium text-sm flex-1 truncate text-primary hover:underline cursor-pointer flex items-center gap-1"
@@ -444,6 +432,7 @@ export default function EditBlockPage({
                     type="button"
                     onClick={() => {
                       setArchivoAdjunto('');
+                      setArchivoAdjuntoUrl('');
                       setArchivoAdjuntoNombre('');
                     }}
                     className="text-red-500 hover:text-red-600 text-xs font-bold"
@@ -658,7 +647,7 @@ export default function EditBlockPage({
               <p className="text-muted-foreground text-sm leading-relaxed">
                 El{' '}
                 <strong className="text-foreground">
-                  {editorInfo?.role} {editorInfo?.nombre}
+                  {editorInfo?.rol} {editorInfo?.nombre}
                 </strong>{' '}
                 está editando el curso <strong className="text-foreground">{cursoTitulo}</strong>.
                 <br />

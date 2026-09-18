@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Check,
   UploadCloud,
@@ -14,8 +14,9 @@ import {
   Download,
   Award,
 } from 'lucide-react';
-import api, { API_BASE_URL } from '@/lib/api';
-import { useWS } from '@/contexts/WebSocketContext';
+import api, { mensajeDeError, urlDeArchivo } from '@/lib/api';
+import { esAprobada, formatearPuntos, NOTA_MAXIMA } from '@/lib/calificacion';
+import { useEventoRealtime } from '@/contexts/RealtimeContext';
 import { sanitizeHTML } from '@/lib/sanitize';
 
 interface AssignmentPlayerProps {
@@ -23,10 +24,13 @@ interface AssignmentPlayerProps {
   recurso_guid: string;
   bloque_titulo: string;
   instrucciones_html: string;
-  archivo_adjunto?: string;
-  archivo_adjunto_nombre?: string;
-  url_referencia?: string;
+  /** URL firmada del material de apoyo, tal y como la devuelve la API. */
+  archivo_adjunto_url?: string | null;
+  archivo_adjunto_nombre?: string | null;
+  url_referencia?: string | null;
   archivo_max_size_mb?: number;
+  /** Nota mínima del curso, para explicar al alumno qué le falta. */
+  nota_aprobacion?: number;
   readOnly?: boolean;
   onFinish: () => void;
 }
@@ -36,10 +40,11 @@ export default function AssignmentPlayer({
   recurso_guid,
   bloque_titulo,
   instrucciones_html,
-  archivo_adjunto,
+  archivo_adjunto_url,
   archivo_adjunto_nombre,
   url_referencia,
   archivo_max_size_mb = 5,
+  nota_aprobacion,
   readOnly = false,
   onFinish,
 }: AssignmentPlayerProps) {
@@ -50,53 +55,37 @@ export default function AssignmentPlayer({
   const [isDragging, setIsDragging] = useState(false);
   const [entrega, setEntrega] = useState<any>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const { subscribe } = useWS();
 
-  const fetchStatus = async () => {
+  /**
+   * Estado de la entrega del alumno.
+   *
+   * Ya no hace falta marcar el recurso como completado desde aquí: al aprobar la entrega,
+   * el servidor registra el progreso dentro de la misma operación. Hacerlo desde el
+   * navegador permitía darse por completada una tarea sin haberla aprobado.
+   */
+  const fetchStatus = useCallback(async () => {
     try {
-      const { data } = await api.get(`/evaluaciones/tareas/${recurso_guid}/entregas/mine`);
-      if (data?.respuesta_texto) {
+      const { data } = await api.get(`/evaluaciones/tareas/${recurso_guid}/entregas/mia`);
+      if (data?.estado && data.estado !== 'PENDIENTE') {
         setEntrega(data);
         setUploadState('done');
-        if (data.estado === 'CALIFICADA') {
-          let notaNum = 0;
-          if (data.contenido_texto) {
-            const parts = data.contenido_texto.replace('NOTA: ', '').split(' | ');
-            notaNum = parseFloat(parts[0]);
-          }
-          if (notaNum >= 3.0) {
-            const savedUser = localStorage.getItem('lms_user');
-            const userGuid = savedUser ? JSON.parse(savedUser).guid : '';
-            if (userGuid) {
-              try {
-                await api.post(`/estudiantes/student/completar-recurso?usuario_guid=${userGuid}`, { recurso_guid });
-              } catch (e) {
-                console.error('Error marcando recurso como completado', e);
-              }
-            }
-          }
-          onFinish();
-        }
+        if (data.estado === 'CALIFICADA') onFinish();
       }
-    } catch (_) {
-      // No hay entrega aún
+    } catch {
+      // Sin entrega todavía: se muestra la zona de subida.
     } finally {
       setLoading(false);
     }
-  };
+  }, [recurso_guid, onFinish]);
 
   useEffect(() => {
-    fetchStatus();
-  }, [recurso_guid]);
+    void fetchStatus();
+  }, [fetchStatus]);
 
-  useEffect(() => {
-    const unsub = subscribe('submission:graded', (data: any) => {
-      if (data.tarea_guid === recurso_guid) {
-        fetchStatus();
-      }
-    });
-    return unsub;
-  }, [recurso_guid, subscribe]);
+  // El examinador puede calificar mientras el alumno tiene la página abierta.
+  useEventoRealtime('submission:graded', (datos) => {
+    if ((datos as { tarea_guid?: string })?.tarea_guid === recurso_guid) void fetchStatus();
+  });
 
   const ALLOWED_EXTENSIONS = [
     '.pdf',
@@ -116,7 +105,6 @@ export default function AssignmentPlayer({
     '.webp',
     '.mp4',
     '.mp3',
-    '.svg',
   ];
 
   const processFile = async (file: File) => {
@@ -153,19 +141,16 @@ export default function AssignmentPlayer({
       setEntrega(data);
       setUploadState('done');
       onFinish();
-    } catch (err: any) {
-      console.error(err);
-      // Show the backend error message if available, otherwise a friendly fallback
-      const backendMsg = err.response?.data?.message;
-      setUploadError(backendMsg || 'Ocurrió un problema al subir el archivo. Verifica tu conexión e intenta de nuevo.');
+    } catch (error) {
+      setUploadError(mensajeDeError(error, 'No se pudo subir el archivo. Revisa tu conexión e inténtalo de nuevo.'));
       setUploadState('idle');
     }
   };
 
+  /** La API entrega la URL ya firmada: aquí sólo se abre. */
   const handleDownload = () => {
-    if (!entrega?.url_archivo_adjunto) return;
-    const url = `${API_BASE_URL}/storage/download/${encodeURIComponent(entrega.url_archivo_adjunto)}?originalName=${encodeURIComponent(entrega.respuesta_texto || entrega.url_archivo_adjunto)}`;
-    window.open(url, '_blank');
+    const url = urlDeArchivo(entrega?.archivo_url);
+    if (url) window.open(url, '_blank', 'noopener');
   };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -185,16 +170,11 @@ export default function AssignmentPlayer({
     if (e.dataTransfer.files?.[0]) processFile(e.dataTransfer.files[0]);
   };
 
-  let notaStr = '';
-  let comentarioStr = '';
-  let notaNum = 0;
-  if (entrega?.estado === 'CALIFICADA' && entrega.contenido_texto) {
-    const parts = entrega.contenido_texto.replace('NOTA: ', '').split(' | ');
-    notaStr = parts[0];
-    comentarioStr = parts.length > 1 ? parts[1] : '';
-    notaNum = parseFloat(notaStr) || 0;
-  }
-  const isApproved = entrega?.estado === 'CALIFICADA' && notaNum >= 3.0;
+  // La nota y el comentario llegan en campos propios. Antes se extraían partiendo la
+  // cadena "NOTA: 4.5 | comentario", que se rompía en cuanto el comentario tenía una barra.
+  const calificacion: number | null = entrega?.calificacion ?? null;
+  const comentario: string = entrega?.comentario ?? '';
+  const isApproved = entrega?.estado === 'CALIFICADA' && esAprobada(calificacion, nota_aprobacion);
 
   if (loading) {
     return (
@@ -221,7 +201,7 @@ export default function AssignmentPlayer({
       </div>
 
       {/* Recursos de Apoyo (Admin-provided files) */}
-      {(archivo_adjunto || url_referencia) && (
+      {(archivo_adjunto_url || url_referencia) && (
         <div className="bg-blue-500/5 border border-blue-500/20 rounded-2xl p-6 space-y-4">
           <h3 className="font-bold text-sm text-blue-700 dark:text-blue-400 uppercase tracking-wider flex items-center gap-2">
             <Paperclip className="h-4 w-4" /> Recursos de Apoyo
@@ -259,9 +239,9 @@ export default function AssignmentPlayer({
                 </div>
               </a>
             )}
-            {archivo_adjunto && (
+            {archivo_adjunto_url && (
               <a
-                href={`${API_BASE_URL}/storage/download/${archivo_adjunto}?originalName=${encodeURIComponent(archivo_adjunto_nombre || 'archivo')}`}
+                href={urlDeArchivo(archivo_adjunto_url) ?? ''}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="flex items-center gap-3 p-3 bg-background border border-border rounded-xl hover:border-blue-500/50 hover:shadow-md transition-all group"
@@ -291,10 +271,16 @@ export default function AssignmentPlayer({
               <div>
                 <h3 className="font-bold text-amber-700 dark:text-amber-400 text-lg">Tarea Calificada</h3>
                 <p className="text-sm text-amber-600/80 mb-2">Tu examinador ha revisado y calificado tu entrega.</p>
-                {comentarioStr && (
+                {comentario && (
                   <div className="bg-background/80 border border-amber-500/20 rounded-lg p-3 text-sm italic text-foreground">
-                    "{comentarioStr}"
+                    {comentario}
                   </div>
+                )}
+                {!isApproved && nota_aprobacion !== undefined && (
+                  <p className="mt-2 text-sm font-medium text-amber-700 dark:text-amber-400">
+                    Necesitas {formatearPuntos(nota_aprobacion)} puntos para aprobar. Puedes subir una versión
+                    corregida.
+                  </p>
                 )}
               </div>
             </div>
@@ -303,7 +289,8 @@ export default function AssignmentPlayer({
                 Calificación Obtenida
               </div>
               <div className="text-4xl font-black text-amber-500">
-                {notaStr} <span className="text-base text-amber-500/50">/ 5.0</span>
+                {formatearPuntos(calificacion)}{' '}
+                <span className="text-base text-amber-500/50">/ {NOTA_MAXIMA}</span>
               </div>
             </div>
           </div>
@@ -354,7 +341,7 @@ export default function AssignmentPlayer({
                   <p
                     className={`text-sm font-semibold truncate ${entrega.archivo_purgado ? 'text-muted-foreground' : 'text-foreground'}`}
                   >
-                    {entrega.respuesta_texto}
+                    {entrega.archivo_nombre}
                   </p>
                   {entrega.archivo_purgado ? (
                     <span
@@ -367,7 +354,7 @@ export default function AssignmentPlayer({
                     <p className="text-xs text-muted-foreground mt-0.5">Archivo entregado</p>
                   )}
                 </div>
-                {entrega.url_archivo_adjunto && !entrega.archivo_purgado && !readOnly && (
+                {entrega.archivo_url && !entrega.archivo_purgado && !readOnly && (
                   <button
                     onClick={handleDownload}
                     className="px-4 py-2 rounded-xl bg-primary hover:bg-primary/90 text-primary-foreground font-bold flex items-center gap-2 transition-transform hover:scale-105"

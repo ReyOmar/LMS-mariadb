@@ -18,9 +18,9 @@ import {
   BookMarked,
 } from 'lucide-react';
 import { PageLoader } from '@/components/ui/PageLoader';
-import { useWS } from '@/contexts/WebSocketContext';
+import { useEventoRealtime } from '@/contexts/RealtimeContext';
 import { useRole } from '@/contexts/RoleContext';
-import api from '@/lib/api';
+import api, { mensajeDeError } from '@/lib/api';
 import { useAlert } from '@/contexts/AlertContext';
 
 interface Curso {
@@ -81,35 +81,25 @@ export default function AsignacionCursosPage() {
   const [searchEstudiante, setSearchEstudiante] = useState('');
   const [searchProfesor, setSearchProfesor] = useState('');
 
-  const { subscribe } = useWS();
-  const { role } = useRole();
+  const { role, user } = useRole();
   const { showToast } = useAlert();
 
   useEffect(() => {
     fetchData();
   }, []);
 
-  useEffect(() => {
-    const unsub1 = subscribe('enrollment:changed', () => {
-      fetchData();
-      if (selectedCursoId) fetchMatriculas(selectedCursoId);
-    });
-    const unsub2 = subscribe('dashboard:refresh', () => {
-      fetchData();
-      if (selectedCursoId) fetchMatriculas(selectedCursoId);
-    });
-    return () => {
-      unsub1();
-      unsub2();
-    };
-  }, [subscribe, selectedCursoId]);
+  // Otro administrador puede matricular a la vez sobre el mismo curso.
+  useEventoRealtime('enrollment:changed', () => {
+    fetchData();
+    if (selectedCursoId) fetchMatriculas(selectedCursoId);
+  });
 
   const fetchData = async () => {
     try {
       const [cursosRes, profesoresRes, estudiantesRes] = await Promise.all([
         api.get('/cursos'),
-        api.get('/cursos/profesores'),
-        api.get('/matriculas/estudiantes'),
+        api.get('/auth/usuarios/por-rol', { params: { rol: 'PROFESOR' } }),
+        api.get('/auth/usuarios/por-rol', { params: { rol: 'ESTUDIANTE' } }),
       ]);
       const [cursosData, profesoresData, estudiantesData] = await Promise.all([
         cursosRes.data,
@@ -186,19 +176,24 @@ export default function AsignacionCursosPage() {
       await api.post(`/cursos/${selectedCursoId}/asignar`, { profesor_guid });
       showToast.success('Examinador asignado');
       setCursos((prev) => prev.map((c) => (c.guid === selectedCursoId ? { ...c, profesor_guid } : c)));
-    } catch (err) {
-      showToast.error('Error al asignar');
+    } catch (error) {
+      showToast.error('No se pudo asignar', mensajeDeError(error));
     }
   };
 
+  /**
+   * Devuelve el curso al administrador que lo gestiona.
+   * Un curso siempre tiene responsable —es obligatorio en la base de datos—, así que
+   * «quitar examinador» significa reasignárselo a uno mismo.
+   */
   const desasignarProfesor = async () => {
-    if (!selectedCursoId) return;
+    if (!selectedCursoId || !user?.guid) return;
     try {
-      await api.post(`/cursos/${selectedCursoId}/desasignar`);
-      showToast.success('Examinador removido');
+      await api.post(`/cursos/${selectedCursoId}/asignar`, { profesor_guid: user.guid });
+      showToast.success('El curso vuelve a tu cargo');
       fetchData();
-    } catch (err) {
-      showToast.error('Error al desasignar');
+    } catch (error) {
+      showToast.error('No se pudo reasignar', mensajeDeError(error));
     }
   };
 

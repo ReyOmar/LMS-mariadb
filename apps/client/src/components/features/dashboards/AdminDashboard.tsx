@@ -1,14 +1,16 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { BookOpen, Users, Award, GraduationCap, AlertCircle, TrendingUp } from 'lucide-react';
 import { PageLoader } from '@/components/ui/PageLoader';
 import { StatCard } from '@/components/ui/StatCard';
 import Link from 'next/link';
 import dynamic from 'next/dynamic';
 import api from '@/lib/api';
-import { useWS } from '@/contexts/WebSocketContext';
+import { useEventoRealtime } from '@/contexts/RealtimeContext';
 import { useRole } from '@/contexts/RoleContext';
+import { useSede } from '@/contexts/SedeContext';
+import { NOTA_APROBACION_DEFECTO, formatearPuntos } from '@/lib/calificacion';
 
 // Dynamically import Recharts to avoid SSR issues
 const AreaChart = dynamic(() => import('recharts').then((m) => m.AreaChart), { ssr: false });
@@ -31,6 +33,20 @@ const CHART_COLORS = {
   danger: 'hsl(0, 72%, 51%)',
 };
 
+/** Paleta del reparto por curso. El color es presentación, así que se asigna aquí. */
+const COLORES_REPARTO = [
+  '#6366f1',
+  '#10b981',
+  '#f59e0b',
+  '#ef4444',
+  '#8b5cf6',
+  '#06b6d4',
+  '#ec4899',
+  '#14b8a6',
+  '#f97316',
+  '#64748b',
+];
+
 function getGreeting(): string {
   const hour = new Date().getHours();
   if (hour < 12) return 'Buenos días';
@@ -43,44 +59,48 @@ export function AdminDashboard() {
   const [stats, setStats] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
-  const { subscribe } = useWS();
   const { user } = useRole();
+  const { nombre: nombreSede } = useSede();
 
-  const fetchDashboardData = () => {
-    Promise.all([
+  const fetchDashboardData = useCallback(async () => {
+    const [solicitudes, resumen] = await Promise.all([
       api
         .get('/auth/solicitudes')
         .then((r) => r.data)
         .catch(() => []),
       api
-        .get('/dashboards/admin/dashboard-stats')
+        .get('/dashboards/administracion')
         .then((r) => r.data)
         .catch(() => null),
-    ]).then(([solicitudes, dashStats]) => {
-      const pending = Array.isArray(solicitudes) ? solicitudes.filter((s: any) => s.estado === 'PENDIENTE').length : 0;
-      setSolicitudesPendientes(pending);
-      setStats(dashStats);
-      setLastUpdated(new Date());
-      setLoading(false);
-    });
-  };
+    ]);
+
+    setSolicitudesPendientes(Array.isArray(solicitudes) ? solicitudes.length : 0);
+    setStats(resumen);
+    setLastUpdated(new Date());
+    setLoading(false);
+  }, []);
 
   useEffect(() => {
-    fetchDashboardData();
+    void fetchDashboardData();
+  }, [fetchDashboardData]);
 
-    // Subscribe to events that should trigger a dashboard refresh
-    const unsubscribeRefresh = subscribe('dashboard:refresh', fetchDashboardData);
-    const unsubscribeReq = subscribe('request:new', fetchDashboardData);
+  useEventoRealtime('request:new', fetchDashboardData);
+  useEventoRealtime('request:resolved', fetchDashboardData);
+  useEventoRealtime('dashboard:refresh', fetchDashboardData);
 
-    return () => {
-      unsubscribeRefresh();
-      unsubscribeReq();
-    };
-  }, [subscribe]);
-
-  const weeklyActivity = stats?.weeklyActivity || [];
-  const courseDistribution = stats?.courseDistribution || [];
-  const totalMatriculas = stats?.totalMatriculas || 0;
+  // La API devuelve actividad y reparto sin color; la presentación la pone el cliente.
+  const weeklyActivity = (stats?.actividadSemanal ?? []).map((dia: any) => ({
+    day: dia.dia,
+    sesiones: dia.recursos,
+    entregas: dia.entregas,
+  }));
+  const courseDistribution = (stats?.repartoCursos ?? []).map((curso: any, indice: number) => ({
+    name: curso.nombre,
+    value: curso.matriculas,
+    color: COLORES_REPARTO[indice % COLORES_REPARTO.length],
+  }));
+  const totalMatriculas = stats?.totalMatriculas ?? 0;
+  const promedio = stats?.promedioGlobal ?? null;
 
   if (loading) {
     return (
@@ -135,7 +155,9 @@ export function AdminDashboard() {
         <div>
           <p className="text-sm font-medium text-muted-foreground mb-1">{getGreeting()},</p>
           <h1 className="text-3xl font-extrabold tracking-tight text-foreground">{user?.nombre || 'Administrador'}</h1>
-          <p className="text-muted-foreground text-sm mt-1">Panel de control de la plataforma</p>
+          <p className="text-muted-foreground text-sm mt-1">
+            Panel de control de la sede{nombreSede ? ` de ${nombreSede}` : ''}
+          </p>
         </div>
         <div className="flex items-center gap-2 bg-card border border-border/50 px-3 py-1.5 rounded-full shadow-sm">
           <span className="flex h-2 w-2 relative" title="Conexión en tiempo real activa">
@@ -197,21 +219,21 @@ export function AdminDashboard() {
           className="stagger-3 animate-fade-slide-in"
         />
         <StatCard
-          label="Calificación Global"
-          value={parseFloat(stats?.promedioGlobal) || 0}
-          suffix="/5.0"
+          label="Calificación media"
+          value={promedio === null ? 0 : Number(formatearPuntos(promedio))}
+          suffix=" / 100"
           icon={<GraduationCap className="h-5 w-5" />}
           color="accent"
           trend={{
-            value: (stats?.promedioGlobal || 0) >= 3 ? 1 : -1,
+            value: promedio !== null && promedio >= NOTA_APROBACION_DEFECTO ? 1 : -1,
             label:
-              stats?.promedioGlobal >= 4
-                ? 'Excelente rendimiento'
-                : stats?.promedioGlobal >= 3
-                  ? 'Buen rendimiento'
-                  : stats?.promedioGlobal > 0
-                    ? 'Necesita mejora'
-                    : 'Sin calificaciones',
+              promedio === null
+                ? 'Todavía sin calificaciones'
+                : promedio >= 90
+                  ? 'Rendimiento excelente'
+                  : promedio >= NOTA_APROBACION_DEFECTO
+                    ? `Por encima del umbral de ${NOTA_APROBACION_DEFECTO} puntos`
+                    : `Por debajo del umbral de ${NOTA_APROBACION_DEFECTO} puntos`,
           }}
           className="stagger-4 animate-fade-slide-in"
         />

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ClipboardCheck,
   Loader2,
@@ -34,22 +34,16 @@ const CartesianGrid = dynamic(() => import('recharts').then((m) => m.CartesianGr
 const Legend = dynamic(() => import('recharts').then((m) => m.Legend), { ssr: false });
 import { PageLoader } from '@/components/ui/PageLoader';
 import { useRole } from '@/contexts/RoleContext';
-import { useWS } from '@/contexts/WebSocketContext';
-import api, { API_BASE_URL } from '@/lib/api';
+import { useEventoRealtime } from '@/contexts/RealtimeContext';
+import api from '@/lib/api';
+import { NOTA_APROBACION_DEFECTO, NOTA_MAXIMA, aNota } from '@/lib/calificacion';
 
-const extractNota = (e: any): number | null => {
-  if (e.estado !== 'CALIFICADA') return null;
-  if (e.calificacion !== null && e.calificacion !== undefined) return e.calificacion;
-  if (e.contenido_texto?.startsWith('NOTA:')) {
-    const parsed = parseFloat(e.contenido_texto.replace('NOTA: ', '').split(' | ')[0]);
-    return isNaN(parsed) ? null : parsed;
-  }
-  return null;
-};
+/** Nota de una entrega calificada. Antes se extraía partiendo la cadena "NOTA: 4.5 | …". */
+const extractNota = (e: { estado?: string; calificacion?: unknown }): number | null =>
+  e.estado === 'CALIFICADA' ? aNota(e.calificacion) : null;
 
 export default function MonitoreoPruebasPage() {
   const { user } = useRole();
-  const { subscribe } = useWS();
   const [entregas, setEntregas] = useState<any[]>([]);
   const [cursos, setCursos] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -65,48 +59,27 @@ export default function MonitoreoPruebasPage() {
   const [expandedTasks, setExpandedTasks] = useState<Record<string, boolean>>({});
   const [expandedStudents, setExpandedStudents] = useState<Record<string, boolean>>({});
 
-  useEffect(() => {
-    if (user?.guid) fetchData();
-  }, [user?.guid]);
-
-  useEffect(() => {
-    if (!user?.guid) return;
-
-    const unsub1 = subscribe('submission:new', fetchData);
-    const unsub2 = subscribe('submission:graded', fetchData);
-    const unsub3 = subscribe('dashboard:refresh', fetchData);
-    const unsub4 = subscribe('course:created', fetchData);
-    const unsub5 = subscribe('course:updated', fetchData);
-
-    return () => {
-      unsub1();
-      unsub2();
-      unsub3();
-      unsub4();
-      unsub5();
-    };
-  }, [user?.guid, subscribe]);
-
-  const fetchData = async () => {
+  /** Intentos de cuestionario de los cursos que gestiona el examinador. */
+  const fetchData = useCallback(async () => {
     try {
-      const [resEntregas, resCursos] = await Promise.all([
-        api.get(`/evaluaciones/examiner/entregas`),
+      const [resIntentos, resCursos] = await Promise.all([
+        api.get('/evaluaciones/examinador/cuestionarios'),
         api.get('/cursos'),
       ]);
-      const data = resEntregas.data;
-      if (Array.isArray(data)) {
-        // Filtrar SOLO cuestionarios
-        setEntregas(data.filter((e) => e.tarea_titulo?.startsWith('[QUIZ]')));
-      } else {
-        setEntregas([]);
-      }
-      setCursos(resCursos.data || []);
-    } catch (err) {
-      console.error(err);
+      setEntregas(Array.isArray(resIntentos.data) ? resIntentos.data : []);
+      setCursos(Array.isArray(resCursos.data) ? resCursos.data : []);
+    } catch (error) {
+      console.error('No se pudieron cargar los resultados de los cuestionarios', error);
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    if (user?.guid) void fetchData();
+  }, [user?.guid, fetchData]);
+
+  useEventoRealtime('submission:graded', () => fetchData());
 
   const cursosAgrupados = useMemo(() => {
     const map = new Map<string, any>();
@@ -169,7 +142,7 @@ export default function MonitoreoPruebasPage() {
       c.estudiantesMap.forEach((studentStats: any) => {
         suma += studentStats.mejor_nota;
         calificados++;
-        if (studentStats.mejor_nota >= 3.0) aprobados++;
+        if (studentStats.mejor_nota >= NOTA_APROBACION_DEFECTO) aprobados++;
         else reprobados++;
       });
 
@@ -188,9 +161,13 @@ export default function MonitoreoPruebasPage() {
   const gradeDistribution = useMemo(() => {
     if (!selectedCourse) return [];
     const ranges = [
-      { name: '0.0 - 2.9 (Bajo)', count: 0, fill: '#ef4444' },
-      { name: '3.0 - 3.9 (Medio)', count: 0, fill: '#f59e0b' },
-      { name: '4.0 - 5.0 (Alto)', count: 0, fill: '#10b981' },
+      { name: `Por debajo de ${Math.round(NOTA_APROBACION_DEFECTO * 0.75)}`, count: 0, fill: '#ef4444' },
+      {
+        name: `Entre ${Math.round(NOTA_APROBACION_DEFECTO * 0.75)} y ${NOTA_APROBACION_DEFECTO - 1}`,
+        count: 0,
+        fill: '#f59e0b',
+      },
+      { name: `${NOTA_APROBACION_DEFECTO} o más (aprobado)`, count: 0, fill: '#10b981' },
     ];
     selectedCourse.estudiantesMap.forEach((studentStats: any) => {
       const val = studentStats.mejor_nota;
@@ -221,8 +198,8 @@ export default function MonitoreoPruebasPage() {
         cleanTitle.includes(q);
 
       const nota = extractNota(e);
-      if (filter === 'aprobados') return matchesSearch && nota !== null && nota >= 3.0;
-      if (filter === 'reprobados') return matchesSearch && nota !== null && nota < 3.0;
+      if (filter === 'aprobados') return matchesSearch && nota !== null && nota >= NOTA_APROBACION_DEFECTO;
+      if (filter === 'reprobados') return matchesSearch && nota !== null && nota < NOTA_APROBACION_DEFECTO;
       return matchesSearch;
     });
   }, [selectedCourse, search, filter]);
@@ -507,11 +484,11 @@ export default function MonitoreoPruebasPage() {
                         fontWeight: 'bold',
                       }}
                       itemStyle={{ color: 'var(--primary)' }}
-                      formatter={(value) => [`${value} / 5.0`, 'Promedio']}
+                      formatter={(value) => [`${value} / ${NOTA_MAXIMA}`, 'Promedio']}
                     />
                     <Bar dataKey="Promedio" fill="hsl(var(--primary))" radius={[6, 6, 0, 0]} maxBarSize={50}>
                       {courseBarData.map((entry, index) => (
-                        <Cell key={`cell-${index}`} fill={entry.Promedio >= 3.0 ? '#10b981' : '#ef4444'} />
+                        <Cell key={`cell-${index}`} fill={entry.Promedio >= NOTA_APROBACION_DEFECTO ? '#10b981' : '#ef4444'} />
                       ))}
                     </Bar>
                   </BarChart>
@@ -549,8 +526,8 @@ export default function MonitoreoPruebasPage() {
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
             {filteredCursos.map((curso, idx) => {
-              const isExcellent = parseFloat(curso.promedio) >= 4.0;
-              const isBad = parseFloat(curso.promedio) < 3.0 && curso.aprobados + curso.reprobados > 0;
+              const isExcellent = Number.parseFloat(curso.promedio) >= 90;
+              const isBad = Number.parseFloat(curso.promedio) < NOTA_APROBACION_DEFECTO && curso.aprobados + curso.reprobados > 0;
 
               return (
                 <div
@@ -798,8 +775,8 @@ export default function MonitoreoPruebasPage() {
             className="w-full bg-card border border-border rounded-xl pl-4 pr-10 py-3 focus:outline-none focus:ring-2 focus:ring-primary/50 text-sm font-medium shadow-sm appearance-none"
           >
             <option value="all">Todas las notas</option>
-            <option value="aprobados">Solo Aprobados (≥ 3.0)</option>
-            <option value="reprobados">Solo Reprobados (&lt; 3.0)</option>
+            <option value="aprobados">Solo aprobados</option>
+            <option value="reprobados">Solo no aprobados</option>
           </select>
           <ChevronDown className="absolute right-4 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
         </div>
@@ -876,7 +853,7 @@ export default function MonitoreoPruebasPage() {
                             <div className="grid grid-cols-1 gap-4 pl-2 md:pl-4 border-l-2 border-border/50 animate-in slide-in-from-top-1 duration-200 pt-2">
                               {grupo.estudiantes.map((estItem: any) => {
                                 const nota = estItem.mejorNota;
-                                const isAprobado = nota !== null && nota >= 3.0;
+                                const isAprobado = nota !== null && nota >= NOTA_APROBACION_DEFECTO;
                                 const isReprobado = nota !== null && nota < 3.0;
                                 const estKey = `${taskKey}-${estItem.estudiante?.guid || 'unknown'}`;
                                 const isEstExpanded = !!expandedStudents[estKey];
@@ -935,7 +912,7 @@ export default function MonitoreoPruebasPage() {
                                             <span
                                               className={`text-xs font-bold hidden sm:inline ${isAprobado ? 'text-emerald-600/50' : 'text-red-600/50'}`}
                                             >
-                                              /5.0
+                                               / 100
                                             </span>
                                           </div>
                                         ) : (

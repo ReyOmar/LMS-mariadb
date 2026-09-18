@@ -269,7 +269,13 @@ export class RealtimeService implements OnModuleDestroy {
 }
 
 /** Motivos por los que se corta una sesión; el cliente los traduce a un mensaje. */
-export type MotivoRevocacion = 'account_deleted' | 'account_disabled' | 'password_changed' | 'password_reset';
+export type MotivoRevocacion =
+  | 'account_deleted'
+  | 'account_disabled'
+  | 'password_changed'
+  | 'password_reset'
+  /** Se inició sesión en otro dispositivo y el campus admite una sola a la vez. */
+  | 'sesion_desplazada';
 
 export interface EditorDeCurso {
   guid: string;

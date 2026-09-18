@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, Fragment, useMemo } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Search,
   Users,
@@ -15,7 +15,7 @@ import {
 } from 'lucide-react';
 import { PageLoader } from '@/components/ui/PageLoader';
 import { useRole } from '@/contexts/RoleContext';
-import { useWS } from '@/contexts/WebSocketContext';
+import { useEventoRealtime, useRealtime } from '@/contexts/RealtimeContext';
 import api from '@/lib/api';
 import { useDebounce } from '@/hooks/usePerformance';
 import dynamic from 'next/dynamic';
@@ -32,7 +32,7 @@ const Line = dynamic(() => import('recharts').then((m) => m.Line), { ssr: false 
 
 export default function MonitoreoEstudiantesPage() {
   const { user } = useRole();
-  const { subscribe, onlineUsers } = useWS();
+  const { usuariosEnLinea } = useRealtime();
   const [estudiantes, setEstudiantes] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -41,44 +41,32 @@ export default function MonitoreoEstudiantesPage() {
   const [expandedStudent, setExpandedStudent] = useState<string | null>(null);
   const [expandedCourses, setExpandedCourses] = useState<Set<string>>(new Set());
 
-  useEffect(() => {
-    if (user?.guid) {
-      fetchMonitoreo();
-    }
-  }, [user?.guid]);
-
-  useEffect(() => {
-    if (!user?.guid) return;
-
-    const unsub1 = subscribe('submission:new', () => fetchMonitoreo(false));
-    const unsub2 = subscribe('submission:graded', () => fetchMonitoreo(false));
-    const unsub3 = subscribe('course:updated', () => fetchMonitoreo(false));
-    const unsub4 = subscribe('enrollment:changed', () => fetchMonitoreo(false));
-    const unsub5 = subscribe('dashboard:refresh', () => fetchMonitoreo(false));
-    const unsub6 = subscribe('presence:update', () => fetchMonitoreo(false));
-
-    return () => {
-      unsub1();
-      unsub2();
-      unsub3();
-      unsub4();
-      unsub5();
-      unsub6();
-    };
-  }, [user?.guid, subscribe]);
-
-  const fetchMonitoreo = async (showLoading = true) => {
+  /**
+   * Avance de los alumnos de los cursos que gestiona quien consulta.
+   * El servidor decide de quién son esos cursos a partir del token: antes el identificador
+   * del profesor viajaba por query y bastaba cambiarlo para ver los alumnos de otro.
+   */
+  const fetchMonitoreo = useCallback(async (conIndicador = true) => {
     try {
-      if (showLoading && estudiantes.length === 0) setLoading(true);
-      const res = await api.get(`/dashboards/examiner/monitoreo?profesor_guid=${user?.guid}`);
-      const data = res.data;
+      if (conIndicador) setLoading(true);
+      const { data } = await api.get('/dashboards/monitoreo');
       setEstudiantes(Array.isArray(data) ? data : []);
-    } catch (err) {
-      console.error(err);
+    } catch (error) {
+      console.error('No se pudo cargar el monitoreo', error);
     } finally {
-      if (showLoading) setLoading(false);
+      if (conIndicador) setLoading(false);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    if (user?.guid) void fetchMonitoreo();
+  }, [user?.guid, fetchMonitoreo]);
+
+  // Refresco silencioso: el examinador puede estar mirando la tabla mientras cambia.
+  useEventoRealtime('submission:new', () => fetchMonitoreo(false));
+  useEventoRealtime('submission:graded', () => fetchMonitoreo(false));
+  useEventoRealtime('enrollment:changed', () => fetchMonitoreo(false));
+  useEventoRealtime('presence:update', () => fetchMonitoreo(false));
 
   // 1. Extraer lista única de cursos para el filtro
   const cursosUnicos = useMemo(() => {
@@ -156,7 +144,7 @@ export default function MonitoreoEstudiantesPage() {
 
     filtered.forEach((est) => {
       // Consider explicitly online users as connecting "today"
-      if (onlineUsers.includes(est.guid)) {
+      if (usuariosEnLinea.includes(est.guid)) {
         const todayIndex = new Date().getDay();
         days[todayIndex].count++;
       } else if (est.ultimo_acceso) {
@@ -167,10 +155,10 @@ export default function MonitoreoEstudiantesPage() {
     });
 
     return days;
-  }, [filtered, onlineUsers]);
+  }, [filtered, usuariosEnLinea]);
 
   const renderUltimoAcceso = (d: string | null, studentGuid: string) => {
-    const isOnline = onlineUsers.includes(studentGuid);
+    const isOnline = usuariosEnLinea.includes(studentGuid);
 
     if (isOnline) {
       return (

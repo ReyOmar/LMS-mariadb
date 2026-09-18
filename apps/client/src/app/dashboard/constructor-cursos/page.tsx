@@ -2,7 +2,8 @@
 
 import { useEffect, useState, useRef } from 'react';
 import { useRole } from '@/contexts/RoleContext';
-import { useWS } from '@/contexts/WebSocketContext';
+import { useEventoRealtime, useRealtime } from '@/contexts/RealtimeContext';
+import { useBloqueoDeCurso } from '@/hooks/useBloqueoDeCurso';
 import { PageLoader } from '@/components/ui/PageLoader';
 import {
   Plus,
@@ -41,13 +42,13 @@ import {
 } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
-import api, { API_BASE_URL } from '@/lib/api';
+import api, { mensajeDeError, urlDeArchivo, urlDeMarca } from '@/lib/api';
 import { useAlert } from '@/contexts/AlertContext';
 import { sanitizeHTML } from '@/lib/sanitize';
 
 export default function ConstructorCursosRoot() {
   const { role, user } = useRole();
-  const { subscribe, send, editingCourses } = useWS();
+  const { cursosEnEdicion } = useRealtime();
   const { showAlert, showConfirm } = useAlert();
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -101,8 +102,9 @@ export default function ConstructorCursosRoot() {
   const [showTemario, setShowTemario] = useState(false);
 
   // Active course locking state
-  const editorInfo = activeCourse?.guid ? editingCourses[activeCourse.guid] : null;
-  const isLockedByOtherActive = editorInfo && editorInfo.guid !== user?.guid;
+  // Aviso cooperativo: toma el curso al abrirlo y lo libera al salir.
+  const editorInfo = useBloqueoDeCurso(activeCourse?.guid);
+  const isLockedByOtherActive = Boolean(editorInfo);
   const isReadOnly = activeCourse?.estado === 'PUBLICADO';
 
   const handleReorder = async (moduloId: string, startIndex: number, endIndex: number) => {
@@ -110,17 +112,14 @@ export default function ConstructorCursosRoot() {
     const mod = activeCourse.modulos.find((m: any) => m.guid === moduloId);
     if (!mod) return;
 
-    const recursos = [...(mod.lecciones?.[0]?.recursos || [])];
+    const recursos = [...(mod.recursos || [])];
     const [removed] = recursos.splice(startIndex, 1);
     recursos.splice(endIndex, 0, removed);
 
     // Actualización optimista
     const updatedModulos = activeCourse.modulos.map((m: any) => {
       if (m.guid === moduloId) {
-        return {
-          ...m,
-          lecciones: [{ ...m.lecciones[0], recursos }],
-        };
+        return { ...m, recursos };
       }
       return m;
     });
@@ -128,11 +127,11 @@ export default function ConstructorCursosRoot() {
 
     try {
       const guids = recursos.map((r) => r.guid);
-      await api.patch(`/cursos/modulos/${moduloId}/recursos/reorder`, { recursos_guids: guids });
+      await api.patch(`/cursos/modulos/${moduloId}/bloques/orden`, { guids });
     } catch (err) {
       console.error(err);
       // Revertir si falla
-      const originalCourse = await api.get(`/cursos/${activeCourse.guid}`).then((r) => r.data);
+      const originalCourse = await api.get(`/cursos/${activeCourse.guid}/gestion`).then((r) => r.data);
       setActiveCourse(originalCourse);
     }
   };
@@ -143,66 +142,22 @@ export default function ConstructorCursosRoot() {
     import('@justinribeiro/lite-youtube').catch(console.error);
   }, []);
 
-  // WebSockets for real-time sync
+  // Otro administrador puede crear, borrar o publicar cursos mientras se edita aquí.
+  useEventoRealtime('course:created', () => fetchData());
+  useEventoRealtime('course:deleted', () => fetchData());
+  useEventoRealtime('course:updated', () => fetchData());
+
+  // Avisa antes de cerrar la pestaña con un curso a medio publicar.
   useEffect(() => {
-    if (role !== 'admin' && role !== 'teacher') return;
+    if (activeCourse?.estado !== 'BORRADOR') return;
 
-    const unsub1 = subscribe('course:created', fetchData);
-    const unsub2 = subscribe('course:deleted', fetchData);
-    const unsub3 = subscribe('course:updated', () => {
-      fetchData();
-    });
-    const unsub4 = subscribe('dashboard:refresh', () => {
-      fetchData();
-      // NOTE: Do NOT refresh activeCourse here — it causes a race condition
-      // with the lock mechanism. When another user changes the course to BORRADOR,
-      // refreshing activeCourse would change its estado and trigger our lock effect,
-      // stealing the lock from the actual editor. The kick-out is handled entirely
-      // by the WS course:editing event via the editingCourses state.
-    });
-
-    return () => {
-      unsub1();
-      unsub2();
-      unsub3();
-      unsub4();
+    const alSalir = (evento: BeforeUnloadEvent) => {
+      evento.preventDefault();
+      evento.returnValue = 'El curso sigue en Borrador y los alumnos no lo verán. ¿Salir igualmente?';
     };
-  }, [role, subscribe, activeCourse?.guid]);
-
-  // Lock/unlock course editing via WebSocket
-  useEffect(() => {
-    if (!activeCourse?.guid) return;
-
-    let isLockedByUs = false;
-
-    if (activeCourse.estado === 'BORRADOR') {
-      send('course:lock', { curso_guid: activeCourse.guid });
-      isLockedByUs = true;
-    }
-
-    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
-      if (isLockedByUs) {
-        send('course:unlock', { curso_guid: activeCourse.guid });
-      }
-      if (activeCourse.estado === 'BORRADOR') {
-        e.preventDefault();
-        e.returnValue = 'El curso está en Borrador. ¿Seguro que deseas salir sin publicar?';
-      }
-    };
-    window.addEventListener('beforeunload', handleBeforeUnload);
-
-    return () => {
-      // Only unlock if we are not navigating to the block editor
-      // We can check if the URL contains the block editor path, or just always unlock unless we know
-      // Actually, since this is a clean up function, we check the current pathname.
-      // If we are leaving the constructor entirely, we unlock.
-      const isNavigatingToBlockEditor = window.location.pathname.includes('/bloques/');
-      if (isLockedByUs && !isNavigatingToBlockEditor) {
-        send('course:unlock', { curso_guid: activeCourse.guid });
-      }
-      window.removeEventListener('beforeunload', handleBeforeUnload);
-    };
-  }, [activeCourse?.guid, activeCourse?.estado, send]);
+    window.addEventListener('beforeunload', alSalir);
+    return () => window.removeEventListener('beforeunload', alSalir);
+  }, [activeCourse?.estado]);
 
   // Intercept client-side navigation (sidebar links) when course is in BORRADOR
   useEffect(() => {
@@ -287,7 +242,7 @@ export default function ConstructorCursosRoot() {
           if (resourceId && moduleId) {
             const mod = data.modulos?.find((m: any) => m.guid === moduleId);
             if (mod) {
-              const rec = mod.lecciones?.[0]?.recursos?.find((r: any) => r.guid === resourceId);
+              const rec = (mod.recursos || []).find((r: any) => r.guid === resourceId);
               if (rec) {
                 setSelectedItem({ type: 'RESOURCE', data: rec, moduloId: moduleId });
                 setExpandedModules((prev) => ({ ...prev, [moduleId]: true }));
@@ -360,7 +315,7 @@ export default function ConstructorCursosRoot() {
     // Only admins can fetch the professors list
     if (role !== 'admin') return;
     try {
-      const res = await api.get('/cursos/profesores');
+      const res = await api.get('/auth/usuarios/por-rol', { params: { rol: 'PROFESOR' } });
       const data = res.data;
       setProfesores(data);
     } catch (e) {
@@ -410,7 +365,7 @@ export default function ConstructorCursosRoot() {
   const refreshActiveCourse = async () => {
     if (!activeCourse) return;
     try {
-      const resDetails = await api.get(`/cursos/${activeCourse.guid}`);
+      const resDetails = await api.get(`/cursos/${activeCourse.guid}/gestion`);
       setActiveCourse(resDetails.data);
     } catch (err) {
       console.error(err);
@@ -449,7 +404,7 @@ export default function ConstructorCursosRoot() {
         const res = await api.post('/storage/upload?folder=recursos', formData, {
           headers: { 'Content-Type': 'multipart/form-data' },
         });
-        setBloqueBase64(`${API_BASE_URL}/storage/download/${res.data.filename}`);
+        setBloqueBase64(urlDeArchivo(res.data.url) ?? '');
       } catch (err) {
         console.error('Error uploading image:', err);
       }
@@ -467,7 +422,7 @@ export default function ConstructorCursosRoot() {
         const res = await api.post('/storage/upload?folder=recursos', formData, {
           headers: { 'Content-Type': 'multipart/form-data' },
         });
-        setBloqueBase64(`${API_BASE_URL}/storage/download/${res.data.filename}`);
+        setBloqueBase64(urlDeArchivo(res.data.url) ?? '');
       } catch (err) {
         console.error('Error uploading dropped image:', err);
       }
@@ -533,7 +488,7 @@ export default function ConstructorCursosRoot() {
       extras.push(
         <a
           key="file"
-          href={`${API_BASE_URL}/storage/download/${recurso.archivo_adjunto}?originalName=${encodeURIComponent(recurso.archivo_adjunto_nombre)}`}
+          href={urlDeArchivo(recurso.archivo_adjunto_url) ?? ''}
           className="flex items-center gap-3 p-3 bg-muted/30 border border-border rounded-xl hover:bg-primary/10 hover:border-primary/30 transition-colors cursor-pointer group"
         >
           <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center group-hover:bg-primary/20 transition-colors">
@@ -596,10 +551,8 @@ export default function ConstructorCursosRoot() {
           const newCourse = { ...prev };
           newCourse.modulos = newCourse.modulos.map((m: any) => {
             const newM = { ...m };
-            if (newM.lecciones && newM.lecciones.length > 0) {
-              newM.lecciones = [...newM.lecciones];
-              newM.lecciones[0] = { ...newM.lecciones[0] };
-              newM.lecciones[0].recursos = newM.lecciones[0].recursos.filter((r: any) => r.guid !== id);
+            if (newM.recursos) {
+              newM.recursos = newM.recursos.filter((r: any) => r.guid !== id);
             }
             return newM;
           });
@@ -832,12 +785,12 @@ export default function ConstructorCursosRoot() {
                       {activeCourse.imagen_portada ? (
                         <>
                           <img
-                            src={`${API_BASE_URL}/storage/download/${activeCourse.imagen_portada}`}
+                            src={urlDeMarca(activeCourse.imagen_portada) ?? ''}
                             className="w-full h-full object-cover"
                           />
                           <div className="absolute top-2 right-2 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity z-20">
                             <a
-                              href={`${API_BASE_URL}/storage/download/${activeCourse.imagen_portada}?originalName=portada_${encodeURIComponent(activeCourse.titulo)}.png`}
+                              href={urlDeMarca(activeCourse.imagen_portada) ?? ''}
                               download
                               onClick={(e) => e.stopPropagation()}
                               className="p-2 bg-primary hover:bg-primary/90 text-white rounded-lg shadow-md transition-colors"
@@ -1367,8 +1320,8 @@ export default function ConstructorCursosRoot() {
                   (statusFilter === 'todos' || c.estado === statusFilter),
               )
               .map((curso) => {
-                const editorInfo = editingCourses[curso.guid];
-                const isLockedByOther = editorInfo && editorInfo.guid !== user?.guid;
+                const editorInfo = cursosEnEdicion[curso.guid];
+                const isLockedByOther = Boolean(editorInfo) && editorInfo.guid !== user?.guid;
 
                 return (
                   <div
@@ -1405,7 +1358,7 @@ export default function ConstructorCursosRoot() {
                           <div>
                             <p className="text-xs font-bold text-foreground">En edición</p>
                             <p className="text-[11px] text-muted-foreground">
-                              {editorInfo.role}: {editorInfo.nombre}
+                              {editorInfo.rol}: {editorInfo.nombre}
                             </p>
                           </div>
                         </div>
@@ -1416,7 +1369,7 @@ export default function ConstructorCursosRoot() {
                       {curso.imagen_portada ? (
                         // eslint-disable-next-line @next/next/no-img-element
                         <img
-                          src={`${API_BASE_URL}/storage/download/${curso.imagen_portada}`}
+                          src={urlDeMarca(curso.imagen_portada) ?? ''}
                           alt={curso.titulo}
                           className="w-full h-full object-cover opacity-80 group-hover:opacity-100 transition-opacity"
                         />
@@ -1576,7 +1529,7 @@ export default function ConstructorCursosRoot() {
               <p className="text-muted-foreground text-sm leading-relaxed">
                 El{' '}
                 <strong className="text-foreground">
-                  {editorInfo?.role} {editorInfo?.nombre}
+                  {editorInfo?.rol} {editorInfo?.nombre}
                 </strong>{' '}
                 está editando el curso <strong className="text-foreground">{activeCourse.titulo}</strong>.
                 <br />

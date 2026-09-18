@@ -1,17 +1,17 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { BookOpen, Lock, AlertCircle, ArrowRight, Eye, EyeOff, Search, ChevronDown } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useRole } from '@/contexts/RoleContext';
-import { useWS } from '@/contexts/WebSocketContext';
+import { useEventoRealtime, useRealtime } from '@/contexts/RealtimeContext';
 import { PageLoader } from '@/components/ui/PageLoader';
 import { EmptyState } from '@/components/ui/EmptyState';
-import api, { API_BASE_URL } from '@/lib/api';
+import api, { urlDeMarca } from '@/lib/api';
 
 export function TeacherDashboard() {
   const { user } = useRole();
-  const { subscribe, editingCourses } = useWS();
+  const { cursosEnEdicion } = useRealtime();
   const router = useRouter();
 
   const [cursos, setCursos] = useState<any[]>([]);
@@ -19,34 +19,24 @@ export function TeacherDashboard() {
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('todos');
 
-  const fetchCursos = async () => {
+  const fetchCursos = useCallback(async () => {
     try {
-      const res = await api.get('/cursos');
-      const data = res.data;
-      setCursos(data);
-    } catch (e) {
-      console.error(e);
+      const { data } = await api.get('/cursos');
+      setCursos(Array.isArray(data) ? data : []);
+    } catch (error) {
+      console.error('No se pudieron cargar los cursos asignados', error);
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
-    if (user?.guid) fetchCursos();
-  }, [user?.guid]);
+    if (user?.guid) void fetchCursos();
+  }, [user?.guid, fetchCursos]);
 
-  useEffect(() => {
-    if (!user?.guid) return;
-    const unsub1 = subscribe('course:updated', fetchCursos);
-    const unsub2 = subscribe('course:created', fetchCursos);
-    const unsub3 = subscribe('dashboard:refresh', fetchCursos);
-
-    return () => {
-      unsub1();
-      unsub2();
-      unsub3();
-    };
-  }, [user?.guid, subscribe]);
+  useEventoRealtime('course:updated', fetchCursos);
+  useEventoRealtime('course:created', fetchCursos);
+  useEventoRealtime('course:deleted', fetchCursos);
 
   if (loading) {
     return <PageLoader message="Cargando asignaciones..." />;
@@ -100,7 +90,7 @@ export function TeacherDashboard() {
                   (statusFilter === 'todos' || c.estado === statusFilter),
               )
               .map((curso: any) => {
-                const editorInfo = editingCourses[curso.guid];
+                const editorInfo = cursosEnEdicion[curso.guid];
                 const isLockedByOther = editorInfo && editorInfo.guid !== user?.guid;
 
                 return (
@@ -126,7 +116,7 @@ export function TeacherDashboard() {
                           <div>
                             <p className="text-xs font-bold text-foreground">En edición</p>
                             <p className="text-[11px] text-muted-foreground">
-                              {editorInfo.role}: {editorInfo.nombre}
+                              {editorInfo.rol}: {editorInfo.nombre}
                             </p>
                           </div>
                         </div>
@@ -136,7 +126,7 @@ export function TeacherDashboard() {
                     <div className="h-32 bg-gradient-to-br from-primary/10 to-secondary/10 relative flex items-center justify-center overflow-hidden">
                       {curso.imagen_portada ? (
                         <img
-                          src={`${API_BASE_URL}/storage/download/${curso.imagen_portada}`}
+                          src={urlDeMarca(curso.imagen_portada) ?? ''}
                           alt={curso.titulo}
                           className="w-full h-full object-cover opacity-80 group-hover:opacity-100 transition-opacity"
                         />

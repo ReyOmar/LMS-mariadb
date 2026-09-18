@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   BookCheck,
   Download,
@@ -35,14 +35,14 @@ const CartesianGrid = dynamic(() => import('recharts').then((m) => m.CartesianGr
 const Legend = dynamic(() => import('recharts').then((m) => m.Legend), { ssr: false });
 import { PageLoader } from '@/components/ui/PageLoader';
 import { useRole } from '@/contexts/RoleContext';
-import { useWS } from '@/contexts/WebSocketContext';
-import api, { API_BASE_URL } from '@/lib/api';
+import { useEventoRealtime } from '@/contexts/RealtimeContext';
+import api, { mensajeDeError, urlDeArchivo, urlDeMarca } from '@/lib/api';
+import { NOTA_APROBACION_DEFECTO, NOTA_MAXIMA, NOTA_MINIMA, formatearPuntos } from '@/lib/calificacion';
 import { useAlert } from '@/contexts/AlertContext';
 import { useDebounce } from '@/hooks/usePerformance';
 
 export default function CalificacionManualPage() {
   const { user } = useRole();
-  const { subscribe } = useWS();
   const [entregas, setEntregas] = useState<any[]>([]);
   const [cursos, setCursos] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -66,81 +66,68 @@ export default function CalificacionManualPage() {
   const [gradeComment, setGradeComment] = useState('');
   const [saving, setSaving] = useState(false);
 
-  useEffect(() => {
-    if (user?.guid) fetchData();
-  }, [user?.guid]);
-
-  useEffect(() => {
-    if (!user?.guid) return;
-
-    const unsub1 = subscribe('submission:new', fetchData);
-    const unsub2 = subscribe('submission:graded', fetchData);
-    const unsub3 = subscribe('dashboard:refresh', fetchData);
-    const unsub4 = subscribe('course:created', fetchData);
-    const unsub5 = subscribe('course:updated', fetchData);
-
-    return () => {
-      unsub1();
-      unsub2();
-      unsub3();
-      unsub4();
-      unsub5();
-    };
-  }, [user?.guid, subscribe]);
-
-  const fetchData = async () => {
+  /**
+   * Entregas pendientes de calificar y cursos del examinador.
+   * El servidor ya devuelve sólo las entregas de sus cursos y excluye los cuestionarios,
+   * que se corrigen solos.
+   */
+  const fetchData = useCallback(async () => {
     try {
       const [resEntregas, resCursos] = await Promise.all([
-        api.get(`/evaluaciones/examiner/entregas`),
+        api.get('/evaluaciones/examinador/entregas'),
         api.get('/cursos'),
       ]);
-      const data = resEntregas.data;
-      if (Array.isArray(data)) {
-        setEntregas(data.filter((e) => !e.tarea_titulo?.startsWith('[QUIZ]')));
-      } else {
-        setEntregas([]);
-      }
-      setCursos(resCursos.data || []);
-    } catch (err) {
-      console.error(err);
+      setEntregas(Array.isArray(resEntregas.data) ? resEntregas.data : []);
+      setCursos(Array.isArray(resCursos.data) ? resCursos.data : []);
+    } catch (error) {
+      console.error('No se pudieron cargar las entregas', error);
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
+  useEffect(() => {
+    if (user?.guid) void fetchData();
+  }, [user?.guid, fetchData]);
+
+  useEventoRealtime('submission:new', () => fetchData());
+  useEventoRealtime('submission:graded', () => fetchData());
+
+  /**
+   * Normaliza lo que el examinador teclea en el campo de nota.
+   * Acepta enteros y un decimal dentro de 0–100; cualquier otra cosa no llega a escribirse,
+   * de modo que el error se evita en lugar de tener que explicarlo después.
+   */
   const handleGradeChange = (val: string) => {
-    let cleanVal = val.replace(/[^0-9.]/g, '');
-    const parts = cleanVal.split('.');
-    if (parts.length > 2) cleanVal = parts[0] + '.' + parts.slice(1).join('');
+    let limpio = val.replace(/[^0-9.]/g, '');
 
-    if (cleanVal === '') {
-      setGradeValue('');
+    const partes = limpio.split('.');
+    if (partes.length > 2) limpio = `${partes[0]}.${partes.slice(1).join('')}`;
+
+    if (limpio === '' || limpio === '.') {
+      setGradeValue(limpio === '.' ? '0.' : '');
       return;
     }
 
-    let num = parseFloat(cleanVal);
-    if (num > 5) cleanVal = '5.0';
-
-    if (cleanVal.length === 1 && /^[0-4]$/.test(cleanVal) && gradeValue.length < cleanVal.length) {
-      cleanVal += '.';
-    } else if (cleanVal === '5' && gradeValue.length < cleanVal.length) {
-      cleanVal = '5.0';
+    const [entera, decimal] = limpio.split('.');
+    if (Number(entera) > NOTA_MAXIMA) {
+      setGradeValue(String(NOTA_MAXIMA));
+      return;
+    }
+    if (decimal !== undefined && decimal.length > 1) {
+      limpio = `${entera}.${decimal.slice(0, 1)}`;
     }
 
-    if (cleanVal.includes('.')) {
-      const dec = cleanVal.split('.')[1];
-      if (dec && dec.length > 1) {
-        cleanVal = cleanVal.split('.')[0] + '.' + dec.substring(0, 1);
-      }
-    }
-
-    setGradeValue(cleanVal);
+    setGradeValue(limpio);
   };
 
   const handleCalificar = async (guid: string) => {
-    const nota = parseFloat(gradeValue);
-    if (isNaN(nota) || nota < 0 || nota > 5) {
-      showAlert.warning('Atención', 'La calificación debe ser un número entre 0 y 5.');
+    const nota = Number.parseFloat(gradeValue);
+    if (!Number.isFinite(nota) || nota < NOTA_MINIMA || nota > NOTA_MAXIMA) {
+      showAlert.warning(
+        'Calificación no válida',
+        `Escribe un número entre ${NOTA_MINIMA} y ${NOTA_MAXIMA}.`,
+      );
       return;
     }
     setSaving(true);
@@ -152,11 +139,7 @@ export default function CalificacionManualPage() {
       setEntregas((prev) =>
         prev.map((e) =>
           e.guid === guid
-            ? {
-                ...e,
-                estado: 'CALIFICADA',
-                contenido_texto: `NOTA: ${nota}${gradeComment ? ` | ${gradeComment}` : ''}`,
-              }
+            ? { ...e, estado: 'CALIFICADA', calificacion: nota, comentario: gradeComment || null }
             : e,
         ),
       );
@@ -164,9 +147,8 @@ export default function CalificacionManualPage() {
       setGradeValue('');
       setGradeComment('');
       showToast.success('La nota ha sido guardada y el estudiante notificado.');
-    } catch (err) {
-      console.error(err);
-      showAlert.error('Error', 'Error al calificar.');
+    } catch (error) {
+      showAlert.error('No se pudo guardar la nota', mensajeDeError(error));
     } finally {
       setSaving(false);
     }
@@ -226,27 +208,26 @@ export default function CalificacionManualPage() {
 
   const gradeDistribution = useMemo(() => {
     if (!selectedCourse) return [];
+
+    // Los tramos se describen respecto al umbral de aprobación, no a números sueltos:
+    // si el curso cambia su mínimo, la gráfica sigue diciendo algo útil.
+    const umbral = NOTA_APROBACION_DEFECTO;
     const ranges = [
-      { name: '0.0 - 2.9 (Bajo)', count: 0, fill: '#ef4444' },
-      { name: '3.0 - 3.9 (Medio)', count: 0, fill: '#f59e0b' },
-      { name: '4.0 - 5.0 (Alto)', count: 0, fill: '#10b981' },
+      { name: `Por debajo de ${Math.round(umbral * 0.75)}`, count: 0, fill: '#ef4444' },
+      { name: `Entre ${Math.round(umbral * 0.75)} y ${umbral - 1}`, count: 0, fill: '#f59e0b' },
+      { name: `${umbral} o más (aprobado)`, count: 0, fill: '#10b981' },
     ];
+
     selectedCourse.entregas.forEach((e) => {
-      if (e.estado === 'CALIFICADA') {
-        let val = e.calificacion;
-        if (val === undefined) {
-          const notaText = e.contenido_texto?.startsWith('NOTA:')
-            ? e.contenido_texto.replace('NOTA: ', '').split(' | ')[0]
-            : null;
-          val = notaText ? parseFloat(notaText) : null;
-        }
-        if (val !== null && !isNaN(val)) {
-          if (val < 3) ranges[0].count++;
-          else if (val < 4) ranges[1].count++;
-          else ranges[2].count++;
-        }
-      }
+      if (e.estado !== 'CALIFICADA') return;
+      const val = e.calificacion;
+      if (val === null || val === undefined || Number.isNaN(val)) return;
+
+      if (val >= umbral) ranges[2].count++;
+      else if (val >= umbral * 0.75) ranges[1].count++;
+      else ranges[0].count++;
     });
+
     return ranges.filter((r) => r.count > 0);
   }, [selectedCourse]);
 
@@ -570,7 +551,7 @@ export default function CalificacionManualPage() {
                     <div className="w-24 h-24 shrink-0 rounded-xl overflow-hidden relative group/cover bg-muted flex items-center justify-center border border-border">
                       {curso.imagen_portada ? (
                         <img
-                          src={`${API_BASE_URL}/storage/download/${curso.imagen_portada}`}
+                          src={urlDeMarca(curso.imagen_portada) ?? ''}
                           alt="Portada"
                           className="w-full h-full object-cover"
                         />
@@ -901,12 +882,10 @@ export default function CalificacionManualPage() {
                               {grupo.entregas.map((entrega) => {
                                 const isGrading = gradingGuid === entrega.guid;
                                 const isCalificada = entrega.estado === 'CALIFICADA';
-                                const nota = entrega.contenido_texto?.startsWith('NOTA:')
-                                  ? entrega.contenido_texto.replace('NOTA: ', '').split(' | ')[0]
+                                const nota = entrega.calificacion != null
+                                  ? formatearPuntos(entrega.calificacion)
                                   : null;
-                                const comentario = entrega.contenido_texto?.includes(' | ')
-                                  ? entrega.contenido_texto.split(' | ').slice(1).join(' | ')
-                                  : null;
+                                const comentario = entrega.comentario ?? null;
 
                                 return (
                                   <div
@@ -964,7 +943,7 @@ export default function CalificacionManualPage() {
                                           {/* File Button */}
                                           {entrega.archivo_servidor && (
                                             <a
-                                              href={`${API_BASE_URL}/storage/download/${entrega.archivo_servidor}?originalName=${encodeURIComponent(entrega.archivo_nombre || 'archivo')}`}
+                                              href={urlDeArchivo(entrega.archivo_url) ?? ''}
                                               className="flex items-center gap-2 px-3 py-2 bg-muted hover:bg-primary/10 text-muted-foreground hover:text-primary rounded-xl text-xs font-bold transition-colors"
                                               title="Descargar entrega"
                                               target="_blank"
@@ -982,7 +961,7 @@ export default function CalificacionManualPage() {
                                             <div className="flex items-center gap-2">
                                               <div className="bg-emerald-500/10 px-3 py-1.5 rounded-lg flex items-center gap-1">
                                                 <span className="text-sm font-bold text-emerald-600">{nota}</span>
-                                                <span className="text-[10px] font-bold text-emerald-600/70">/5.0</span>
+                                                <span className="text-[10px] font-bold text-emerald-600/70">/ {NOTA_MAXIMA}</span>
                                               </div>
                                               <button
                                                 onClick={() => {
@@ -1027,7 +1006,7 @@ export default function CalificacionManualPage() {
                                           </div>
                                           {entrega.archivo_servidor ? (
                                             <a
-                                              href={`${API_BASE_URL}/storage/download/${entrega.archivo_servidor}?originalName=${encodeURIComponent(entrega.archivo_nombre || 'archivo')}`}
+                                              href={urlDeArchivo(entrega.archivo_url) ?? ''}
                                               className="flex items-center justify-center gap-2 px-6 py-3 bg-primary hover:bg-primary/90 text-white rounded-xl text-sm font-bold transition-transform hover:-translate-y-0.5 shadow-md shrink-0"
                                               target="_blank"
                                               rel="noopener noreferrer"
@@ -1049,7 +1028,7 @@ export default function CalificacionManualPage() {
                                           {/* Grade Input */}
                                           <div className="w-full md:w-48 shrink-0">
                                             <label className="text-xs font-bold text-muted-foreground uppercase tracking-wider block mb-2">
-                                              Calificación (0.0 - 5.0)
+                                              Calificación (0 – {NOTA_MAXIMA})
                                             </label>
                                             <div className="relative">
                                               <input

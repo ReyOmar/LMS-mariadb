@@ -117,6 +117,21 @@ export class UserService {
     };
   }
 
+  // ── Sesión ───────────────────────────────────────────────────────────────
+
+  /**
+   * Cierra la sesión indicada: la revoca y borra el registro de sesión activa.
+   * El borrado se condiciona al `jti` para que un cierre tardío de una sesión ya desplazada
+   * no eche al dispositivo que entró después.
+   */
+  async cerrarSesion(guid: string, jti: string): Promise<void> {
+    await this.tokenBlacklist.revocarSesion(guid, jti);
+    await this.prisma.usuarios.updateMany({
+      where: { guid, sesion_actual_jti: jti },
+      data: { sesion_actual_jti: null },
+    });
+  }
+
   // ── Perfil propio ────────────────────────────────────────────────────────
 
   /**
@@ -157,6 +172,7 @@ export class UserService {
 
     if (cambiaContrasena) {
       await this.tokenBlacklist.revocarUsuario(guid);
+      await this.prisma.usuarios.update({ where: { guid }, data: { sesion_actual_jti: null } });
       this.realtime.revocarSesion(guid, 'password_changed');
     }
 

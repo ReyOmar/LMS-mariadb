@@ -20,7 +20,7 @@ import {
   AlertTriangle,
 } from 'lucide-react';
 import Link from 'next/link';
-import api, { API_BASE_URL } from '@/lib/api';
+import api, { urlDeArchivo } from '@/lib/api';
 import { useAlert } from '@/contexts/AlertContext';
 import { sanitizeHTML } from '@/lib/sanitize';
 import dynamic from 'next/dynamic';
@@ -62,7 +62,7 @@ export default function ModuleEditorPage() {
 
   const fetchData = async () => {
     try {
-      const res = await api.get(`/cursos/${curso_id}`);
+      const res = await api.get(`/cursos/${curso_id}/gestion`);
       const data = res.data;
       setCurso(data);
       const targetModulo = data.modulos?.find((m: any) => m.guid === modulo_id);
@@ -84,7 +84,7 @@ export default function ModuleEditorPage() {
         const res = await api.post('/storage/upload?folder=recursos', formData, {
           headers: { 'Content-Type': 'multipart/form-data' },
         });
-        setBloqueBase64(`${API_BASE_URL}/storage/download/${res.data.filename}`);
+        setBloqueBase64(urlDeArchivo(res.data.url) ?? '');
       } catch (err) {
         console.error('Error uploading image:', err);
       }
@@ -105,7 +105,7 @@ export default function ModuleEditorPage() {
         const res = await api.post('/storage/upload?folder=recursos', formData, {
           headers: { 'Content-Type': 'multipart/form-data' },
         });
-        setBloqueBase64(`${API_BASE_URL}/storage/download/${res.data.filename}`);
+        setBloqueBase64(urlDeArchivo(res.data.url) ?? '');
       } catch (err) {
         console.error('Error uploading dropped image:', err);
       }

@@ -38,6 +38,13 @@ export class EvaluacionesController {
     return this.evaluaciones.getEntregasParaCalificar(user);
   }
 
+  /** Resultados de los cuestionarios, que se corrigen automáticamente. */
+  @Roles('ADMINISTRADOR', 'PROFESOR')
+  @Get('/examinador/cuestionarios')
+  getIntentosDeCuestionario(@CurrentUser() user: JwtPayload) {
+    return this.evaluaciones.getIntentosDeCuestionario(user);
+  }
+
   @Roles('ADMINISTRADOR', 'PROFESOR')
   @Get('/tareas/:tarea_guid/entregas')
   getEntregasDeTarea(@CurrentUser() user: JwtPayload, @Param('tarea_guid') tareaGuid: string) {

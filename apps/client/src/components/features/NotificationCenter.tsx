@@ -3,7 +3,7 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { Bell, X, MessageSquare, Star, AlertTriangle, BookOpen, RefreshCw, Clock, Inbox, ChevronRight, Trash2 } from 'lucide-react';
 import { useRole } from '@/contexts/RoleContext';
-import { useWS } from '@/contexts/WebSocketContext';
+import { useEventoRealtime } from '@/contexts/RealtimeContext';
 import api from '@/lib/api';
 
 interface Notification {
@@ -41,7 +41,6 @@ const colorMap: Record<string, string> = {
 
 export function NotificationCenter() {
   const { user } = useRole();
-  const { subscribe } = useWS();
   const [notificaciones, setNotificaciones] = useState<Notification[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [open, setOpen] = useState(false);
@@ -58,7 +57,7 @@ export function NotificationCenter() {
         api.get('/notificaciones/no-leidas'),
       ]);
       setNotificaciones(notifsRes.data || []);
-      setUnreadCount(countRes.data?.count || 0);
+      setUnreadCount(countRes.data?.total || 0);
     } catch (err) {
       console.error('Error fetching notifications:', err);
     } finally {
@@ -70,16 +69,11 @@ export function NotificationCenter() {
     fetchNotificaciones();
   }, [fetchNotificaciones]);
 
-  // Listen for new notifications in real-time
-  useEffect(() => {
-    if (!user?.guid) return;
-    const unsub = subscribe('notification:new', (data: any) => {
-      setNotificaciones(prev => [data, ...prev].slice(0, 25));
-      setUnreadCount(prev => prev + 1);
-    });
-    const unsub2 = subscribe('dashboard:refresh', fetchNotificaciones);
-    return () => { unsub(); unsub2(); };
-  }, [user?.guid, subscribe, fetchNotificaciones]);
+  // Un aviso nuevo se añade en el momento, sin volver a pedir la lista entera.
+  useEventoRealtime('notification:new', (data) => {
+    setNotificaciones((prev) => [data as Notification, ...prev].slice(0, 25));
+    setUnreadCount((prev) => prev + 1);
+  });
 
   // Auto-mark all notifications as read when the panel opens
   useEffect(() => {
@@ -112,7 +106,7 @@ export function NotificationCenter() {
 
   const clearAll = async () => {
     try {
-      await api.delete('/notificaciones/limpiar');
+      await api.delete('/notificaciones');
       setNotificaciones([]);
       setUnreadCount(0);
       // Auto-close the panel after 500ms

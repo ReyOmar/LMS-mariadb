@@ -54,6 +54,13 @@ model usuarios {
   ultimo_acceso     DateTime?
   usa_clave_defecto Boolean   @default(true)
 
+  /// Identificador (`jti`) de la sesión válida en este momento.
+  /// El campus admite una sesión activa por cuenta: compartir credenciales invalidaría la
+  /// certificación, que acredita que una persona concreta hizo la formación. Guardarlo en
+  /// la fila del usuario —y no sólo en memoria— hace que la política sobreviva a un
+  /// reinicio del servidor.
+  sesion_actual_jti String?
+
   // Firma del examinador, impresa en los certificados que emite
   firma_url    String?
   firma_nombre String?

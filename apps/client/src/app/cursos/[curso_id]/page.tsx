@@ -30,8 +30,8 @@ import {
 } from 'lucide-react';
 import { PageLoader } from '@/components/ui/PageLoader';
 import Link from 'next/link';
-import api, { API_BASE_URL } from '@/lib/api';
-import { useWS } from '@/contexts/WebSocketContext';
+import api, { urlDeArchivo } from '@/lib/api';
+import { useEventoRealtime, useRealtime } from '@/contexts/RealtimeContext';
 import { sanitizeHTML } from '@/lib/sanitize';
 import QuizPlayer from '@/components/quiz/QuizPlayer';
 import AssignmentPlayer from '@/components/tareas/AssignmentPlayer';
@@ -61,7 +61,7 @@ export default function CursoVisorPage() {
   const [isQuizActive, setIsQuizActive] = useState(false);
   const [pendingCelebration, setPendingCelebration] = useState<any>(null);
   const celebrationShownRef = useRef(false);
-  const { subscribe, maintenanceCourses } = useWS();
+  const { cursosEnMantenimiento } = useRealtime();
 
   // Sidebar toggle state — remembers preference, defaults closed on mobile
   const [sidebarOpen, setSidebarOpen] = useState(() => {
@@ -111,37 +111,20 @@ export default function CursoVisorPage() {
     if (!curso_id) return;
 
     fetchCurso();
-
-    const unsub1 = subscribe('course:updated', fetchCurso);
-    const unsub2 = subscribe('dashboard:refresh', fetchCurso);
-
-    return () => {
-      unsub1();
-      unsub2();
-    };
-  }, [curso_id, subscribe]);
+  }, [curso_id]);
 
   useEffect(() => {
     if (!curso_id || !userGuid) return;
 
     fetchProgreso();
+  }, [curso_id, userGuid, curso]);
 
-    const unsub1 = subscribe('submission:graded', fetchProgreso);
-    const unsub2 = subscribe('dashboard:refresh', fetchProgreso);
-    const unsub3 = subscribe('certificate:new', (data: any) => {
-      if (data?.curso_guid === curso_id && !celebrationShownRef.current) {
-        setPendingCelebration(data);
-      }
-    });
-    const unsub4 = subscribe('submission:new', fetchProgreso);
-
-    return () => {
-      unsub1();
-      unsub2();
-      unsub3();
-      unsub4();
-    };
-  }, [curso_id, userGuid, subscribe, curso]);
+  // El avance del alumno cambia desde fuera cuando el examinador califica una entrega.
+  useEventoRealtime('submission:graded', () => fetchProgreso());
+  useEventoRealtime('certificate:new', (datos) => {
+    const evento = datos as { curso_guid?: string };
+    if (evento?.curso_guid === curso_id && !celebrationShownRef.current) setPendingCelebration(evento);
+  });
 
   useEffect(() => {
     import('@justinribeiro/lite-youtube').catch(console.error);
@@ -174,36 +157,28 @@ export default function CursoVisorPage() {
 
   // Listen for maintenance events on this specific course (students only)
   useEffect(() => {
-    if (maintenanceCourses[curso_id as string]) {
+    if (cursosEnMantenimiento[curso_id as string]) {
       setInMaintenance(true);
     }
-  }, [maintenanceCourses, curso_id]);
+  }, [cursosEnMantenimiento, curso_id]);
 
-  useEffect(() => {
-    const unsub = subscribe('course:maintenance', (data: any) => {
-      if (data.curso_guid === curso_id) {
-        setInMaintenance(true);
-      }
-    });
-    // Clear maintenance when course is republished
-    const unsub2 = subscribe('course:updated', (data: any) => {
-      if (data.guid === curso_id && data.estado === 'PUBLICADO') {
-        setInMaintenance(false);
-        fetchCurso();
-      }
-    });
-    return () => {
-      unsub();
-      unsub2();
-    };
-  }, [subscribe, curso_id]);
+  // Un administrador puede pasar el curso a mantenimiento con el alumno dentro.
+  useEventoRealtime('course:maintenance', (datos) => {
+    if ((datos as { curso_guid?: string })?.curso_guid === curso_id) setInMaintenance(true);
+  });
+  useEventoRealtime('course:updated', (datos) => {
+    const evento = datos as { guid?: string; estado?: string };
+    if (evento?.guid !== curso_id) return;
+    if (evento.estado === 'PUBLICADO') setInMaintenance(false);
+    fetchCurso();
+  });
 
   // Heartbeat for active time tracking
   useEffect(() => {
     if (!userGuid || !curso_id || viewOnlyMode) return;
     const sendHeartbeat = () => {
       if (!document.hidden) {
-        api.post(`/estudiantes/student/heartbeat?usuario_guid=${userGuid}`, { curso_guid: curso_id }).catch(() => {});
+        api.post('/estudiantes/latido', { curso_guid: curso_id }).catch(() => {});
       }
     };
     sendHeartbeat(); // Send immediately
@@ -229,7 +204,7 @@ export default function CursoVisorPage() {
 
   const fetchProgreso = async () => {
     try {
-      const res = await api.get(`/estudiantes/student/progreso?usuario_guid=${userGuid}&curso_guid=${curso_id}`);
+      const res = await api.get(`/estudiantes/progreso/${curso_id}`);
       const data = res.data;
       // Merge completados + desbloqueados_por_tiempo for navigation purposes
       const realCompleted = data.completados || [];
@@ -240,13 +215,11 @@ export default function CursoVisorPage() {
 
       // Check if course has a certificate (already completed)
       try {
-        const verifRes = await api.get(
-          `/estudiantes/student/certificados/verificar/${curso_id}?usuario_guid=${userGuid}`,
-        );
+        const verifRes = await api.get(`/certificados/finalizacion/${curso_id}`);
         const verifData = verifRes.data;
         if (verifData.completo && verifData.puede_generar_certificado) {
           // Check if certificate actually exists
-          const certsRes = await api.get(`/estudiantes/student/certificados?usuario_guid=${userGuid}`);
+          const certsRes = await api.get('/certificados');
           const certs = Array.isArray(certsRes.data) ? certsRes.data : [];
           const matchCert = certs.find((c: any) => c.curso_guid === curso_id);
           if (matchCert) {
@@ -267,7 +240,7 @@ export default function CursoVisorPage() {
     async (recurso_guid: string) => {
       if (!userGuid || completados.includes(recurso_guid)) return;
       try {
-        await api.post(`/estudiantes/student/completar-recurso?usuario_guid=${userGuid}`, { recurso_guid });
+        await api.post('/estudiantes/completar-recurso', { recurso_guid });
         setCompletados((prev) => [...prev, recurso_guid]);
       } catch (err) {
         console.error(err);
@@ -290,7 +263,7 @@ export default function CursoVisorPage() {
   const isModuloUnlocked = (moduleIndex: number): boolean => {
     if (moduleIndex === 0) return true; // First module always unlocked
     const prevModulo = modulos[moduleIndex - 1];
-    const prevRecursos = prevModulo?.lecciones?.[0]?.recursos || [];
+    const prevRecursos = prevModulo?.recursos || [];
     if (prevRecursos.length === 0) return true; // Empty module = unlocked
     return prevRecursos.every((r: any) => completados.includes(r.guid));
   };
@@ -299,7 +272,7 @@ export default function CursoVisorPage() {
   const isRecursoUnlocked = (moduleIndex: number, resourceIndex: number): boolean => {
     if (!isModuloUnlocked(moduleIndex)) return false;
     if (resourceIndex === 0) return true; // First resource in module always unlocked (if module is unlocked)
-    const recursos = modulos[moduleIndex]?.lecciones?.[0]?.recursos || [];
+    const recursos = modulos[moduleIndex]?.recursos || [];
     for (let i = 0; i < resourceIndex; i++) {
       if (!completados.includes(recursos[i].guid)) return false;
     }
@@ -328,7 +301,7 @@ export default function CursoVisorPage() {
 
       for (let m = 0; m < modulosList.length; m++) {
         if (!isModuloUnlocked(m)) break;
-        const recursos = modulosList[m]?.lecciones?.[0]?.recursos || [];
+        const recursos = modulosList[m]?.recursos || [];
         for (let r = 0; r < recursos.length; r++) {
           if (!completados.includes(recursos[r].guid)) {
             // Found first uncompleted resource
@@ -345,7 +318,7 @@ export default function CursoVisorPage() {
       // If all are completed, select the very last resource
       if (!targetRecurso && modulosList.length > 0) {
         const lastMod = modulosList[modulosList.length - 1];
-        const lastRecursos = lastMod?.lecciones?.[0]?.recursos || [];
+        const lastRecursos = lastMod?.recursos || [];
         if (lastRecursos.length > 0) {
           targetRecurso = lastRecursos[lastRecursos.length - 1];
           targetModuloGuid = lastMod.guid;
@@ -367,7 +340,7 @@ export default function CursoVisorPage() {
   useEffect(() => {
     if (!curso || !progresoLoaded || pendingModalShownRef.current || celebrationShownRef.current) return;
     const allRecursos = (curso.modulos || []).flatMap((m: any) =>
-      (m.lecciones || []).flatMap((l: any) => l.recursos || []),
+      m.recursos || [],
     );
     if (allRecursos.length === 0) return;
 
@@ -627,7 +600,7 @@ export default function CursoVisorPage() {
             <div className="p-3 space-y-2 flex-1">
               {modulos.map((mod: any, mi: number) => {
                 const unlocked = isModuloUnlocked(mi);
-                const recursos = mod.lecciones?.[0]?.recursos || [];
+                const recursos = mod.recursos || [];
                 const allCompleted = recursos.length > 0 && recursos.every((r: any) => completados.includes(r.guid));
 
                 return (
@@ -743,7 +716,7 @@ export default function CursoVisorPage() {
                   )}
                   {selectedRecurso.archivo_adjunto && (
                     <a
-                      href={`${API_BASE_URL}/storage/download/${selectedRecurso.archivo_adjunto}?originalName=${encodeURIComponent(selectedRecurso.archivo_adjunto_nombre)}`}
+                      href={urlDeArchivo(selectedRecurso.archivo_adjunto_url) ?? ''}
                       className="flex items-center gap-3 p-3 bg-muted/30 border border-border rounded-xl hover:bg-primary/10 transition-colors"
                     >
                       <Paperclip className="h-4 w-4 text-primary" />
@@ -813,7 +786,7 @@ export default function CursoVisorPage() {
                     recurso_guid={selectedRecurso.guid}
                     bloque_titulo={selectedRecurso.titulo}
                     instrucciones_html={selectedRecurso.contenido_html || ''}
-                    archivo_adjunto={selectedRecurso.archivo_adjunto}
+                    archivo_adjunto_url={selectedRecurso.archivo_adjunto_url}
                     archivo_adjunto_nombre={selectedRecurso.archivo_adjunto_nombre}
                     url_referencia={selectedRecurso.url_referencia}
                     archivo_max_size_mb={selectedRecurso.archivo_max_size_mb ?? 5}
@@ -826,7 +799,7 @@ export default function CursoVisorPage() {
                     recurso_guid={selectedRecurso.guid}
                     bloque_titulo={selectedRecurso.titulo}
                     instrucciones_html={selectedRecurso.contenido_html || ''}
-                    archivo_adjunto={selectedRecurso.archivo_adjunto}
+                    archivo_adjunto_url={selectedRecurso.archivo_adjunto_url}
                     archivo_adjunto_nombre={selectedRecurso.archivo_adjunto_nombre}
                     url_referencia={selectedRecurso.url_referencia}
                     archivo_max_size_mb={selectedRecurso.archivo_max_size_mb ?? 5}
@@ -854,22 +827,20 @@ export default function CursoVisorPage() {
                   </div>
                 ) : (
                   <QuizPlayer
-                    curso_id={curso_id as string}
                     recurso_guid={selectedRecurso.guid}
                     bloque_titulo={selectedRecurso.titulo.replace('[QUIZ] ', '')}
-                    quiz_config_raw={selectedRecurso.quiz_config || ''}
                     instrucciones_html={selectedRecurso.contenido_html || ''}
                     url_referencia={selectedRecurso.url_referencia}
-                    archivo_adjunto={selectedRecurso.archivo_adjunto}
+                    archivo_adjunto_url={selectedRecurso.archivo_adjunto_url}
                     archivo_adjunto_nombre={selectedRecurso.archivo_adjunto_nombre}
                     onFinish={async (success) => {
                       await fetchProgreso();
                       if (success === false && curso && selectedRecurso) {
                         for (const m of curso.modulos) {
                           if (
-                            m.lecciones.some((l: any) => l.recursos.some((r: any) => r.guid === selectedRecurso.guid))
+                            (m.recursos || []).some((r: any) => r.guid === selectedRecurso.guid)
                           ) {
-                            const firstResource = m.lecciones[0]?.recursos[0];
+                            const firstResource = (m.recursos || [])[0];
                             if (firstResource) {
                               setSelectedRecurso(firstResource);
                             }

@@ -104,7 +104,7 @@ function getCategoryForEvent(identificador: string) {
 }
 
 export default function BaseCorreos() {
-  const { realRole } = useRole();
+  const { rolReal } = useRole();
   const [eventos, setEventos] = useState<Evento[]>([]);
   const [loading, setLoading] = useState(true);
   const [editingPlantilla, setEditingPlantilla] = useState<{ evento: Evento; plantilla: Plantilla } | null>(null);
@@ -115,10 +115,10 @@ export default function BaseCorreos() {
   const { showAlert, showToast } = useAlert();
 
   useEffect(() => {
-    if (realRole === 'admin') {
+    if (rolReal === 'admin') {
       fetchEventos();
     }
-  }, [realRole]);
+  }, [rolReal]);
 
   const fetchEventos = async () => {
     try {
@@ -185,7 +185,7 @@ export default function BaseCorreos() {
     events_data: filteredEventos.filter((e) => cat.events.includes(e.identificador)),
   })).filter((g) => g.events_data.length > 0);
 
-  if (realRole !== 'admin') {
+  if (rolReal !== 'admin') {
     return (
       <div className="flex flex-col items-center justify-center h-[70vh] animate-in fade-in">
         <ShieldAlert className="h-16 w-16 text-red-500 mb-4" />

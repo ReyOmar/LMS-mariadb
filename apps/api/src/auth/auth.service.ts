@@ -5,6 +5,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { MailService } from '../mail/mail.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { ConfiguracionService } from '../configuracion/configuracion.service';
+import { TokenBlacklistService } from './token-blacklist.service';
 import { Pais, nombrePais } from '../common/domain/pais';
 import { cifrar, coincide, validarFortaleza } from '../common/domain/password';
 import { JwtClaims, RolUsuario } from '../common/interfaces/jwt-payload.interface';
@@ -41,6 +42,7 @@ export class AuthService {
     private readonly mail: MailService,
     private readonly realtime: RealtimeService,
     private readonly configuracion: ConfiguracionService,
+    private readonly tokenBlacklist: TokenBlacklistService,
   ) {}
 
   // ── Entrada ──────────────────────────────────────────────────────────────
@@ -144,16 +146,43 @@ export class AuthService {
     };
   }
 
-  private emitirToken(usuario: { guid: string; email: string; rol: RolUsuario; pais: Pais }): Promise<string> {
+  /**
+   * Emite el token y lo deja registrado como la sesión activa de la cuenta.
+   *
+   * El campus admite **una sesión por cuenta**: al entrar desde un dispositivo nuevo, el
+   * anterior queda invalidado. La certificación acredita que una persona concreta hizo la
+   * formación, así que compartir credenciales la vaciaría de sentido.
+   *
+   * La sesión anterior se marca como revocada además de sustituirse, para que su token
+   * deje de valer de inmediato aunque el guard leyera una copia cacheada de la cuenta.
+   */
+  private async emitirToken(usuario: {
+    guid: string;
+    email: string;
+    rol: RolUsuario;
+    pais: Pais;
+    sesion_actual_jti?: string | null;
+  }): Promise<string> {
+    const jti = crypto.randomUUID();
     const claims: JwtClaims = {
       sub: usuario.guid,
-      // Identifica esta sesión para poder cerrarla sin tocar las de otros dispositivos.
-      jti: crypto.randomUUID(),
+      jti,
       email: usuario.email,
       role: usuario.rol,
       pais: usuario.pais,
     };
-    return this.jwtService.signAsync(claims);
+
+    const token = await this.jwtService.signAsync(claims);
+
+    if (usuario.sesion_actual_jti) {
+      await this.tokenBlacklist.revocarSesion(usuario.guid, usuario.sesion_actual_jti);
+    }
+    await this.prisma.usuarios.update({ where: { guid: usuario.guid }, data: { sesion_actual_jti: jti } });
+
+    // Avisa al dispositivo anterior para que limpie su estado y explique lo ocurrido.
+    this.realtime.revocarSesion(usuario.guid, 'sesion_desplazada');
+
+    return token;
   }
 
   private perfilPublico(usuario: {

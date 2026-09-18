@@ -18,11 +18,12 @@ import {
 } from 'lucide-react';
 import { PageLoader } from '@/components/ui/PageLoader';
 import { useRole } from '@/contexts/RoleContext';
-import { useWS } from '@/contexts/WebSocketContext';
+import { useEventoRealtime } from '@/contexts/RealtimeContext';
 import { useAlert } from '@/contexts/AlertContext';
 import { useSearchParams } from 'next/navigation';
 import { useRouter } from 'next/navigation';
-import api, { API_BASE_URL } from '@/lib/api';
+import api, { mensajeDeError } from '@/lib/api';
+import { formatearNota } from '@/lib/calificacion';
 
 interface Certificate {
   guid: string;
@@ -41,7 +42,6 @@ interface Certificate {
 
 export default function CertificadosPage() {
   const { user } = useRole();
-  const { subscribe } = useWS();
   const { showAlert, showToast } = useAlert();
   const searchParams = useSearchParams();
   const router = useRouter();
@@ -55,7 +55,7 @@ export default function CertificadosPage() {
 
   const fetchCertificados = useCallback(async () => {
     try {
-      const res = await api.get(`/estudiantes/student/certificados?usuario_guid=${user?.guid}`);
+      const res = await api.get('/certificados');
       setCertificados(Array.isArray(res.data) ? res.data : []);
     } catch (err: any) {
       console.error('Error loading certificates:', err);
@@ -74,11 +74,9 @@ export default function CertificadosPage() {
       const pending: { curso_titulo: string; tareas_pendientes: { titulo: string }[] }[] = [];
       for (const curso of cursos) {
         try {
-          const verif = await api.get(
-            `/estudiantes/student/certificados/verificar/${curso.guid}?usuario_guid=${user?.guid}`,
-          );
+          const verif = await api.get(`/certificados/finalizacion/${curso.guid}`);
           const data = verif.data;
-          if (data.completo && !data.puede_generar_certificado && data.tareas_pendientes?.length > 0) {
+          if (data.completo && !data.puede_certificarse && data.tareas_pendientes?.length > 0) {
             pending.push({
               curso_titulo: curso.titulo,
               tareas_pendientes: data.tareas_pendientes.map((t: any) => ({ titulo: t.titulo })),
@@ -94,15 +92,10 @@ export default function CertificadosPage() {
     if (!user?.guid) return;
     fetchCertificados();
 
-    const unsub1 = subscribe('certificate:new', fetchCertificados);
-    const unsub2 = subscribe('dashboard:refresh', fetchCertificados);
-    const unsub3 = subscribe('submission:graded', fetchCertificados);
-    return () => {
-      unsub1();
-      unsub2();
-      unsub3();
-    };
-  }, [user?.guid, subscribe, fetchCertificados]);
+  }, [user?.guid, fetchCertificados]);
+
+  useEventoRealtime('certificate:new', () => fetchCertificados());
+  useEventoRealtime('submission:graded', () => fetchCertificados());
 
   // Auto-open certificate from query param
   useEffect(() => {
@@ -116,7 +109,7 @@ export default function CertificadosPage() {
   const handleDownload = async (cert: Certificate) => {
     setDownloading(cert.guid);
     try {
-      const response = await api.get(`/estudiantes/student/certificados/${cert.guid}/pdf`, {
+      const response = await api.get(`/certificados/${cert.guid}/pdf`, {
         responseType: 'blob',
       });
       const blob = new Blob([response.data], { type: 'application/pdf' });
@@ -298,7 +291,7 @@ export default function CertificadosPage() {
                       <Star className="h-3.5 w-3.5 shrink-0 text-amber-500" />
                       <span>
                         Calificación promedio:{' '}
-                        <strong className="text-foreground">{Number(cert.nota_promedio).toFixed(1)}/5.0</strong>
+                        <strong className="text-foreground">{formatearNota(cert.nota_promedio)}</strong>
                       </span>
                     </div>
                   )}
@@ -398,7 +391,7 @@ export default function CertificadosPage() {
                 <div className="bg-muted/30 rounded-xl p-3">
                   <p className="text-xs text-muted-foreground mb-0.5">Calificación promedio</p>
                   <p className="text-sm font-bold text-foreground">
-                    {selectedCert.nota_promedio ? `${Number(selectedCert.nota_promedio).toFixed(1)}/5.0` : 'N/A'}
+                    {formatearNota(selectedCert.nota_promedio)}
                   </p>
                 </div>
               </div>

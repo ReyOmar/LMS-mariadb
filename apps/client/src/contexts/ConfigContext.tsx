@@ -1,309 +1,157 @@
-"use client";
+'use client';
 
-import React, { createContext, useContext, useState, useEffect, ReactNode } from "react";
-import api, { resolveFileUrl } from "@/lib/api";
-import { useWS } from "./WebSocketContext";
+import React, { ReactNode, createContext, useCallback, useContext, useEffect, useState } from 'react';
+import api, { mensajeDeError } from '@/lib/api';
+import { Pais } from '@/lib/pais';
+import { aplicarTema } from '@/lib/tema';
+import { useSede } from './SedeContext';
+import { useEventoRealtime } from './RealtimeContext';
 
-export interface LMSConfig {
-  id: number;
+/**
+ * Configuración de la sede activa: marca, textos de la portada y textos legales.
+ *
+ * Cada sede tiene su propia fila en la base de datos, así que al cambiar de sede cambia
+ * todo: el nombre de la plataforma, los colores, los datos de contacto y la normativa.
+ */
+export interface ConfigSede {
+  pais: Pais;
   nombre_plataforma: string;
-  logo_url?: string | null;
-  favicon_url?: string | null;
+  logo_url: string | null;
+  favicon_url: string | null;
   color_primario: string;
   color_secundario: string;
   fuente: string;
   border_radius: number;
-  login_fondo_url?: string | null;
+  login_fondo_url: string | null;
   mensaje_bienvenida: string;
   idioma: string;
   zona_horaria: string;
-  // Landing Page
-  landing_hero_titulo1?: string;
-  landing_hero_titulo2?: string;
-  landing_hero_subtitulo?: string;
-  landing_telefono?: string;
-  landing_telefono_sub?: string;
-  landing_email?: string;
-  landing_email_sub?: string;
-  landing_oficina?: string;
-  landing_oficina_sub?: string;
-  landing_footer_texto?: string;
-  // Legal
-  legal_terminos?: string;
-  legal_privacidad?: string;
-  legal_datos?: string;
+  max_archivo_mb: number;
+
+  landing_hero_titulo1: string;
+  landing_hero_titulo2: string;
+  landing_hero_subtitulo: string;
+  landing_telefono: string;
+  landing_telefono_sub: string;
+  landing_email: string;
+  landing_email_sub: string;
+  landing_oficina: string;
+  landing_oficina_sub: string;
+  landing_footer_texto: string;
+
+  legal_terminos: string | null;
+  legal_privacidad: string | null;
+  legal_datos: string | null;
 }
 
 interface ConfigContextType {
-  config: LMSConfig | null;
-  updateLocalTheme: (primary: string, secondary: string) => void;
-  updateConfig: (partial: Partial<LMSConfig>) => void;
-  saveConfigToServer: () => Promise<void>;
-  // Legacy alias
-  saveThemeToServer: () => Promise<void>;
+  config: ConfigSede | null;
+  cargando: boolean;
+  error: string | null;
+  /** Aplica cambios sólo en pantalla, para la vista previa del panel de personalización. */
+  previsualizar: (cambios: Partial<ConfigSede>) => void;
+  /** Vuelve a pedir la configuración al servidor y descarta la vista previa. */
+  recargar: () => Promise<void>;
 }
 
 const ConfigContext = createContext<ConfigContextType | undefined>(undefined);
 
-const hexToHsl = (hex: string): string => {
-  hex = hex.replace(/^#/, "");
-  if (hex.length === 3) {
-    hex = hex.split("").map((x) => x + x).join("");
+/** Caché local por sede, para que el tema no parpadee al recargar la página. */
+function claveCache(pais: Pais): string {
+  return `lms_config_${pais}`;
+}
+
+function leerCache(pais: Pais): ConfigSede | null {
+  try {
+    const crudo = window.localStorage.getItem(claveCache(pais));
+    return crudo ? (JSON.parse(crudo) as ConfigSede) : null;
+  } catch {
+    return null;
   }
-  const r = parseInt(hex.substring(0, 2), 16) / 255;
-  const g = parseInt(hex.substring(2, 4), 16) / 255;
-  const b = parseInt(hex.substring(4, 6), 16) / 255;
+}
 
-  const max = Math.max(r, g, b);
-  const min = Math.min(r, g, b);
-  let h = 0, s = 0, l = (max + min) / 2;
-
-  if (max !== min) {
-    const d = max - min;
-    s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
-    switch (max) {
-      case r: h = (g - b) / d + (g < b ? 6 : 0); break;
-      case g: h = (b - r) / d + 2; break;
-      case b: h = (r - g) / d + 4; break;
-    }
-    h /= 6;
+function escribirCache(pais: Pais, config: ConfigSede): void {
+  try {
+    window.localStorage.setItem(claveCache(pais), JSON.stringify(config));
+  } catch {
+    // Sin caché sólo se pierde la ausencia de parpadeo; la aplicación funciona igual.
   }
-
-  return `${Math.round(h * 360)} ${Math.round(s * 100)}% ${Math.round(l * 100)}%`;
-};
-
-const GOOGLE_FONTS = ['Inter', 'Roboto', 'Montserrat', 'Poppins', 'Outfit', 'Open Sans', 'Lato'];
-
-// Re-export resolveFileUrl for backwards compatibility
-// (canonical definition is in lib/api.ts)
-export { resolveFileUrl };
-
-function loadGoogleFont(fontName: string) {
-  const id = `gfont-${fontName.replace(/\s/g, '-')}`;
-  if (document.getElementById(id)) return;
-  const link = document.createElement('link');
-  link.id = id;
-  link.rel = 'stylesheet';
-  link.href = `https://fonts.googleapis.com/css2?family=${encodeURIComponent(fontName)}:wght@300;400;500;600;700;800;900&display=swap`;
-  document.head.appendChild(link);
 }
 
 export function ConfigProvider({ children }: { children: ReactNode }) {
-  const { subscribe } = useWS();
-  
-  const [config, setConfig] = useState<LMSConfig | null>(() => {
-    // Instantly restore cached config to prevent flash of default theme
-    if (typeof window !== 'undefined') {
+  const { sede } = useSede();
+  const [config, setConfig] = useState<ConfigSede | null>(null);
+  const [cargando, setCargando] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const cargar = useCallback(
+    async (pais: Pais) => {
+      setCargando(true);
+      setError(null);
+
+      // Se pinta lo cacheado mientras llega la respuesta, para no mostrar el tema por
+      // defecto y cambiarlo un instante después.
+      const cacheada = leerCache(pais);
+      if (cacheada) {
+        setConfig(cacheada);
+        aplicarTema(cacheada);
+      }
+
       try {
-        const cached = localStorage.getItem('lms_config_cache');
-        if (cached) {
-          const parsed = JSON.parse(cached) as LMSConfig;
-          // Apply cached theme to DOM immediately (synchronous, no flash)
-          queueMicrotask(() => applyAllToDOM(parsed));
-          return parsed;
-        }
-      } catch { /* ignore corrupt cache */ }
+        const { data } = await api.get<ConfigSede>('/configuracion', { params: { pais } });
+        setConfig(data);
+        aplicarTema(data);
+        escribirCache(pais, data);
+      } catch (fallo) {
+        // Con caché disponible el usuario no nota nada; sin ella, la interfaz queda con el
+        // tema por defecto y el error se expone para que la pantalla pueda avisar.
+        setError(mensajeDeError(fallo, 'No se pudo cargar la configuración del campus.'));
+      } finally {
+        setCargando(false);
+      }
+    },
+    [],
+  );
+
+  useEffect(() => {
+    if (!sede) {
+      setConfig(null);
+      return;
     }
-    return null;
+    void cargar(sede);
+  }, [sede, cargar]);
+
+  // Un administrador puede cambiar la marca mientras otros la tienen abierta.
+  useEventoRealtime('config:updated', (datos) => {
+    const actualizada = datos as ConfigSede | null;
+    if (!actualizada?.pais || actualizada.pais !== sede) return;
+    setConfig(actualizada);
+    aplicarTema(actualizada);
+    escribirCache(actualizada.pais, actualizada);
   });
 
-  useEffect(() => {
-    api.get("/configuracion")
-      .then(({ data }) => {
-        if (data) {
-          setConfig(data);
-          applyAllToDOM(data);
-          if (data.nombre_plataforma) document.title = data.nombre_plataforma;
-          // Cache for instant restore on next page load
-          try { localStorage.setItem('lms_config_cache', JSON.stringify(data)); } catch {}
-        }
-      })
-      .catch((err) => console.error("Could not load config", err));
+  const previsualizar = useCallback((cambios: Partial<ConfigSede>) => {
+    setConfig((previo) => {
+      if (!previo) return previo;
+      const siguiente = { ...previo, ...cambios };
+      aplicarTema(siguiente);
+      return siguiente;
+    });
   }, []);
 
-  useEffect(() => {
-    const unsub = subscribe('config:updated', (newConfig: any) => {
-      if (newConfig) {
-        setConfig(newConfig);
-        applyAllToDOM(newConfig);
-        if (newConfig.nombre_plataforma) document.title = newConfig.nombre_plataforma;
-        try { localStorage.setItem('lms_config_cache', JSON.stringify(newConfig)); } catch {}
-      }
-    });
-    return () => unsub();
-  }, [subscribe]);
-
-  const applyAllToDOM = (cfg: LMSConfig) => {
-    // ── Colors ──
-    if (cfg.color_primario) {
-      const primHsl = hexToHsl(cfg.color_primario);
-      document.documentElement.style.setProperty('--primary', primHsl);
-      document.documentElement.style.setProperty('--ring', primHsl);
-    }
-    if (cfg.color_secundario) {
-      const secHsl = hexToHsl(cfg.color_secundario);
-      document.documentElement.style.setProperty('--secondary', secHsl);
-    }
-
-    // ── Font — load Google Font and inject a global style tag so ALL elements pick it up ──
-    if (cfg.fuente) {
-      loadGoogleFont(cfg.fuente);
-      const fontFamily = `"${cfg.fuente}", ui-sans-serif, system-ui, sans-serif`;
-      document.documentElement.style.setProperty('--font-sans', fontFamily);
-      document.body.style.fontFamily = fontFamily;
-    }
-
-    // ── Border Radius — inject/update a persistent <style> tag that overrides every element ──
-    // Tailwind v4 compiles --radius at build time, so runtime setProperty alone isn't enough.
-    // We inject a global override style tag that wins via specificity.
-    const radiusPx = cfg.border_radius ?? 12;
-    const fontFamily2 = cfg.fuente ? `"${cfg.fuente}", ui-sans-serif, system-ui, sans-serif` : null;
-
-    let styleTag = document.getElementById('lms-theme-override') as HTMLStyleElement | null;
-    if (!styleTag) {
-      styleTag = document.createElement('style');
-      styleTag.id = 'lms-theme-override';
-      document.head.appendChild(styleTag);
-    }
-
-    const fontRule = fontFamily2 ? `
-      *, *::before, *::after { font-family: ${fontFamily2} !important; }
-    ` : '';
-
-    styleTag.textContent = `
-      :root {
-        --radius: ${radiusPx}px !important;
-        --radius-sm: ${Math.max(0, radiusPx - 4)}px !important;
-        --radius-md: ${Math.max(0, radiusPx - 2)}px !important;
-        --radius-lg: ${radiusPx}px !important;
-        --radius-xl: ${radiusPx > 0 ? radiusPx + 4 : 0}px !important;
-        --radius-2xl: ${radiusPx > 0 ? radiusPx + 8 : 0}px !important;
-        --radius-3xl: ${radiusPx > 0 ? radiusPx + 12 : 0}px !important;
-        --radius-4xl: ${radiusPx > 0 ? radiusPx + 16 : 0}px !important;
-      }
-      ${fontRule}
-    `;
-
-    // ── Favicon ──
-    // Next.js SSR generates <link rel="icon"> from metadata. On client-side
-    // navigation or real-time preview, we need to override it with the new value.
-    const targetFavicon = resolveFileUrl(cfg.favicon_url) || null;
-
-    // Remove ALL existing favicon links (including Next.js SSR-generated ones)
-    // so the browser picks up only our dynamically-set one.
-    if (targetFavicon) {
-      document.querySelectorAll('link[rel="icon"], link[rel="shortcut icon"]').forEach(el => {
-        if (el.id !== 'lms-favicon') el.remove();
-      });
-    }
-
-    // Create or update our managed favicon link
-    let faviconLink = document.getElementById('lms-favicon') as HTMLLinkElement | null;
-    if (targetFavicon) {
-      if (!faviconLink) {
-        faviconLink = document.createElement('link');
-        faviconLink.id = 'lms-favicon';
-        faviconLink.rel = 'icon';
-        document.head.appendChild(faviconLink);
-      }
-      faviconLink.href = targetFavicon;
-    } else if (faviconLink) {
-      // No custom favicon — remove our override so Next.js default takes over
-      faviconLink.remove();
-    }
-  };
-
-  const updateLocalTheme = (primary: string, secondary: string) => {
-    if (config) {
-      const newCfg = { ...config, color_primario: primary, color_secundario: secondary };
-      setConfig(newCfg);
-      applyAllToDOM(newCfg);
-    }
-  };
-
-  const updateConfig = (partial: Partial<LMSConfig>) => {
-    if (config) {
-      const newCfg = { ...config, ...partial };
-      setConfig(newCfg);
-      applyAllToDOM(newCfg);
-      if (partial.nombre_plataforma) document.title = partial.nombre_plataforma;
-    }
-  };
-
-  const showToast = (message: string, type: 'success' | 'error') => {
-    const existing = document.getElementById('lms-toast');
-    if (existing) existing.parentNode?.removeChild(existing);
-
-    const toast = document.createElement('div');
-    toast.id = 'lms-toast';
-    toast.style.cssText = `
-      position: fixed; top: 24px; left: 50%; transform: translateX(-50%) translateY(-20px);
-      z-index: 9999; padding: 14px 28px; border-radius: 14px; font-weight: 700; font-size: 14px;
-      box-shadow: 0 8px 32px rgba(0,0,0,0.18); opacity: 0;
-      transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
-      backdrop-filter: blur(12px); border: 1px solid;
-    `;
-    if (type === 'success') {
-      const primary = config?.color_primario || '#4f46e5';
-      toast.style.background = `${primary}18`;
-      toast.style.color = primary;
-      toast.style.borderColor = `${primary}40`;
-    } else {
-      toast.style.background = '#dc262618';
-      toast.style.color = '#dc2626';
-      toast.style.borderColor = '#dc262640';
-    }
-    toast.textContent = message;
-    document.body.appendChild(toast);
-
-    requestAnimationFrame(() => {
-      toast.style.opacity = '1';
-      toast.style.transform = 'translateX(-50%) translateY(0)';
-    });
-
-    setTimeout(() => {
-      toast.style.opacity = '0';
-      toast.style.transform = 'translateX(-50%) translateY(-20px)';
-      setTimeout(() => toast.parentNode?.removeChild(toast), 400);
-    }, 3000);
-  };
-
-  const saveConfigToServer = async () => {
-    if (!config) return;
-    try {
-      await api.post("/configuracion", {
-        nombre_plataforma: config.nombre_plataforma,
-        color_primario: config.color_primario,
-        color_secundario: config.color_secundario,
-        fuente: config.fuente,
-        border_radius: config.border_radius,
-        logo_url: config.logo_url || null,
-        favicon_url: config.favicon_url || null,
-        login_fondo_url: config.login_fondo_url || null,
-        mensaje_bienvenida: config.mensaje_bienvenida,
-      });
-      showToast('✓ Configuración guardada permanentemente', 'success');
-      // Update cache so next reload uses the saved theme instantly
-      try { localStorage.setItem('lms_config_cache', JSON.stringify(config)); } catch {}
-    } catch (e) {
-      console.error(e);
-      showToast('✕ Error guardando configuraciones', 'error');
-    }
-  };
+  const recargar = useCallback(async () => {
+    if (sede) await cargar(sede);
+  }, [sede, cargar]);
 
   return (
-    <ConfigContext.Provider value={{ config, updateLocalTheme, updateConfig, saveConfigToServer, saveThemeToServer: saveConfigToServer }}>
+    <ConfigContext.Provider value={{ config, cargando, error, previsualizar, recargar }}>
       {children}
     </ConfigContext.Provider>
   );
 }
 
-export function useConfig() {
-  const context = useContext(ConfigContext);
-  if (context === undefined) {
-    throw new Error("useConfig must be used within a ConfigProvider");
-  }
-  return context;
+export function useConfig(): ConfigContextType {
+  const contexto = useContext(ConfigContext);
+  if (!contexto) throw new Error('useConfig debe usarse dentro de ConfigProvider.');
+  return contexto;
 }
-
-export { GOOGLE_FONTS };

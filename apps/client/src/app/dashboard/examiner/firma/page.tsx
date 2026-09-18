@@ -4,7 +4,7 @@ import { useEffect, useState, useRef } from 'react';
 import { FileSignature, Save, Loader2, Upload, Trash2, Eye, Download, Award } from 'lucide-react';
 import { useRole } from '@/contexts/RoleContext';
 import { useAlert } from '@/contexts/AlertContext';
-import api, { API_BASE_URL } from '@/lib/api';
+import api, { mensajeDeError, subirArchivo, urlDeArchivo } from '@/lib/api';
 
 export default function ExaminerFirmaPage() {
   const { user } = useRole();
@@ -25,7 +25,7 @@ export default function ExaminerFirmaPage() {
 
   const fetchFirma = async () => {
     try {
-      const res = await api.get(`/configuracion/firma?usuario_guid=${user?.guid}`);
+      const res = await api.get('/configuracion/firma');
       const data = res.data;
       setFirmaUrl(data.firma_url || null);
       setFirmaNombre(data.firma_nombre || '');
@@ -41,7 +41,7 @@ export default function ExaminerFirmaPage() {
   const handleSave = async () => {
     setSaving(true);
     try {
-      await api.post(`/configuracion/firma?usuario_guid=${user?.guid}`, {
+      await api.post('/configuracion/firma', {
         firma_nombre: firmaNombre || null,
         firma_cargo: firmaCargo || null,
       });
@@ -67,7 +67,7 @@ export default function ExaminerFirmaPage() {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
       const filename = res.data.filename || res.data.url;
-      await api.post(`/configuracion/firma?usuario_guid=${user?.guid}`, { firma_url: filename });
+      await api.post('/configuracion/firma', { firma_url: filename });
       setFirmaUrl(filename);
       showToast.success('Tu imagen de firma se cargó correctamente.');
     } catch {
@@ -79,7 +79,7 @@ export default function ExaminerFirmaPage() {
 
   const handleRemoveFirma = async () => {
     try {
-      await api.post(`/configuracion/firma?usuario_guid=${user?.guid}`, { firma_url: null });
+      await api.post('/configuracion/firma', { firma_url: null });
       setFirmaUrl(null);
       showToast.info('La imagen de firma fue eliminada.');
     } catch {
@@ -141,7 +141,7 @@ export default function ExaminerFirmaPage() {
             <div className="flex flex-col sm:flex-row sm:items-center gap-4 p-4 bg-background border border-border/50 rounded-xl">
               <div className="h-16 w-32 bg-muted/50 rounded-lg border border-dashed border-border flex items-center justify-center overflow-hidden">
                 <img
-                  src={`${API_BASE_URL}/storage/download/${firmaUrl}`}
+                  src={urlDeArchivo(firmaUrl) ?? ''}
                   alt="Firma"
                   className="max-h-full max-w-full object-contain"
                   onError={(e) => {
@@ -239,7 +239,7 @@ export default function ExaminerFirmaPage() {
             {firmaUrl && (
               <div className="mb-2 h-12 w-28 flex items-center justify-center">
                 <img
-                  src={`${API_BASE_URL}/storage/download/${firmaUrl}`}
+                  src={urlDeArchivo(firmaUrl) ?? ''}
                   alt="Firma"
                   className="max-h-full max-w-full object-contain"
                 />

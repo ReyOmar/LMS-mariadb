@@ -227,6 +227,71 @@ export class EvaluacionesService {
     }));
   }
 
+  /**
+   * Intentos de cuestionario de los cursos que gestiona el usuario.
+   *
+   * Van por separado de las entregas porque son otra cosa: se corrigen solos, no esperan
+   * acción del examinador y lo que interesa de ellos es el resultado agregado, no la cola
+   * de trabajo pendiente.
+   */
+  async getIntentosDeCuestionario(user: JwtPayload) {
+    const intentos = await this.prisma.lms_entregas.findMany({
+      where: {
+        estado: 'CALIFICADA',
+        tarea: {
+          quiz_config: { not: null },
+          modulo: {
+            curso: {
+              pais: user.pais,
+              ...(user.role === 'PROFESOR' ? { profesor_guid: user.sub } : {}),
+            },
+          },
+        },
+      },
+      orderBy: { fecha_entrega: 'desc' },
+      take: LIMITE_PANEL_EXAMINADOR,
+      select: {
+        guid: true,
+        estado: true,
+        fecha_entrega: true,
+        calificacion: true,
+        comentario_calificacion: true,
+        intento_numero: true,
+        usuario: { select: { guid: true, nombre: true, apellido: true, email: true } },
+        tarea: {
+          select: {
+            guid: true,
+            titulo: true,
+            modulo: {
+              select: {
+                guid: true,
+                titulo: true,
+                curso: { select: { guid: true, titulo: true, nota_aprobacion: true, imagen_portada: true } },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    return intentos.map((intento) => ({
+      guid: intento.guid,
+      estado: intento.estado,
+      fecha_entrega: intento.fecha_entrega,
+      intento_numero: intento.intento_numero,
+      calificacion: aNota(intento.calificacion),
+      comentario: intento.comentario_calificacion,
+      nota_aprobacion: umbralAprobacion(intento.tarea?.modulo.curso.nota_aprobacion),
+      estudiante: intento.usuario,
+      tarea_guid: intento.tarea?.guid ?? null,
+      tarea_titulo: intento.tarea?.titulo ?? 'Cuestionario eliminado',
+      modulo_titulo: intento.tarea?.modulo.titulo ?? null,
+      curso_guid: intento.tarea?.modulo.curso.guid ?? null,
+      curso_titulo: intento.tarea?.modulo.curso.titulo ?? null,
+      curso_imagen: intento.tarea?.modulo.curso.imagen_portada ?? null,
+    }));
+  }
+
   /** Entregas de una tarea concreta, para el examinador que la gestiona. */
   async getEntregasDeTarea(tareaGuid: string, user: JwtPayload) {
     const curso = await this.acceso.cursoDeRecurso(tareaGuid, user.pais);

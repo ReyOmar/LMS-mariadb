@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   Play,
   BookOpen,
@@ -13,7 +13,7 @@ import {
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useRole } from '@/contexts/RoleContext';
-import { useWS } from '@/contexts/WebSocketContext';
+import { useRealtime, useEventoRealtime } from '@/contexts/RealtimeContext';
 import { PageLoader } from '@/components/ui/PageLoader';
 import { StatCard } from '@/components/ui/StatCard';
 import { ProgressBar } from '@/components/ui/ProgressBar';
@@ -21,7 +21,7 @@ import api from '@/lib/api';
 
 export function StudentDashboard() {
   const { user } = useRole();
-  const { subscribe, maintenanceCourses } = useWS();
+  const { cursosEnMantenimiento: mantenimiento } = useRealtime();
   const router = useRouter();
 
   const [cursos, setCursos] = useState<any[]>([]);
@@ -34,83 +34,57 @@ export function StudentDashboard() {
   const [calendarDate, setCalendarDate] = useState(new Date());
   const [activeDays, setActiveDays] = useState<number[]>([]);
 
-  useEffect(() => {
-    if (user?.guid) {
-      fetchData();
-    }
-  }, [user?.guid]);
 
-  useEffect(() => {
-    if (!user?.guid) return;
-
-    // Subscribe to events that should refresh the student dashboard
-    const unsub1 = subscribe('course:updated', fetchData);
-    const unsub2 = subscribe('submission:graded', fetchData);
-    const unsub3 = subscribe('enrollment:changed', fetchData);
-    const unsub4 = subscribe('dashboard:refresh', fetchData);
-    // Re-fetch when a course enters maintenance so the widget updates immediately
-    const unsub5 = subscribe('course:maintenance', fetchData);
-
-    return () => {
-      unsub1();
-      unsub2();
-      unsub3();
-      unsub4();
-      unsub5();
-    };
-  }, [user?.guid, subscribe]);
-
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     try {
-      const [cursosRes, metricasRes] = await Promise.all([
+      const [cursosRes, metricasRes, certsRes] = await Promise.all([
         api.get('/cursos'),
-        api.get(`/estudiantes/student/metricas?usuario_guid=${user.guid}`),
+        api.get('/estudiantes/metricas'),
+        api.get('/certificados'),
       ]);
-      const cursosData = cursosRes.data;
-      const metricasData = metricasRes.data;
-      const cursosArr = Array.isArray(cursosData) ? cursosData : [];
+
+      const cursosArr = Array.isArray(cursosRes.data) ? cursosRes.data : [];
+      const certs = Array.isArray(certsRes.data) ? certsRes.data : [];
+
       setCursos(cursosArr);
-      setMetricas(metricasData);
+      setMetricas(metricasRes.data);
+      setCompletedCourseGuids(new Set(certs.map((c: any) => c.curso_guid)));
 
-      // Fetch certificates to know which courses are completed
-      let certs: any[] = [];
-      try {
-        const certsRes = await api.get(`/estudiantes/student/certificados?usuario_guid=${user.guid}`);
-        certs = Array.isArray(certsRes.data) ? certsRes.data : [];
-        setCompletedCourseGuids(new Set(certs.map((c: any) => c.curso_guid)));
-      } catch {}
+      // Progreso del primer curso que todavía no esté certificado.
+      const certificados = new Set(certs.map((c: any) => c.curso_guid));
+      const siguiente =
+        cursosArr.find((c: any) => c.estado === 'PUBLICADO' && !certificados.has(c.guid)) ?? cursosArr[0];
 
-      // Fetch progress for the first non-completed course
-      const certsGuids = certs.map((c: any) => c.curso_guid);
-      const firstActiveCurso = cursosArr.find((c) => c.estado === 'PUBLICADO' && !certsGuids.includes(c.curso_guid));
-      const progCurso = firstActiveCurso || cursosArr[0];
-      if (progCurso) {
-        try {
-          const progRes = await api.get(
-            `/estudiantes/student/progreso?usuario_guid=${user.guid}&curso_guid=${progCurso.guid}`,
-          );
-          const progData = await progRes.data;
-          setProgreso({
-            completados: progData.completados?.length || 0,
-            total: progData.total_recursos || 0,
-          });
-        } catch {}
+      if (siguiente) {
+        const { data } = await api.get(`/estudiantes/progreso/${siguiente.guid}`);
+        setProgreso({ completados: data.completados?.length ?? 0, total: data.total_recursos ?? 0 });
       }
-    } catch (e) {
-      console.error(e);
+    } catch (error) {
+      console.error('No se pudo cargar el tablero del alumno', error);
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    if (user?.guid) void fetchData();
+  }, [user?.guid, fetchData]);
+
+  // El tablero se refresca cuando cambia algo que le afecta directamente.
+  useEventoRealtime('submission:graded', fetchData);
+  useEventoRealtime('enrollment:changed', fetchData);
+  useEventoRealtime('course:updated', fetchData);
+  useEventoRealtime('course:maintenance', fetchData);
+  useEventoRealtime('certificate:new', fetchData);
 
   // Pick next active (non-completed, non-maintenance) course
   const activeCursos = cursos.filter(
-    (c) => c.estado === 'PUBLICADO' && !maintenanceCourses[c.guid] && !completedCourseGuids.has(c.guid),
+    (c) => c.estado === 'PUBLICADO' && !mantenimiento[c.guid] && !completedCourseGuids.has(c.guid),
   );
 
   // Courses assigned but in maintenance (BORRADOR or WS-flagged maintenance) and NOT completed
   const cursosEnMantenimiento = cursos.filter(
-    (c) => (c.estado === 'BORRADOR' || maintenanceCourses[c.guid]) && !completedCourseGuids.has(c.guid),
+    (c) => (c.estado === 'BORRADOR' || mantenimiento[c.guid]) && !completedCourseGuids.has(c.guid),
   );
 
   // All courses that the student hasn't completed yet (regardless of state)
@@ -150,7 +124,7 @@ export function StudentDashboard() {
     if (user?.guid) {
       setActiveDays([]); // Clear immediately to prevent stale data flash
       api
-        .get(`/estudiantes/student/dias-activos?usuario_guid=${user.guid}&year=${calYear}&month=${calMonth}`)
+        .get('/estudiantes/dias-activos', { params: { year: calYear, month: calMonth } })
         .then((r) => r.data)
         .then((data) => setActiveDays(Array.isArray(data.dias) ? data.dias : []))
         .catch(() => setActiveDays([]));

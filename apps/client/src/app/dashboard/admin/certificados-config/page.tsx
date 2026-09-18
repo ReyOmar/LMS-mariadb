@@ -3,7 +3,8 @@
 import { useEffect, useState } from 'react';
 import { Award, Save, Loader2, ToggleLeft, Type, AlignLeft, Palette, Info, BookOpen } from 'lucide-react';
 import { useAlert } from '@/contexts/AlertContext';
-import api, { API_BASE_URL } from '@/lib/api';
+import api, { mensajeDeError, urlDeArchivo } from '@/lib/api';
+import { NOTA_MAXIMA } from '@/lib/calificacion';
 
 interface CertConfig {
   cert_titulo_personalizado: string | null;
@@ -75,7 +76,7 @@ export default function CertificadosConfigPage() {
   const fetchExaminerPreview = async (cursoGuid: string) => {
     try {
       // Add cache-bust to ensure fresh data after examiner updates their signature
-      const res = await api.get(`/configuracion/firma/curso/${cursoGuid}?_t=${Date.now()}`);
+      const res = await api.get(`/configuracion/firma/curso/${cursoGuid}`);
       setExaminerPreview(res.data);
     } catch {
       setExaminerPreview(null);
@@ -327,7 +328,7 @@ export default function CertificadosConfigPage() {
                 <div className="mt-3 flex items-center gap-3 p-3 bg-white dark:bg-background rounded-lg border border-border/50">
                   <div className="h-12 w-28 bg-muted/30 rounded-lg border border-dashed border-border flex items-center justify-center overflow-hidden">
                     <img
-                      src={`${API_BASE_URL}/storage/download/${previewProfesor.firma_url}`}
+                      src={urlDeArchivo(previewProfesor.firma_url) ?? ''}
                       alt="Firma"
                       className="max-h-full max-w-full object-contain"
                     />
@@ -429,7 +430,7 @@ export default function CertificadosConfigPage() {
                 {config.cert_mostrar_nota && (
                   <div className="text-center">
                     <p className="text-[10px] text-slate-400 font-semibold uppercase tracking-wider">Calificación</p>
-                    <p className="text-xs font-bold text-slate-600">4.2 / 5.0</p>
+                    <p className="text-xs font-bold text-slate-600">{`92 / ${NOTA_MAXIMA}`}</p>
                   </div>
                 )}
               </div>
@@ -440,7 +441,7 @@ export default function CertificadosConfigPage() {
                   {previewProfesor?.firma_url && (
                     <div className="h-14 w-32 flex items-center justify-center">
                       <img
-                        src={`${API_BASE_URL}/storage/download/${previewProfesor.firma_url}`}
+                        src={urlDeArchivo(previewProfesor.firma_url) ?? ''}
                         alt="Firma del examinador"
                         className="max-h-full max-w-full object-contain"
                       />

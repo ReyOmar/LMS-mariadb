@@ -15,7 +15,6 @@ import {
 import { Throttle } from '@nestjs/throttler';
 import { AuthService } from './auth.service';
 import { UserService } from './user.service';
-import { TokenBlacklistService } from './token-blacklist.service';
 import { Public } from '../common/decorators/public.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
@@ -41,7 +40,6 @@ export class AuthController {
   constructor(
     private readonly auth: AuthService,
     private readonly users: UserService,
-    private readonly tokenBlacklist: TokenBlacklistService,
   ) {}
 
   // ── Acceso público ───────────────────────────────────────────────────────
@@ -98,12 +96,12 @@ export class AuthController {
   // ── Sesión ───────────────────────────────────────────────────────────────
 
   /**
-   * Cierra la sesión actual. Revoca sólo este token, de modo que cerrar sesión en un
-   * dispositivo no expulsa al usuario de los demás.
+   * Cierra la sesión actual: revoca el token y libera el registro de sesión activa, de
+   * modo que la cuenta queda lista para entrar desde cualquier dispositivo.
    */
   @Post('logout')
   async logout(@CurrentUser() user: JwtPayload) {
-    await this.tokenBlacklist.revocarSesion(user.sub, user.jti);
+    await this.users.cerrarSesion(user.sub, user.jti);
     return { message: 'Sesión cerrada.' };
   }
 

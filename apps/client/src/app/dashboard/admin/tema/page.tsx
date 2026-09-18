@@ -1,492 +1,405 @@
 'use client';
 
-import { useConfig, GOOGLE_FONTS, resolveFileUrl } from '@/contexts/ConfigContext';
-import { useRole } from '@/contexts/RoleContext';
-import { Palette, Save, Eye, Upload, Type, RectangleHorizontal, Image, Sparkles, GraduationCap } from 'lucide-react';
 import { useRef, useState } from 'react';
+import { GraduationCap, Image as ImageIcon, Palette, RectangleHorizontal, Save, Sparkles, Type, Upload } from 'lucide-react';
+import { subirArchivo, urlDeMarca, mensajeDeError } from '@/lib/api';
+import { FUENTES } from '@/lib/tema';
+import { useRole } from '@/contexts/RoleContext';
+import { useSede } from '@/contexts/SedeContext';
+import { useAlert } from '@/contexts/AlertContext';
+import { useBorradorDeConfiguracion } from '@/hooks/useBorradorDeConfiguracion';
+import { PageLoader } from '@/components/ui/PageLoader';
 
-const THEME_PRESETS = [
-  { name: 'Corporativo', primary: '#1e3a8a', secondary: '#ea580c', desc: 'Azul serio y naranja vibrante' },
-  { name: 'Noche Elegante', primary: '#8b5cf6', secondary: '#f59e0b', desc: 'Violeta profundo y dorado' },
-  { name: 'Bosque', primary: '#166534', secondary: '#65a30d', desc: 'Verdes naturales y frescos' },
-  { name: 'Océano', primary: '#0284c7', secondary: '#06b6d4', desc: 'Azules claros y cyan' },
-  { name: 'Elegancia', primary: '#1f2937', secondary: '#d97706', desc: 'Gris oscuro y ámbar' },
-  { name: 'Coral', primary: '#dc2626', secondary: '#f97316', desc: 'Rojo y naranja cálido' },
-];
+/** Combinaciones de color listas para aplicar de un clic. */
+const PALETAS = [
+  { nombre: 'Corporativo', primario: '#1e3a8a', secundario: '#ea580c', descripcion: 'Azul serio y naranja vibrante' },
+  { nombre: 'Noche elegante', primario: '#8b5cf6', secundario: '#f59e0b', descripcion: 'Violeta profundo y dorado' },
+  { nombre: 'Bosque', primario: '#166534', secundario: '#65a30d', descripcion: 'Verdes naturales' },
+  { nombre: 'Océano', primario: '#0284c7', secundario: '#06b6d4', descripcion: 'Azules claros y cian' },
+  { nombre: 'Elegancia', primario: '#1f2937', secundario: '#d97706', descripcion: 'Gris oscuro y ámbar' },
+  { nombre: 'Coral', primario: '#dc2626', secundario: '#f97316', descripcion: 'Rojo y naranja cálido' },
+] as const;
 
-export default function TemaPage() {
-  const { config, updateLocalTheme, updateConfig, saveConfigToServer } = useConfig();
-  const { realRole } = useRole();
-  const logoInputRef = useRef<HTMLInputElement>(null);
-  const faviconInputRef = useRef<HTMLInputElement>(null);
-  const loginBgInputRef = useRef<HTMLInputElement>(null);
+const RADIOS = [0, 4, 8, 12, 16, 24] as const;
 
-  if (realRole !== 'admin') {
+/** Campos de imagen y la carpeta del almacenamiento donde va cada uno. */
+const IMAGENES = {
+  logo_url: 'logos',
+  favicon_url: 'logos',
+  login_fondo_url: 'fondos',
+} as const;
+
+type CampoDeImagen = keyof typeof IMAGENES;
+
+export default function PaginaDeTema() {
+  const { rolReal } = useRole();
+  const { nombre: nombreSede } = useSede();
+  const { showAlert } = useAlert();
+  const { borrador, editar, guardar, hayCambios, guardando } = useBorradorDeConfiguracion(true);
+
+  const [subiendo, setSubiendo] = useState<CampoDeImagen | null>(null);
+  const campos = {
+    logo_url: useRef<HTMLInputElement>(null),
+    favicon_url: useRef<HTMLInputElement>(null),
+    login_fondo_url: useRef<HTMLInputElement>(null),
+  };
+
+  if (rolReal !== 'admin') {
     return (
       <div className="flex items-center justify-center h-[60vh]">
-        <p className="text-muted-foreground font-bold">No tienes permisos para acceder a esta sección.</p>
+        <p className="text-muted-foreground font-bold">Esta sección es sólo para administradores.</p>
       </div>
     );
   }
 
-  const handleFileUpload =
-    (field: 'logo_url' | 'favicon_url' | 'login_fondo_url') => async (e: React.ChangeEvent<HTMLInputElement>) => {
-      const file = e.target.files?.[0];
-      if (!file) return;
-      try {
-        const formData = new FormData();
-        formData.append('file', file);
-        const { default: api } = await import('@/lib/api');
-        const res = await api.post('/storage/upload?folder=logos', formData, {
-          headers: { 'Content-Type': 'multipart/form-data' },
-        });
-        // Store only the R2 key (e.g. "logos/123-abc.png"), not the full URL.
-        // The full URL is built at render time via resolveFileUrl() — this ensures
-        // images work across environments (localhost, devtunnel, production).
-        updateConfig({ [field]: res.data.filename });
-      } catch (err) {
-        console.error('Error uploading file:', err);
-      }
-    };
+  if (!borrador) return <PageLoader message="Cargando configuración…" />;
+
+  const subirImagen = (campo: CampoDeImagen) => async (evento: React.ChangeEvent<HTMLInputElement>) => {
+    const archivo = evento.target.files?.[0];
+    if (!archivo) return;
+
+    setSubiendo(campo);
+    try {
+      const { filename } = await subirArchivo(`/storage/upload?folder=${IMAGENES[campo]}`, archivo);
+      // Se guarda la clave, no la URL: así la imagen sigue funcionando aunque cambie el
+      // dominio desde el que se sirve la API.
+      editar({ [campo]: filename } as Record<CampoDeImagen, string>);
+    } catch (error) {
+      showAlert.error('No se pudo subir la imagen', mensajeDeError(error));
+    } finally {
+      setSubiendo(null);
+      evento.target.value = '';
+    }
+  };
 
   return (
-    <div className="animate-in fade-in duration-700 max-w-6xl mx-auto">
+    <div className="max-w-6xl mx-auto pb-28">
       <header className="mb-10">
-        <h1 className="text-xl sm:text-3xl font-bold tracking-tight text-foreground flex items-center gap-3">
+        <h1 className="text-xl sm:text-3xl font-bold tracking-tight flex items-center gap-3">
           <Palette className="h-6 w-6 sm:h-8 sm:w-8 text-primary" />
-          Tema y Apariencia
+          Tema y apariencia
         </h1>
         <p className="text-muted-foreground mt-2">
-          Personaliza la identidad visual, colores, tipografía y experiencia de la plataforma.
+          Identidad visual de la sede{nombreSede ? ` de ${nombreSede}` : ''}. Cada sede tiene su propia marca y los
+          cambios sólo afectan a esta.
         </p>
       </header>
 
-      {/* ======= IDENTITY & BRANDING ======= */}
-      <section className="bg-card/70 backdrop-blur-md border border-border/50 rounded-2xl p-4 sm:p-8 shadow-sm mb-8 animate-in slide-in-from-bottom-4 duration-500">
-        <h2 className="text-xl font-bold mb-6 flex items-center gap-2">
-          <GraduationCap className="h-5 w-5 text-primary" /> Identidad de Marca
-        </h2>
+      {/* Identidad */}
+      <Seccion icono={GraduationCap} titulo="Identidad de marca">
+        <Campo
+          etiqueta="Nombre de la plataforma"
+          ayuda="Aparece en la barra lateral, en el título del navegador y en los correos."
+        >
+          <input
+            type="text"
+            value={borrador.nombre_plataforma}
+            onChange={(evento) => editar({ nombre_plataforma: evento.target.value })}
+            maxLength={120}
+            className="w-full sm:w-96 h-11 px-4 rounded-xl border border-border bg-background font-medium focus:ring-2 focus:ring-primary/30 focus:border-primary outline-none"
+          />
+        </Campo>
 
-        <div className="space-y-6">
-          {/* Platform Name */}
-          <div>
-            <label className="text-sm font-bold text-muted-foreground mb-2 block uppercase tracking-wider">
-              Nombre de la Plataforma
-            </label>
-            <input
-              type="text"
-              value={config?.nombre_plataforma || ''}
-              onChange={(e) => updateConfig({ nombre_plataforma: e.target.value })}
-              className="w-full sm:w-96 h-11 px-4 rounded-xl border border-border bg-background text-foreground font-medium focus:ring-2 focus:ring-primary/30 focus:border-primary outline-none transition-all"
-              placeholder="PESV Education"
-            />
-            <p className="text-xs text-muted-foreground mt-1.5">
-              Aparece en la barra lateral y en el título del navegador
-            </p>
-          </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+          <ZonaDeImagen
+            etiqueta="Logotipo"
+            ayuda="Se muestra en la barra lateral, la portada y los correos."
+            valor={borrador.logo_url}
+            subiendo={subiendo === 'logo_url'}
+            onElegir={() => campos.logo_url.current?.click()}
+            onQuitar={() => editar({ logo_url: null })}
+            altura="h-32"
+          />
+          <ZonaDeImagen
+            etiqueta="Favicon"
+            ayuda="Icono de la pestaña del navegador. Cuadrado, preferiblemente 64×64."
+            valor={borrador.favicon_url}
+            subiendo={subiendo === 'favicon_url'}
+            onElegir={() => campos.favicon_url.current?.click()}
+            onQuitar={() => editar({ favicon_url: null })}
+            altura="h-32"
+            ajuste="contain"
+          />
+        </div>
 
-          {/* Logo Upload */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
-            <div>
-              <label className="text-sm font-bold text-muted-foreground mb-2 block uppercase tracking-wider">
-                Logo
-              </label>
-              <div
-                onClick={() => logoInputRef.current?.click()}
-                className="h-32 border-2 border-dashed border-border hover:border-primary/50 rounded-xl flex flex-col items-center justify-center cursor-pointer transition-all hover:bg-muted/20 group relative overflow-hidden"
+        <input ref={campos.logo_url} type="file" accept="image/*" className="hidden" onChange={subirImagen('logo_url')} />
+        <input
+          ref={campos.favicon_url}
+          type="file"
+          accept="image/*"
+          className="hidden"
+          onChange={subirImagen('favicon_url')}
+        />
+      </Seccion>
+
+      {/* Colores */}
+      <Seccion icono={Sparkles} titulo="Colores">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+          <SelectorDeColor
+            etiqueta="Color primario"
+            valor={borrador.color_primario}
+            onCambio={(color) => editar({ color_primario: color })}
+          />
+          <SelectorDeColor
+            etiqueta="Color secundario"
+            valor={borrador.color_secundario}
+            onCambio={(color) => editar({ color_secundario: color })}
+          />
+        </div>
+
+        <div>
+          <p className="text-sm font-bold text-muted-foreground mb-3 uppercase tracking-wider">Combinaciones</p>
+          <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
+            {PALETAS.map((paleta) => (
+              <button
+                key={paleta.nombre}
+                type="button"
+                onClick={() => editar({ color_primario: paleta.primario, color_secundario: paleta.secundario })}
+                className="flex items-center gap-3 rounded-xl border border-border p-3 text-left hover:border-primary/50 hover:bg-muted/30 transition-all"
               >
-                {config?.logo_url ? (
-                  <>
-                    <img
-                      src={resolveFileUrl(config.logo_url) || ''}
-                      alt="Logo"
-                      className="max-h-24 max-w-full object-contain relative z-0"
-                    />
-                    <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center z-10 rounded-xl">
-                      <p className="text-xs font-bold text-white">Cambiar</p>
-                    </div>
-                  </>
-                ) : (
-                  <>
-                    <Upload className="h-6 w-6 text-muted-foreground group-hover:text-primary transition-colors mb-2" />
-                    <p className="text-xs text-muted-foreground group-hover:text-foreground transition-colors">
-                      Click para subir logo
-                    </p>
-                  </>
-                )}
-              </div>
-              <input
-                ref={logoInputRef}
-                type="file"
-                accept="image/*"
-                className="hidden"
-                onChange={handleFileUpload('logo_url')}
-              />
-              <div className="flex justify-between items-start mt-1.5">
-                <p className="text-xs text-muted-foreground">Formato sugerido: PNG, SVG</p>
-                {config?.logo_url && (
-                  <div className="flex gap-3">
-                    <a
-                      href={resolveFileUrl(config.logo_url) || ''}
-                      download="logo-plataforma.png"
-                      className="text-xs text-primary hover:underline font-bold transition-colors"
-                    >
-                      Descargar
-                    </a>
-                    <button
-                      onClick={() => updateConfig({ logo_url: null })}
-                      className="text-xs text-destructive hover:underline font-bold transition-colors"
-                    >
-                      Eliminar
-                    </button>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* Favicon Upload */}
-            <div>
-              <label className="text-sm font-bold text-muted-foreground mb-2 block uppercase tracking-wider">
-                Favicon
-              </label>
-              <div
-                onClick={() => faviconInputRef.current?.click()}
-                className="h-32 border-2 border-dashed border-border hover:border-primary/50 rounded-xl flex flex-col items-center justify-center cursor-pointer transition-all hover:bg-muted/20 group relative overflow-hidden"
-              >
-                {config?.favicon_url ? (
-                  <>
-                    <img
-                      src={resolveFileUrl(config.favicon_url) || ''}
-                      alt="Favicon"
-                      className="h-12 w-12 object-contain relative z-0"
-                    />
-                    <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center z-10 rounded-xl">
-                      <p className="text-xs font-bold text-white">Cambiar</p>
-                    </div>
-                  </>
-                ) : (
-                  <>
-                    <Upload className="h-6 w-6 text-muted-foreground group-hover:text-primary transition-colors mb-2" />
-                    <p className="text-xs text-muted-foreground group-hover:text-foreground transition-colors">
-                      Click para subir favicon
-                    </p>
-                  </>
-                )}
-              </div>
-              <input
-                ref={faviconInputRef}
-                type="file"
-                accept="image/x-icon,image/png,image/svg+xml"
-                className="hidden"
-                onChange={handleFileUpload('favicon_url')}
-              />
-              <div className="flex justify-between items-start mt-1.5">
-                <p className="text-xs text-muted-foreground">Ícono de la pestaña (.ico, .png, .svg)</p>
-                {config?.favicon_url && (
-                  <div className="flex gap-3">
-                    <a
-                      href={resolveFileUrl(config.favicon_url) || ''}
-                      download="favicon-plataforma.png"
-                      className="text-xs text-primary hover:underline font-bold transition-colors"
-                    >
-                      Descargar
-                    </a>
-                    <button
-                      onClick={() => updateConfig({ favicon_url: null })}
-                      className="text-xs text-destructive hover:underline font-bold transition-colors"
-                    >
-                      Eliminar
-                    </button>
-                  </div>
-                )}
-              </div>
-            </div>
+                <span className="flex shrink-0">
+                  <span className="h-8 w-8 rounded-l-lg" style={{ background: paleta.primario }} />
+                  <span className="h-8 w-8 rounded-r-lg" style={{ background: paleta.secundario }} />
+                </span>
+                <span className="min-w-0">
+                  <span className="block text-sm font-bold truncate">{paleta.nombre}</span>
+                  <span className="block text-xs text-muted-foreground truncate">{paleta.descripcion}</span>
+                </span>
+              </button>
+            ))}
           </div>
         </div>
-      </section>
+      </Seccion>
 
-      {/* ======= COLORS ======= */}
-      <section className="bg-card/70 backdrop-blur-md border border-border/50 rounded-2xl p-4 sm:p-8 shadow-sm mb-8 animate-in slide-in-from-bottom-4 duration-500">
-        <h2 className="text-xl font-bold mb-6 flex items-center gap-2">
-          <Palette className="h-5 w-5 text-primary" /> Colores de la Plataforma
-        </h2>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-8">
-          <div>
-            <label className="text-sm font-bold text-muted-foreground mb-3 block uppercase tracking-wider">
-              Color Primario
-            </label>
-            <div className="flex items-center gap-4">
-              <input
-                type="color"
-                value={config?.color_primario || '#000000'}
-                onChange={(e) => updateLocalTheme(e.target.value, config?.color_secundario || '#000')}
-                className="h-14 w-14 cursor-pointer rounded-xl overflow-hidden border-2 border-border shadow-sm"
-              />
-              <div className="flex-1">
-                <p className="text-sm font-mono text-foreground">{config?.color_primario || '#000000'}</p>
-                <p className="text-xs text-muted-foreground mt-1">Botones, enlaces y acentos principales</p>
-              </div>
-            </div>
-          </div>
-          <div>
-            <label className="text-sm font-bold text-muted-foreground mb-3 block uppercase tracking-wider">
-              Color Secundario
-            </label>
-            <div className="flex items-center gap-4">
-              <input
-                type="color"
-                value={config?.color_secundario || '#000000'}
-                onChange={(e) => updateLocalTheme(config?.color_primario || '#000', e.target.value)}
-                className="h-14 w-14 cursor-pointer rounded-xl overflow-hidden border-2 border-border shadow-sm"
-              />
-              <div className="flex-1">
-                <p className="text-sm font-mono text-foreground">{config?.color_secundario || '#000000'}</p>
-                <p className="text-xs text-muted-foreground mt-1">Elementos secundarios y gradientes</p>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Preview */}
-        <div className="mt-8 p-6 border border-border rounded-xl bg-muted/20">
-          <p className="text-xs font-bold text-muted-foreground uppercase tracking-wider mb-4 flex items-center gap-2">
-            <Eye className="h-3 w-3" /> Vista Previa
-          </p>
-          <div className="flex flex-wrap gap-3">
-            <button className="bg-primary text-primary-foreground px-5 py-2 rounded-xl font-bold text-sm shadow-sm">
-              Botón Primario
-            </button>
-            <button className="bg-secondary text-secondary-foreground px-5 py-2 rounded-xl font-bold text-sm shadow-sm">
-              Botón Secundario
-            </button>
-            <button className="border border-primary text-primary px-5 py-2 rounded-xl font-bold text-sm">
-              Borde Primario
-            </button>
-            <div className="flex items-center gap-2 ml-auto">
-              <div className="h-8 w-8 rounded-full bg-primary" title="Primario" />
-              <div className="h-8 w-8 rounded-full bg-secondary" title="Secundario" />
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* ======= THEME PRESETS ======= */}
-      <section className="bg-card/70 backdrop-blur-md border border-border/50 rounded-2xl p-4 sm:p-8 shadow-sm mb-8 animate-in slide-in-from-bottom-4 duration-500">
-        <h2 className="text-xl font-bold mb-2 flex items-center gap-2">
-          <Sparkles className="h-5 w-5 text-primary" /> Temas Predefinidos
-        </h2>
-        <p className="text-sm text-muted-foreground mb-6">
-          Aplica un tema completo con un solo click. Los colores se actualizan en vivo.
-        </p>
-
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
-          {THEME_PRESETS.map((preset) => (
+      {/* Tipografía */}
+      <Seccion icono={Type} titulo="Tipografía">
+        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3">
+          {FUENTES.map((fuente) => (
             <button
-              key={preset.name}
-              onClick={() => updateLocalTheme(preset.primary, preset.secondary)}
-              className="group p-4 rounded-xl border-2 border-border hover:border-primary/40 transition-all hover:shadow-md hover:-translate-y-0.5 duration-300 text-left"
+              key={fuente}
+              type="button"
+              onClick={() => editar({ fuente })}
+              className={`rounded-xl border p-4 text-center transition-all ${
+                borrador.fuente === fuente
+                  ? 'border-primary bg-primary/5 ring-2 ring-primary/20'
+                  : 'border-border hover:border-primary/30'
+              }`}
             >
-              <div className="flex gap-2 mb-3">
-                <div
-                  className="h-8 w-8 rounded-full shadow-inner border border-white/20"
-                  style={{ background: preset.primary }}
-                />
-                <div
-                  className="h-8 w-8 rounded-full shadow-inner border border-white/20"
-                  style={{ background: preset.secondary }}
-                />
-              </div>
-              <p className="font-bold text-sm">{preset.name}</p>
-              <p className="text-xs text-muted-foreground mt-0.5">{preset.desc}</p>
+              <span className="block text-xl font-bold" style={{ fontFamily: `"${fuente}", sans-serif` }}>
+                Aa
+              </span>
+              <span className="block text-xs font-medium mt-1 text-muted-foreground">{fuente}</span>
             </button>
           ))}
         </div>
-      </section>
+      </Seccion>
 
-      {/* ======= TYPOGRAPHY ======= */}
-      <section className="bg-card/70 backdrop-blur-md border border-border/50 rounded-2xl p-4 sm:p-8 shadow-sm mb-8 animate-in slide-in-from-bottom-4 duration-500">
-        <h2 className="text-xl font-bold mb-6 flex items-center gap-2">
-          <Type className="h-5 w-5 text-primary" /> Tipografía
-        </h2>
-
-        <div>
-          <label className="text-sm font-bold text-muted-foreground mb-3 block uppercase tracking-wider">
-            Fuente Principal
-          </label>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            {GOOGLE_FONTS.map((font) => (
-              <button
-                key={font}
-                onClick={() => updateConfig({ fuente: font })}
-                className={`p-4 rounded-xl border-2 transition-all text-left ${
-                  config?.fuente === font
-                    ? 'border-primary bg-primary/10 shadow-md'
-                    : 'border-border hover:border-primary/30 hover:bg-muted/30'
-                }`}
-              >
-                <p className="font-bold text-lg" style={{ fontFamily: `"${font}", sans-serif` }}>
-                  Aa
-                </p>
-                <p className="text-xs font-medium mt-1 text-muted-foreground">{font}</p>
-              </button>
-            ))}
-          </div>
+      {/* Bordes */}
+      <Seccion icono={RectangleHorizontal} titulo="Redondeo de bordes">
+        <div className="flex items-center gap-6">
+          <input
+            type="range"
+            min={0}
+            max={24}
+            value={borrador.border_radius}
+            onChange={(evento) => editar({ border_radius: Number(evento.target.value) })}
+            className="flex-1 h-2 bg-muted rounded-full appearance-none cursor-pointer accent-primary"
+            aria-label="Redondeo de bordes en píxeles"
+          />
+          <span className="text-sm font-mono font-bold w-16 text-center bg-muted/50 px-2 py-1 rounded-lg">
+            {borrador.border_radius}px
+          </span>
         </div>
-      </section>
 
-      {/* ======= BORDER RADIUS ======= */}
-      <section className="bg-card/70 backdrop-blur-md border border-border/50 rounded-2xl p-4 sm:p-8 shadow-sm mb-8 animate-in slide-in-from-bottom-4 duration-500">
-        <h2 className="text-xl font-bold mb-6 flex items-center gap-2">
-          <RectangleHorizontal className="h-5 w-5 text-primary" /> Redondez de Bordes
-        </h2>
-
-        <div className="space-y-4">
-          <div className="flex items-center gap-6">
-            <input
-              type="range"
-              min="0"
-              max="24"
-              value={config?.border_radius ?? 12}
-              onChange={(e) => updateConfig({ border_radius: parseInt(e.target.value) })}
-              className="flex-1 h-2 bg-muted rounded-full appearance-none cursor-pointer accent-primary"
-            />
-            <span className="text-sm font-mono font-bold w-14 text-center bg-muted/50 px-2 py-1 rounded-lg">
-              {config?.border_radius ?? 12}px
-            </span>
+        <div className="flex flex-wrap items-center gap-4">
+          <div
+            className="h-16 w-24 sm:w-32 bg-primary/20 border-2 border-primary/30 flex items-center justify-center text-xs font-bold text-primary"
+            style={{ borderRadius: `${borrador.border_radius}px` }}
+          >
+            Tarjeta
           </div>
+          <span
+            className="bg-primary text-primary-foreground px-6 py-2 font-bold text-sm"
+            style={{ borderRadius: `${borrador.border_radius}px` }}
+          >
+            Botón
+          </span>
+        </div>
 
-          {/* Live preview of radius */}
-          <div className="flex flex-wrap gap-4 items-center pt-2">
-            <div
-              className="h-16 w-24 sm:w-32 bg-primary/20 border-2 border-primary/30 flex items-center justify-center text-xs font-bold text-primary shrink-0"
-              style={{ borderRadius: `${config?.border_radius ?? 12}px` }}
-            >
-              Tarjeta
-            </div>
+        <div className="flex flex-wrap gap-2">
+          {RADIOS.map((valor) => (
             <button
-              className="bg-primary text-primary-foreground px-4 sm:px-6 py-2 font-bold text-sm shrink-0"
-              style={{ borderRadius: `${config?.border_radius ?? 12}px` }}
+              key={valor}
+              type="button"
+              onClick={() => editar({ border_radius: valor })}
+              className={`text-xs px-3 py-1.5 rounded-lg border font-medium transition-all ${
+                borrador.border_radius === valor
+                  ? 'border-primary bg-primary/10 text-primary'
+                  : 'border-border hover:border-primary/30 text-muted-foreground'
+              }`}
             >
-              Botón
+              {valor === 0 ? 'Cuadrado' : valor === 24 ? 'Muy redondeado' : `${valor}px`}
             </button>
-            <div
-              className="h-10 w-full sm:w-48 border-2 border-border bg-background flex items-center px-3 text-xs text-muted-foreground"
-              style={{ borderRadius: `${config?.border_radius ?? 12}px` }}
-            >
-              Input de texto...
-            </div>
-          </div>
+          ))}
+        </div>
+      </Seccion>
 
-          <div className="flex flex-wrap gap-2 pt-2">
-            {[0, 4, 8, 12, 16, 24].map((val) => (
-              <button
-                key={val}
-                onClick={() => updateConfig({ border_radius: val })}
-                className={`text-xs px-3 py-1.5 rounded-lg border transition-all font-medium ${
-                  config?.border_radius === val
-                    ? 'border-primary bg-primary/10 text-primary'
-                    : 'border-border hover:border-primary/30 text-muted-foreground'
-                }`}
-              >
-                {val === 0 ? 'Cuadrado' : val === 24 ? 'Redondeado' : `${val}px`}
-              </button>
-            ))}
+      {/* Acceso */}
+      <Seccion icono={ImageIcon} titulo="Pantalla de acceso">
+        <Campo etiqueta="Mensaje de bienvenida" ayuda="Se muestra sobre el formulario de acceso.">
+          <input
+            type="text"
+            value={borrador.mensaje_bienvenida}
+            onChange={(evento) => editar({ mensaje_bienvenida: evento.target.value })}
+            maxLength={500}
+            className="w-full sm:w-96 h-11 px-4 rounded-xl border border-border bg-background font-medium focus:ring-2 focus:ring-primary/30 focus:border-primary outline-none"
+          />
+        </Campo>
+
+        <ZonaDeImagen
+          etiqueta="Fondo de la pantalla de acceso"
+          ayuda="Opcional. Se recomienda 1920×1080 o superior."
+          valor={borrador.login_fondo_url}
+          subiendo={subiendo === 'login_fondo_url'}
+          onElegir={() => campos.login_fondo_url.current?.click()}
+          onQuitar={() => editar({ login_fondo_url: null })}
+          altura="h-40"
+        />
+        <input
+          ref={campos.login_fondo_url}
+          type="file"
+          accept="image/*"
+          className="hidden"
+          onChange={subirImagen('login_fondo_url')}
+        />
+      </Seccion>
+
+      {/* Barra de guardado: sólo aparece si hay algo que guardar, para que no quede duda de
+          si los cambios están aplicados. */}
+      {hayCambios && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-40 w-[min(calc(100%-2rem),40rem)]">
+          <div className="flex items-center justify-between gap-4 rounded-2xl border border-border bg-card px-5 py-4 shadow-2xl">
+            <p className="text-sm font-medium">Tienes cambios sin guardar.</p>
+            <button
+              type="button"
+              onClick={guardar}
+              disabled={guardando}
+              className="inline-flex items-center gap-2 rounded-xl bg-primary px-5 py-2.5 text-sm font-bold text-primary-foreground hover:bg-primary/90 disabled:opacity-60 transition-colors"
+            >
+              <Save className="h-4 w-4" />
+              {guardando ? 'Guardando…' : 'Guardar'}
+            </button>
           </div>
         </div>
-      </section>
-
-      {/* ======= LOGIN CUSTOMIZATION ======= */}
-      <section className="bg-card/70 backdrop-blur-md border border-border/50 rounded-2xl p-4 sm:p-8 shadow-sm mb-8 animate-in slide-in-from-bottom-4 duration-500">
-        <h2 className="text-xl font-bold mb-6 flex items-center gap-2">
-          <Image className="h-5 w-5 text-primary" /> Pantalla de Inicio de Sesión
-        </h2>
-
-        <div className="space-y-6">
-          {/* Welcome Message */}
-          <div>
-            <label className="text-sm font-bold text-muted-foreground mb-2 block uppercase tracking-wider">
-              Mensaje de Bienvenida
-            </label>
-            <input
-              type="text"
-              value={config?.mensaje_bienvenida || ''}
-              onChange={(e) => updateConfig({ mensaje_bienvenida: e.target.value })}
-              className="w-full sm:w-96 h-11 px-4 rounded-xl border border-border bg-background text-foreground font-medium focus:ring-2 focus:ring-primary/30 focus:border-primary outline-none transition-all"
-              placeholder="Bienvenido a PESV Education"
-            />
-            <p className="text-xs text-muted-foreground mt-1.5">Se muestra en grande dentro del formulario de acceso</p>
-          </div>
-
-          {/* Login Background */}
-          <div>
-            <label className="text-sm font-bold text-muted-foreground mb-2 block uppercase tracking-wider">
-              Fondo de Pantalla de Login
-            </label>
-            <div
-              onClick={() => loginBgInputRef.current?.click()}
-              className="h-40 border-2 border-dashed border-border hover:border-primary/50 rounded-xl flex flex-col items-center justify-center cursor-pointer transition-all hover:bg-muted/20 group overflow-hidden relative"
-            >
-              {config?.login_fondo_url ? (
-                <>
-                  <img
-                    src={resolveFileUrl(config.login_fondo_url) || ''}
-                    alt="Fondo login"
-                    className="absolute inset-0 w-full h-full object-cover opacity-100"
-                  />
-                  <div className="relative z-10 bg-card/80 backdrop-blur-sm px-4 py-2 rounded-lg">
-                    <p className="text-xs font-bold">Click para cambiar imagen</p>
-                  </div>
-                </>
-              ) : (
-                <>
-                  <Upload className="h-6 w-6 text-muted-foreground group-hover:text-primary transition-colors mb-2" />
-                  <p className="text-xs text-muted-foreground group-hover:text-foreground transition-colors">
-                    Click para subir imagen de fondo
-                  </p>
-                  <p className="text-xs text-muted-foreground mt-1">Recomendado: 1920x1080 o mayor</p>
-                </>
-              )}
-            </div>
-            <input
-              ref={loginBgInputRef}
-              type="file"
-              accept="image/*"
-              className="hidden"
-              onChange={handleFileUpload('login_fondo_url')}
-            />
-            <div className="flex justify-between items-start mt-1.5">
-              <p className="text-xs text-muted-foreground">Opcional para personalizar la pantalla de acceso</p>
-              {config?.login_fondo_url && (
-                <div className="flex gap-3">
-                  <a
-                    href={resolveFileUrl(config.login_fondo_url) || ''}
-                    download="fondo-login.png"
-                    className="text-xs text-primary hover:underline font-bold transition-colors"
-                  >
-                    Descargar
-                  </a>
-                  <button
-                    onClick={() => updateConfig({ login_fondo_url: null })}
-                    className="text-xs text-destructive hover:underline font-bold transition-colors"
-                  >
-                    Eliminar
-                  </button>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* ======= SAVE BUTTON ======= */}
-      <div className="sticky bottom-6 flex justify-center sm:justify-end pb-4">
-        <button
-          onClick={saveConfigToServer}
-          className="flex items-center gap-2 bg-primary hover:bg-primary/90 text-primary-foreground font-bold px-6 sm:px-8 py-4 rounded-2xl transition-all shadow-lg hover:shadow-xl hover:scale-105 duration-300 w-full sm:w-auto justify-center"
-        >
-          <Save className="h-5 w-5" /> Guardar Toda la Configuración
-        </button>
-      </div>
+      )}
     </div>
+  );
+}
+
+function Seccion({
+  icono: Icono,
+  titulo,
+  children,
+}: {
+  icono: typeof Palette;
+  titulo: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="bg-card/70 backdrop-blur-md border border-border/50 rounded-2xl p-4 sm:p-8 shadow-sm mb-8">
+      <h2 className="text-xl font-bold mb-6 flex items-center gap-2">
+        <Icono className="h-5 w-5 text-primary" /> {titulo}
+      </h2>
+      <div className="space-y-6">{children}</div>
+    </section>
+  );
+}
+
+function Campo({ etiqueta, ayuda, children }: { etiqueta: string; ayuda?: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <label className="text-sm font-bold text-muted-foreground mb-2 block uppercase tracking-wider">{etiqueta}</label>
+      {children}
+      {ayuda && <p className="text-xs text-muted-foreground mt-1.5">{ayuda}</p>}
+    </div>
+  );
+}
+
+function SelectorDeColor({
+  etiqueta,
+  valor,
+  onCambio,
+}: {
+  etiqueta: string;
+  valor: string;
+  onCambio: (color: string) => void;
+}) {
+  return (
+    <Campo etiqueta={etiqueta}>
+      <div className="flex items-center gap-4">
+        <input
+          type="color"
+          value={valor}
+          onChange={(evento) => onCambio(evento.target.value)}
+          className="h-14 w-20 rounded-xl border border-border cursor-pointer bg-transparent"
+          aria-label={etiqueta}
+        />
+        <span className="text-sm font-mono">{valor}</span>
+      </div>
+    </Campo>
+  );
+}
+
+function ZonaDeImagen({
+  etiqueta,
+  ayuda,
+  valor,
+  subiendo,
+  onElegir,
+  onQuitar,
+  altura,
+  ajuste = 'cover',
+}: {
+  etiqueta: string;
+  ayuda: string;
+  valor: string | null;
+  subiendo: boolean;
+  onElegir: () => void;
+  onQuitar: () => void;
+  altura: string;
+  ajuste?: 'cover' | 'contain';
+}) {
+  const url = urlDeMarca(valor);
+
+  return (
+    <Campo etiqueta={etiqueta} ayuda={ayuda}>
+      <button
+        type="button"
+        onClick={onElegir}
+        disabled={subiendo}
+        className={`${altura} w-full border-2 border-dashed border-border hover:border-primary/50 rounded-xl flex flex-col items-center justify-center transition-all hover:bg-muted/20 relative overflow-hidden disabled:opacity-60`}
+      >
+        {url ? (
+          <img src={url} alt="" className={`h-full w-full object-${ajuste} p-2`} />
+        ) : (
+          <>
+            <Upload className="h-6 w-6 text-muted-foreground mb-2" />
+            <span className="text-xs text-muted-foreground">
+              {subiendo ? 'Subiendo…' : 'Pulsa para subir una imagen'}
+            </span>
+          </>
+        )}
+      </button>
+
+      {valor && (
+        <button
+          type="button"
+          onClick={onQuitar}
+          className="mt-2 text-xs font-bold text-destructive hover:underline"
+        >
+          Quitar imagen
+        </button>
+      )}
+    </Campo>
   );
 }

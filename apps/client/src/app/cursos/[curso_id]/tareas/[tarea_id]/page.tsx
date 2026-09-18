@@ -22,7 +22,8 @@ import {
 } from 'lucide-react';
 import Link from 'next/link';
 import { useRole } from '@/contexts/RoleContext';
-import api, { API_BASE_URL } from '@/lib/api';
+import api, { urlDeArchivo } from '@/lib/api';
+import { formatearNota } from '@/lib/calificacion';
 import { useAlert } from '@/contexts/AlertContext';
 import { sanitizeHTML } from '@/lib/sanitize';
 
@@ -75,11 +76,11 @@ export default function TareaVisorPage() {
       setTarea(foundTarea);
       if (!isTeacher) {
         try {
-          const { data: ed } = await api.get(`/evaluaciones/tareas/${tarea_id}/entregas/mine`);
+          const { data: ed } = await api.get(`/evaluaciones/tareas/${tarea_id}/entregas/mia`);
           if (ed?.respuesta_texto) {
             setEntregaData(ed);
             setSelectedFileName(ed.respuesta_texto);
-            setServerFileName(ed.url_archivo_adjunto || null);
+            setServerFileName(ed.archivo_url || null);
             setUploadState('done');
           }
         } catch (_) {}
@@ -121,7 +122,7 @@ export default function TareaVisorPage() {
         maxContentLength: 50 * 1024 * 1024,
       });
       setSelectedFileName(file.name);
-      setServerFileName(data.url_archivo_adjunto || null);
+      setServerFileName(data.archivo_url || null);
       setEntregaData(data);
       setUploadState('done');
       showToast.success('Tu entrega se ha enviado correctamente.');
@@ -134,7 +135,8 @@ export default function TareaVisorPage() {
 
   const handleDownload = () => {
     if (!serverFileName) return;
-    const url = `${API_BASE_URL}/storage/download/${encodeURIComponent(serverFileName)}?originalName=${encodeURIComponent(selectedFileName || serverFileName)}`;
+    const url = urlDeArchivo(serverFileName) ?? '';
+    if (!url) return;
     window.open(url, '_blank');
   };
 
@@ -177,9 +179,8 @@ export default function TareaVisorPage() {
   const cleanTitle = isQuiz ? tarea.titulo.replace('[QUIZ] ', '') : tarea.titulo;
   const maxMb = tarea?.archivo_max_size_mb || 5;
 
-  const calificacion = entregaData?.contenido_texto?.startsWith('NOTA:')
-    ? entregaData.contenido_texto.replace('NOTA: ', '')
-    : null;
+  // La nota llega en su propio campo; antes se extraía partiendo la cadena "NOTA: 4.5 | ...".
+  const calificacion = entregaData?.calificacion != null ? formatearNota(entregaData.calificacion) : null;
 
   return (
     <div className="min-h-screen bg-background pb-16">

@@ -4,6 +4,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { StorageService } from '../storage/storage.service';
 import { CursoAccesoService } from './curso-acceso.service';
 import { validarConfiguracionQuiz } from './quiz-config';
+import { recursoParaElCliente } from './recurso.vista';
 import { JwtPayload } from '../common/interfaces/jwt-payload.interface';
 import { CreateBloqueDto, UpdateBloqueDto } from './dto/bloques.dto';
 import { CreateModuloDto, UpdateModuloDto } from './dto/cursos.dto';
@@ -104,7 +105,7 @@ export class BloqueService {
 
     const recurso = await this.prisma.lms_recursos.findUnique({ where: { guid: recursoGuid } });
     if (!recurso) throw new NotFoundException('Recurso no encontrado.');
-    return recurso;
+    return recursoParaElCliente(recurso, this.storage);
   }
 
   /**

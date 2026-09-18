@@ -1,97 +1,210 @@
-import axios from 'axios';
-import { getEnv } from './env';
+import axios, { AxiosError, AxiosInstance } from 'axios';
+import { apiUrl, urlAbsoluta } from './env';
 
 /**
- * Centralized API client for all backend requests.
- * - Base URL validated from env variable (see lib/env.ts)
- * - Automatically attaches JWT Bearer token from localStorage
- * - Handles 401 responses by clearing session and redirecting to login
+ * Cliente HTTP único del campus.
+ *
+ * Responsabilidades, y ninguna más:
+ *  - Adjuntar el token de sesión.
+ *  - Traducir un 401 en un cierre de sesión ordenado.
+ *  - Convertir cualquier error en un mensaje que una pantalla pueda enseñar tal cual.
+ *
+ * La sede **no** se envía en las peticiones autenticadas: el servidor la deduce del token.
+ * Sólo las llamadas públicas de la portada la pasan por query, y lo hacen explícitamente.
  */
-const API_BASE_URL = getEnv().apiUrl;
 
-const api = axios.create({
-  baseURL: API_BASE_URL,
+const CLAVE_TOKEN = 'lms_token';
+const CLAVE_USUARIO = 'lms_user';
+
+/**
+ * Motivos por los que el servidor corta una sesión, deducidos del mensaje que devuelve.
+ * El orden importa: se comprueba el más específico primero.
+ */
+const MOTIVOS_DE_SALIDA: { motivo: 'desplazada' | 'revocada'; senales: string[] }[] = [
+  { motivo: 'desplazada', senales: ['otro dispositivo'] },
+  { motivo: 'revocada', senales: ['revocada', 'eliminada', 'desactivada', 'ya no existe'] },
+];
+
+const api: AxiosInstance = axios.create({
+  baseURL: apiUrl(),
   headers: { 'Content-Type': 'application/json' },
+  timeout: 30_000,
 });
 
-// Request interceptor — attach JWT token to every request
 api.interceptors.request.use((config) => {
-  if (typeof window !== 'undefined') {
-    const token = localStorage.getItem('lms_token');
-    if (token) {
-      config.headers.Authorization = `Bearer ${token}`;
-    }
-  }
+  // La URL base se recalcula por si la página se abrió antes de conocer el host.
+  config.baseURL = apiUrl();
+
+  const token = leerToken();
+  if (token) config.headers.Authorization = `Bearer ${token}`;
   return config;
 });
 
-// Response interceptor — handle 401 by clearing session
 api.interceptors.response.use(
-  (response) => response,
-  (error) => {
-    if (error.response?.status === 401 && typeof window !== 'undefined') {
-      // Only redirect if not already on login page
-      if (!window.location.pathname.includes('/login')) {
-        localStorage.removeItem('lms_token');
-        localStorage.removeItem('lms_user');
-
-        // Differentiate between active revocation and normal token expiry.
-        // Backend sends specific messages for revoked/deleted accounts.
-        const serverMessage = (error.response?.data?.message || '').toLowerCase();
-        const isActiveRevocation =
-          serverMessage.includes('revocada') ||
-          serverMessage.includes('eliminada') ||
-          serverMessage.includes('desactivada');
-
-        // Only redirect with expired/revoked params if user was on a protected page
-        const isOnDashboard = window.location.pathname.startsWith('/dashboard');
-        if (isOnDashboard) {
-          if (isActiveRevocation) {
-            window.location.href = '/login?revoked=true';
-          } else {
-            window.location.href = '/login?expired=true';
-          }
-        } else if (window.location.pathname !== '/login') {
-          window.location.href = '/login';
-        }
-      }
-    }
+  (respuesta) => respuesta,
+  (error: AxiosError<{ message?: string }>) => {
+    if (error.response?.status === 401) manejarSesionCaducada(error);
     return Promise.reject(error);
   },
 );
 
+function leerToken(): string | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    return window.localStorage.getItem(CLAVE_TOKEN);
+  } catch {
+    return null;
+  }
+}
+
+export function guardarSesion(token: string, usuario: unknown): void {
+  try {
+    window.localStorage.setItem(CLAVE_TOKEN, token);
+    window.localStorage.setItem(CLAVE_USUARIO, JSON.stringify(usuario));
+  } catch {
+    // Sin almacenamiento la sesión dura lo que la pestaña; no es motivo para fallar.
+  }
+}
+
+export function borrarSesion(): void {
+  try {
+    window.localStorage.removeItem(CLAVE_TOKEN);
+    window.localStorage.removeItem(CLAVE_USUARIO);
+  } catch {
+    /* nada que hacer */
+  }
+}
+
+export function leerUsuarioGuardado<T>(): T | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const crudo = window.localStorage.getItem(CLAVE_USUARIO);
+    return crudo ? (JSON.parse(crudo) as T) : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
- * Upload a file via multipart/form-data (much faster than base64).
- * @param url - The endpoint to upload to (e.g., '/storage/upload')
- * @param file - The File object from an <input type="file">
- * @param fieldName - The form field name (default: 'file')
- * @returns The server response data
+ * Limpia la sesión y lleva al login explicando qué pasó.
+ *
+ * Se distingue «te echaron» de «caducó» porque el mensaje que merece el usuario es
+ * distinto: el primero le dice que hable con el administrador y el segundo que vuelva a
+ * entrar. Si estaba en una página pública no se le interrumpe.
  */
-async function uploadFile(url: string, file: File, fieldName = 'file') {
-  const formData = new FormData();
-  formData.append(fieldName, file);
-  const res = await api.post(url, formData, {
+function manejarSesionCaducada(error: AxiosError<{ message?: string }>): void {
+  if (typeof window === 'undefined') return;
+
+  const ruta = window.location.pathname;
+  if (ruta.startsWith('/login')) return;
+
+  borrarSesion();
+
+  const mensaje = (error.response?.data?.message ?? '').toLowerCase();
+  const coincidencia = MOTIVOS_DE_SALIDA.find((entrada) =>
+    entrada.senales.some((senal) => mensaje.includes(senal)),
+  );
+
+  const enZonaPrivada = ruta.startsWith('/dashboard') || ruta.startsWith('/cursos');
+  if (!enZonaPrivada) return;
+
+  window.location.href = `/login?motivo=${coincidencia?.motivo ?? 'expirada'}`;
+}
+
+/**
+ * Mensaje presentable de un error de red o de la API.
+ *
+ * La API responde siempre `{ message }` con un texto pensado para leerse. Aquí se cubren
+ * los casos en que no hay respuesta —sin conexión, tiempo agotado, servidor caído— para
+ * que ninguna pantalla acabe mostrando «undefined» o un volcado de error.
+ */
+export function mensajeDeError(error: unknown, respaldo = 'No se pudo completar la operación.'): string {
+  if (!axios.isAxiosError(error)) {
+    return error instanceof Error && error.message ? error.message : respaldo;
+  }
+
+  const respuesta = error.response;
+  if (!respuesta) {
+    if (error.code === 'ECONNABORTED') {
+      return 'La operación tardó demasiado. Revisa tu conexión e inténtalo de nuevo.';
+    }
+    return 'No hay conexión con el servidor. Comprueba tu red e inténtalo de nuevo.';
+  }
+
+  const mensajeServidor = (respuesta.data as { message?: string } | undefined)?.message;
+  if (mensajeServidor) return mensajeServidor;
+
+  switch (respuesta.status) {
+    case 401:
+      return 'Tu sesión ha caducado. Vuelve a iniciar sesión.';
+    case 403:
+      return 'No tienes permiso para realizar esta acción.';
+    case 404:
+      return 'No encontramos lo que buscabas.';
+    case 409:
+      return 'Ya existe un registro con esos datos.';
+    case 413:
+      return 'El archivo es demasiado grande.';
+    case 429:
+      return 'Has hecho demasiadas peticiones seguidas. Espera un momento e inténtalo de nuevo.';
+    default:
+      return respaldo;
+  }
+}
+
+/** Indica si el error corresponde a un límite de peticiones alcanzado. */
+export function esLimiteDePeticiones(error: unknown): boolean {
+  return axios.isAxiosError(error) && error.response?.status === 429;
+}
+
+/**
+ * Sube un archivo por `multipart/form-data`.
+ * @param onProgreso Porcentaje 0–100, para poder mostrar una barra en lugar de un giro
+ *        indefinido en subidas grandes.
+ */
+export async function subirArchivo<T = { filename: string; url: string }>(
+  ruta: string,
+  archivo: File,
+  onProgreso?: (porcentaje: number) => void,
+): Promise<T> {
+  const cuerpo = new FormData();
+  cuerpo.append('file', archivo);
+
+  const { data } = await api.post<T>(ruta, cuerpo, {
     headers: { 'Content-Type': 'multipart/form-data' },
-    maxBodyLength: 50 * 1024 * 1024,
-    maxContentLength: 50 * 1024 * 1024,
+    timeout: 120_000,
+    onUploadProgress: (evento) => {
+      if (!onProgreso || !evento.total) return;
+      onProgreso(Math.round((evento.loaded / evento.total) * 100));
+    },
   });
-  return res.data;
+  return data;
 }
 
 /**
- * Resolves a file reference to a full download URL.
- * Handles both:
- * - Relative R2 keys: "logos/123-abc.png" → "{API_BASE_URL}/storage/download/logos/123-abc.png"
- * - Legacy absolute URLs: "http://..." → returned as-is
- * This ensures images work across environments (localhost, devtunnel, production).
+ * URL absoluta de un archivo.
+ *
+ * La API devuelve rutas ya firmadas para el material reservado (entregas, certificados,
+ * firmas y contenido de curso) y rutas simples para la marca. Aquí sólo se completa el
+ * origen; no se construye ninguna ruta a mano, porque una ruta sin firma no se sirve.
  */
-function resolveFileUrl(fileRef: string | null | undefined): string | null {
-  if (!fileRef) return null;
-  // Already a full URL (legacy data) — return as-is
-  if (fileRef.startsWith('http://') || fileRef.startsWith('https://')) return fileRef;
-  // Relative key — build the download URL using current API base
-  return `${API_BASE_URL}/storage/download/${fileRef}`;
+export function urlDeArchivo(ruta: string | null | undefined): string | null {
+  if (!ruta) return null;
+  return urlAbsoluta(ruta);
 }
 
-export { API_BASE_URL, uploadFile, resolveFileUrl };
+/**
+ * URL de un archivo de marca a partir de su clave de almacenamiento.
+ *
+ * Sólo vale para el material público —logotipos, portadas de curso, fondos y fotos de
+ * perfil—, que se sirve sin firma. Cualquier otra clave (entregas, certificados, firmas,
+ * material de curso) llega desde la API ya firmada y debe pasarse por `urlDeArchivo`.
+ */
+export function urlDeMarca(clave: string | null | undefined): string | null {
+  if (!clave) return null;
+  if (clave.startsWith('http://') || clave.startsWith('https://')) return clave;
+  return urlAbsoluta(`/api/storage/download/${clave}`);
+}
+
+export { apiUrl };
 export default api;
