@@ -142,16 +142,7 @@ export default function ModuleEditorPage() {
     // Optimistic: remove from local state immediately
     setModulo((prev: any) => {
       if (!prev) return prev;
-      const updated = { ...prev };
-      if (updated.lecciones?.[0]?.recursos) {
-        updated.lecciones = [
-          {
-            ...updated.lecciones[0],
-            recursos: updated.lecciones[0].recursos.filter((r: any) => r.guid !== id),
-          },
-        ];
-      }
-      return updated;
+      return { ...prev, recursos: (prev.recursos || []).filter((r: any) => r.guid !== id) };
     });
     try {
       await api.delete(`/cursos/bloques/${id}`);
@@ -194,31 +185,20 @@ export default function ModuleEditorPage() {
         await api.patch(`/cursos/bloques/${editingBlockId}`, { titulo: finalTitulo, contenido_html: htmlContent });
         // Optimistic: update in local state
         setModulo((prev: any) => {
-          if (!prev?.lecciones?.[0]?.recursos) return prev;
-          const updated = { ...prev };
-          updated.lecciones = [
-            {
-              ...updated.lecciones[0],
-              recursos: updated.lecciones[0].recursos.map((r: any) =>
-                r.guid === editingBlockId ? { ...r, titulo: finalTitulo, contenido_html: htmlContent } : r,
-              ),
-            },
-          ];
-          return updated;
+          if (!prev?.recursos) return prev;
+          return {
+            ...prev,
+            recursos: prev.recursos.map((r: any) =>
+              r.guid === editingBlockId ? { ...r, titulo: finalTitulo, contenido_html: htmlContent } : r,
+            ),
+          };
         });
       } else {
         const res = await api.post(`/cursos/modulos/${modulo_id}/bloques`, body);
         // Optimistic: append to local state
         setModulo((prev: any) => {
-          if (!prev?.lecciones?.[0]) return prev;
-          const updated = { ...prev };
-          updated.lecciones = [
-            {
-              ...updated.lecciones[0],
-              recursos: [...(updated.lecciones[0].recursos || []), res.data],
-            },
-          ];
-          return updated;
+          if (!prev) return prev;
+          return { ...prev, recursos: [...(prev.recursos || []), res.data] };
         });
       }
 
@@ -242,7 +222,7 @@ export default function ModuleEditorPage() {
     return <PageLoader message="Cargando editor del módulo..." />;
   }
 
-  const recursos = modulo.lecciones?.[0]?.recursos || [];
+  const recursos = modulo.recursos || [];
 
   return (
     <div className="min-h-screen bg-muted/10 relative pb-20">

@@ -1040,7 +1040,7 @@ export default function CalificacionManualPage() {
                                                 autoFocus
                                               />
                                               <div className="absolute right-4 top-1/2 -translate-y-1/2 text-sm font-bold text-muted-foreground">
-                                                /5.0
+                                                / {NOTA_MAXIMA}
                                               </div>
                                             </div>
                                           </div>

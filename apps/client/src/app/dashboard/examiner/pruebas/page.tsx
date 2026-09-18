@@ -854,7 +854,7 @@ export default function MonitoreoPruebasPage() {
                               {grupo.estudiantes.map((estItem: any) => {
                                 const nota = estItem.mejorNota;
                                 const isAprobado = nota !== null && nota >= NOTA_APROBACION_DEFECTO;
-                                const isReprobado = nota !== null && nota < 3.0;
+                                const isReprobado = nota !== null && nota < NOTA_APROBACION_DEFECTO;
                                 const estKey = `${taskKey}-${estItem.estudiante?.guid || 'unknown'}`;
                                 const isEstExpanded = !!expandedStudents[estKey];
 
@@ -935,8 +935,8 @@ export default function MonitoreoPruebasPage() {
                                         <div className="space-y-3 relative ml-4 before:absolute before:left-0 before:top-0 before:bottom-0 before:w-0.5 before:bg-gradient-to-b before:from-transparent before:via-border/50 before:to-transparent">
                                           {estItem.intentos.map((intento: any, idx: number) => {
                                             const intentoNota = extractNota(intento);
-                                            const isIntAprobado = intentoNota !== null && intentoNota >= 3.0;
-                                            const isIntReprobado = intentoNota !== null && intentoNota < 3.0;
+                                            const isIntAprobado = intentoNota !== null && intentoNota >= NOTA_APROBACION_DEFECTO;
+                                            const isIntReprobado = intentoNota !== null && intentoNota < NOTA_APROBACION_DEFECTO;
 
                                             return (
                                               <div key={intento.guid} className="relative flex items-center gap-3 pl-4">

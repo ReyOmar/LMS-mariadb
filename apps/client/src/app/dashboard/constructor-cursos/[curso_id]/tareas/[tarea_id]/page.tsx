@@ -56,14 +56,11 @@ export default function ConfigurarTareaPage() {
 
       let foundTarea = null;
       for (const mod of data.modulos || []) {
-        for (const lec of mod.lecciones || []) {
-          const rec = lec.recursos?.find((r: any) => r.guid === tarea_id);
-          if (rec) {
-            foundTarea = rec;
-            break;
-          }
+        const rec = (mod.recursos || []).find((r: any) => r.guid === tarea_id);
+        if (rec) {
+          foundTarea = rec;
+          break;
         }
-        if (foundTarea) break;
       }
 
       if (foundTarea) {

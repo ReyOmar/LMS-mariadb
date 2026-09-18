@@ -865,7 +865,7 @@ export default function ConstructorCursosRoot() {
                     className={`w-full bg-muted border border-border rounded-xl px-4 py-3 font-medium focus:outline-none focus:ring-2 focus:ring-primary/50 text-lg ${isReadOnly ? 'opacity-60 cursor-not-allowed' : ''}`}
                   />
                   <p className="text-sm text-muted-foreground mt-4">
-                    Este módulo contiene {selectedItem.data.lecciones?.[0]?.recursos?.length || 0} recursos o tareas.
+                    Este módulo contiene {selectedItem.data.recursos?.length || 0} recursos o tareas.
                     Utiliza el panel lateral para añadir más contenido.
                   </p>
                 </div>
@@ -1063,7 +1063,7 @@ export default function ConstructorCursosRoot() {
                 ) : (
                   activeCourse.modulos.map((mod: any, i: number) => {
                     const isExpanded = expandedModules[mod.guid];
-                    const recursos = mod.lecciones?.[0]?.recursos || [];
+                    const recursos = mod.recursos || [];
 
                     return (
                       <div key={mod.guid} className="border border-border/50 rounded-xl bg-muted/5">
