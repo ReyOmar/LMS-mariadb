@@ -2,5 +2,6 @@ dist
 node_modules
 coverage
 .next
+prod
 uploads
 prisma/migrations

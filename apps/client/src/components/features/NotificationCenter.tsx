@@ -1,241 +1,281 @@
-"use client";
+'use client';
 
-import { useEffect, useState, useRef, useCallback } from 'react';
-import { Bell, X, MessageSquare, Star, AlertTriangle, BookOpen, RefreshCw, Clock, Inbox, ChevronRight, Trash2 } from 'lucide-react';
-import { useRole } from '@/contexts/RoleContext';
-import { useEventoRealtime } from '@/contexts/RealtimeContext';
-import api from '@/lib/api';
+import { useEffect, useState, useRef, useCallback, type CSSProperties } from 'react';
+import { createPortal } from 'react-dom';
+import { useRouter } from 'next/navigation';
+import {
+  Bell,
+  X,
+  MessageSquare,
+  Star,
+  AlertTriangle,
+  BookOpen,
+  RefreshCw,
+  Clock,
+  Inbox,
+  ChevronRight,
+  Trash2,
+} from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
+import { useSession } from '@/contexts/SessionContext';
+import { useRealtimeEvent } from '@/contexts/RealtimeContext';
+import { useAlerts } from '@/contexts/AlertContext';
+import { useDialog } from '@/hooks/useDialog';
+import api, { errorMessage } from '@/lib/api';
+import { timeAgo } from '@/lib/dates';
+import { plural } from '@/lib/text';
+import type { Notification, NotificationType } from '@/types/models';
 
-interface Notification {
-  id: number;
-  tipo: string;
-  titulo: string;
-  mensaje: string;
-  leida: boolean;
-  url_accion?: string;
-  created_at: string;
-}
+/** Cuántos avisos se piden y se conservan en el panel. */
+const MAX_NOTIFICATIONS = 25;
 
-const iconMap: Record<string, any> = {
-  TAREA_CALIFICADA: Star,
-  ENTREGA_RECHAZADA: AlertTriangle,
-  MODULO_REINICIADO: RefreshCw,
-  REVISION_ENTREGA: Clock,
-  MENSAJE_NUEVO: MessageSquare,
-  CURSO_REACTIVADO: BookOpen,
-  RECORDATORIO_INACTIVIDAD: Bell,
-  EVALUACION_NUEVA: Star,
-  ANUNCIO_CURSO: BookOpen,
-  ANUNCIO_GLOBAL: Bell,
+const ICON_BY_TYPE: Partial<Record<NotificationType, LucideIcon>> = {
+  ASSIGNMENT_GRADED: Star,
+  SUBMISSION_REJECTED: AlertTriangle,
+  MODULE_RESET: RefreshCw,
+  SUBMISSION_REVIEW: Clock,
+  NEW_MESSAGE: MessageSquare,
+  COURSE_REACTIVATED: BookOpen,
+  INACTIVITY_REMINDER: Bell,
+  NEW_ASSESSMENT: Star,
+  COURSE_ANNOUNCEMENT: BookOpen,
+  GLOBAL_ANNOUNCEMENT: Bell,
 };
 
-const colorMap: Record<string, string> = {
-  TAREA_CALIFICADA: 'text-emerald-500 bg-emerald-500/10',
-  ENTREGA_RECHAZADA: 'text-red-500 bg-red-500/10',
-  MODULO_REINICIADO: 'text-amber-500 bg-amber-500/10',
-  REVISION_ENTREGA: 'text-blue-500 bg-blue-500/10',
-  MENSAJE_NUEVO: 'text-primary bg-primary/10',
-  CURSO_REACTIVADO: 'text-emerald-500 bg-emerald-500/10',
-  RECORDATORIO_INACTIVIDAD: 'text-amber-500 bg-amber-500/10',
+const COLOR_BY_TYPE: Partial<Record<NotificationType, string>> = {
+  ASSIGNMENT_GRADED: 'text-emerald-500 bg-emerald-500/10',
+  SUBMISSION_REJECTED: 'text-red-500 bg-red-500/10',
+  MODULE_RESET: 'text-amber-500 bg-amber-500/10',
+  SUBMISSION_REVIEW: 'text-blue-500 bg-blue-500/10',
+  NEW_MESSAGE: 'text-primary bg-primary/10',
+  COURSE_REACTIVATED: 'text-emerald-500 bg-emerald-500/10',
+  INACTIVITY_REMINDER: 'text-amber-500 bg-amber-500/10',
 };
 
 export function NotificationCenter() {
-  const { user } = useRole();
-  const [notificaciones, setNotificaciones] = useState<Notification[]>([]);
-  const [unreadCount, setUnreadCount] = useState(0);
+  const { user } = useSession();
+  const { notify } = useAlerts();
+  const router = useRouter();
+  const [notifications, setNotifications] = useState<Notification[]>([]);
+  const [unread, setUnread] = useState(0);
   const [open, setOpen] = useState(false);
+  // Dónde está la campana al abrir: en pantallas anchas el panel se despliega bajo ella.
+  const [anchor, setAnchor] = useState({ top: 0, left: 0 });
   const [loading, setLoading] = useState(false);
-  const panelRef = useRef<HTMLDivElement>(null);
-  const autoCloseTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const panelContainer = useRef<HTMLDivElement>(null);
+  const { dialogProps, titleId } = useDialog({ open, onClose: () => setOpen(false) });
+  const panel = dialogProps.ref;
+  const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const fetchNotificaciones = useCallback(async () => {
+  const loadNotifications = useCallback(async () => {
     if (!user?.guid) return;
     setLoading(true);
     try {
-      const [notifsRes, countRes] = await Promise.all([
-        api.get('/notificaciones?limit=25'),
-        api.get('/notificaciones/no-leidas'),
+      const [list, count] = await Promise.all([
+        api.get<Notification[]>('/notifications', { params: { limit: MAX_NOTIFICATIONS } }),
+        api.get<{ total: number }>('/notifications/unread'),
       ]);
-      setNotificaciones(notifsRes.data || []);
-      setUnreadCount(countRes.data?.total || 0);
-    } catch (err) {
-      console.error('Error fetching notifications:', err);
+      setNotifications(list.data ?? []);
+      setUnread(count.data?.total ?? 0);
+    } catch {
+      // Los avisos son complementarios: si no cargan, la pantalla sigue siendo usable.
+      // Llegarán en el siguiente evento de tiempo real o al volver a abrir el panel.
     } finally {
       setLoading(false);
     }
   }, [user?.guid]);
 
   useEffect(() => {
-    fetchNotificaciones();
-  }, [fetchNotificaciones]);
+    void loadNotifications();
+  }, [loadNotifications]);
 
   // Un aviso nuevo se añade en el momento, sin volver a pedir la lista entera.
-  useEventoRealtime('notification:new', (data) => {
-    setNotificaciones((prev) => [data as Notification, ...prev].slice(0, 25));
-    setUnreadCount((prev) => prev + 1);
+  useRealtimeEvent('notification:new', (data) => {
+    setNotifications((prev) => [data as Notification, ...prev].slice(0, MAX_NOTIFICATIONS));
+    setUnread((prev) => prev + 1);
   });
 
-  // Auto-mark all notifications as read when the panel opens
   useEffect(() => {
-    if (open && unreadCount > 0) {
-      // Mark all as read on the server
-      api.patch('/notificaciones/leer-todas').then(() => {
-        setNotificaciones(prev => prev.map(n => ({ ...n, leida: true })));
-        setUnreadCount(0);
-      }).catch(() => {});
-    }
-    // Cleanup auto-close timer when panel state changes
-    return () => {
-      if (autoCloseTimerRef.current) {
-        clearTimeout(autoCloseTimerRef.current);
-        autoCloseTimerRef.current = null;
-      }
+    if (!open) return;
+    const onClickOutside = (event: MouseEvent) => {
+      const target = event.target as Node;
+      if (!panelContainer.current?.contains(target) && !panel.current?.contains(target)) setOpen(false);
     };
-  }, [open]);
+    document.addEventListener('mousedown', onClickOutside);
+    return () => document.removeEventListener('mousedown', onClickOutside);
+  }, [open, panel]);
 
-  // Close on outside click
-  useEffect(() => {
-    const handler = (e: MouseEvent) => {
-      if (panelRef.current && !panelRef.current.contains(e.target as Node)) {
-        setOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, []);
+  useEffect(
+    () => () => {
+      if (closeTimer.current) clearTimeout(closeTimer.current);
+    },
+    [],
+  );
+
+  /** Abrir el panel equivale a leer los avisos: se marcan todos de una vez. */
+  const markAllRead = () => {
+    api
+      .patch('/notifications/read-all')
+      .then(() => {
+        setNotifications((prev) => prev.map((notification) => ({ ...notification, read: true })));
+        setUnread(0);
+      })
+      .catch(() => undefined);
+  };
+
+  const togglePanel = () => {
+    const opening = !open;
+    const bell = panelContainer.current?.getBoundingClientRect();
+    if (opening && bell) setAnchor({ top: bell.top, left: bell.left });
+    setOpen(opening);
+    if (opening && unread > 0) markAllRead();
+  };
 
   const clearAll = async () => {
     try {
-      await api.delete('/notificaciones');
-      setNotificaciones([]);
-      setUnreadCount(0);
-      // Auto-close the panel after 500ms
-      autoCloseTimerRef.current = setTimeout(() => {
-        setOpen(false);
-      }, 500);
-    } catch {}
-  };
-
-  const handleNotifClick = (notif: Notification) => {
-    if (notif.url_accion) {
-      window.location.href = notif.url_accion;
-      setOpen(false);
+      await api.delete('/notifications');
+      setNotifications([]);
+      setUnread(0);
+      // El panel se cierra medio segundo después: da tiempo a ver qué se pulsó.
+      closeTimer.current = setTimeout(() => setOpen(false), 500);
+    } catch (error) {
+      notify.error('No se pudieron borrar las notificaciones', errorMessage(error));
     }
   };
 
-  const getIcon = (tipo: string) => {
-    const Icon = iconMap[tipo] || Bell;
-    return Icon;
-  };
-
-  const getColorClass = (tipo: string) => {
-    return colorMap[tipo] || 'text-muted-foreground bg-muted';
-  };
-
-  const timeAgo = (dateStr: string) => {
-    const diff = Date.now() - new Date(dateStr).getTime();
-    const mins = Math.floor(diff / 60000);
-    if (mins < 1) return 'Ahora';
-    if (mins < 60) return `Hace ${mins}m`;
-    const hours = Math.floor(mins / 60);
-    if (hours < 24) return `Hace ${hours}h`;
-    const days = Math.floor(hours / 24);
-    return `Hace ${days}d`;
+  const openNotification = (notification: Notification) => {
+    if (!notification.actionUrl) return;
+    setOpen(false);
+    // Las direcciones del propio campus se abren sin recargar la aplicación.
+    if (notification.actionUrl.startsWith('/')) router.push(notification.actionUrl);
+    else window.location.href = notification.actionUrl;
   };
 
   return (
-    <div className="relative" ref={panelRef}>
-      {/* Bell Button */}
+    <div className="relative" ref={panelContainer}>
+      {/* Botón de la campana */}
       <button
-        onClick={() => setOpen(!open)}
+        type="button"
+        onClick={togglePanel}
         className="relative p-2.5 rounded-xl bg-card border border-border hover:bg-muted transition-all shadow-sm group"
-        aria-label="Notificaciones"
+        aria-label={unread > 0 ? `Notificaciones (${unread} sin leer)` : 'Notificaciones'}
+        aria-expanded={open}
       >
-        <Bell className={`h-5 w-5 transition-colors ${open ? 'text-primary' : 'text-muted-foreground group-hover:text-foreground'}`} />
-        {unreadCount > 0 && (
-          <span className="absolute -top-1.5 -right-1.5 h-5 min-w-[20px] px-1 bg-red-500 text-white text-[10px] font-bold rounded-full flex items-center justify-center ring-2 ring-background animate-in zoom-in-50 duration-200">
-            {unreadCount > 99 ? '99+' : unreadCount}
+        <Bell
+          className={`h-5 w-5 transition-colors ${open ? 'text-primary' : 'text-muted-foreground group-hover:text-foreground'}`}
+        />
+        {unread > 0 && (
+          <span className="absolute -top-1.5 -right-1.5 h-5 min-w-[20px] px-1 bg-red-600 text-white text-[10px] font-bold rounded-full flex items-center justify-center ring-2 ring-background animate-in zoom-in-50 duration-200">
+            {unread > 99 ? '99+' : unread}
           </span>
         )}
       </button>
 
-      {/* Notification Panel */}
-      {open && (
-        <div className="fixed inset-x-0 top-0 bottom-0 sm:absolute sm:inset-auto sm:left-0 sm:top-14 sm:w-[380px] sm:max-h-[520px] sm:rounded-2xl bg-card border border-border sm:shadow-[0_10px_40px_-10px_rgba(0,0,0,0.3)] z-[99999] overflow-hidden animate-in slide-in-from-top-2 fade-in duration-200 flex flex-col">
-          {/* Header */}
-          <div className="flex items-center justify-between p-4 border-b border-border bg-gradient-to-r from-card to-muted/30">
-            <div className="flex items-center gap-2">
-              <h3 className="font-bold text-sm">Notificaciones</h3>
-              {unreadCount > 0 && (
-                <span className="bg-primary/10 text-primary text-[10px] font-bold px-2 py-0.5 rounded-full">
-                  {unreadCount} nueva{unreadCount !== 1 ? 's' : ''}
-                </span>
-              )}
-            </div>
-            <div className="flex items-center gap-1">
-              {notificaciones.length > 0 && (
-                <button
-                  onClick={clearAll}
-                  className="p-1.5 hover:bg-red-500/10 rounded-lg transition-colors text-muted-foreground hover:text-red-500"
-                  title="Limpiar todas las notificaciones"
-                >
-                  <Trash2 className="h-4 w-4" />
-                </button>
-              )}
-              <button onClick={() => setOpen(false)} className="p-1.5 hover:bg-muted rounded-lg transition-colors">
-                <X className="h-4 w-4 text-muted-foreground" />
-              </button>
-            </div>
-          </div>
-
-          {/* Content */}
-          <div className="overflow-y-auto max-h-[440px]">
-            {loading && notificaciones.length === 0 ? (
-              <div className="p-8 text-center text-muted-foreground text-sm">
-                <div className="h-6 w-6 border-2 border-primary border-t-transparent rounded-full animate-spin mx-auto mb-3" />
-                Cargando...
+      {/* Panel de avisos. Va directamente en el `body`: dentro del menú lateral, que se desplaza
+          con `transform`, el `fixed` quedaría encerrado en él y no cubriría la pantalla del móvil. */}
+      {open &&
+        createPortal(
+          <div
+            {...dialogProps}
+            style={{ '--panel-top': `${anchor.top}px`, '--panel-left': `${anchor.left}px` } as CSSProperties}
+            className="fixed inset-x-0 top-0 bottom-0 sm:inset-auto sm:top-[calc(var(--panel-top)_+_3.5rem)] sm:left-[var(--panel-left)] sm:w-[380px] sm:max-h-[520px] sm:rounded-2xl bg-card border border-border sm:shadow-[0_10px_40px_-10px_rgba(0,0,0,0.3)] z-[99999] overflow-hidden animate-in slide-in-from-top-2 fade-in duration-200 flex flex-col"
+          >
+            {/* Cabecera */}
+            <div className="flex items-center justify-between p-4 border-b border-border bg-gradient-to-r from-card to-muted/30">
+              <div className="flex items-center gap-2">
+                <h3 id={titleId} className="font-bold text-sm">
+                  Notificaciones
+                </h3>
+                {unread > 0 && (
+                  <span className="bg-primary/10 text-primary text-[10px] font-bold px-2 py-0.5 rounded-full">
+                    {unread} {plural(unread, 'nueva', 'nuevas')}
+                  </span>
+                )}
               </div>
-            ) : notificaciones.length === 0 ? (
-              <div className="p-10 text-center text-muted-foreground">
-                <Inbox className="h-10 w-10 mx-auto mb-3 opacity-20" />
-                <p className="text-sm font-medium">Sin notificaciones</p>
-                <p className="text-xs mt-1 opacity-70">Aquí aparecerán tus alertas y mensajes.</p>
-              </div>
-            ) : (
-              notificaciones.map((n) => {
-                const Icon = getIcon(n.tipo);
-                const colorClass = getColorClass(n.tipo);
-                return (
-                  <div
-                    key={n.id}
-                    onClick={() => handleNotifClick(n)}
-                    className={`px-4 py-3.5 border-b border-border/40 cursor-pointer hover:bg-muted/40 transition-all group/item ${
-                      !n.leida ? 'bg-primary/[0.03]' : ''
-                    }`}
+              <div className="flex items-center gap-1">
+                {notifications.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={clearAll}
+                    className="p-1.5 hover:bg-red-500/10 rounded-lg transition-colors text-muted-foreground hover:text-red-500"
+                    title="Limpiar todas las notificaciones"
+                    aria-label="Limpiar todas las notificaciones"
                   >
-                    <div className="flex items-start gap-3">
-                      <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${colorClass}`}>
-                        <Icon className="h-4 w-4" />
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2">
-                          {!n.leida && <div className="w-1.5 h-1.5 rounded-full bg-primary shrink-0 animate-pulse" />}
-                          <p className={`text-sm truncate ${!n.leida ? 'font-bold' : 'font-medium'}`}>{n.titulo}</p>
-                        </div>
-                        <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2 leading-relaxed">{n.mensaje}</p>
-                        <p className="text-[10px] text-muted-foreground/70 mt-1.5 font-medium">{timeAgo(n.created_at)}</p>
-                      </div>
-                      {n.url_accion && (
-                        <ChevronRight className="h-4 w-4 text-muted-foreground/30 group-hover/item:text-muted-foreground shrink-0 mt-1 transition-colors" />
-                      )}
-                    </div>
-                  </div>
-                );
-              })
-            )}
-          </div>
-        </div>
-      )}
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setOpen(false)}
+                  className="p-1.5 hover:bg-muted rounded-lg transition-colors"
+                  aria-label="Cerrar notificaciones"
+                >
+                  <X className="h-4 w-4 text-muted-foreground" />
+                </button>
+              </div>
+            </div>
+
+            {/* Contenido */}
+            <div className="overflow-y-auto max-h-[440px]">
+              {loading && notifications.length === 0 ? (
+                <div className="p-8 text-center text-muted-foreground text-sm">
+                  <div className="h-6 w-6 border-2 border-primary border-t-transparent rounded-full animate-spin mx-auto mb-3" />
+                  Cargando...
+                </div>
+              ) : notifications.length === 0 ? (
+                <div className="p-10 text-center text-muted-foreground">
+                  <Inbox className="h-10 w-10 mx-auto mb-3 opacity-20" />
+                  <p className="text-sm font-medium">Sin notificaciones</p>
+                  <p className="text-xs mt-1 opacity-70">Aquí aparecerán tus alertas y mensajes.</p>
+                </div>
+              ) : (
+                notifications.map((notification) => (
+                  <NotificationItem
+                    key={notification.id}
+                    notification={notification}
+                    onOpen={() => openNotification(notification)}
+                  />
+                ))
+              )}
+            </div>
+          </div>,
+          document.body,
+        )}
     </div>
+  );
+}
+
+function NotificationItem({ notification, onOpen }: { notification: Notification; onOpen: () => void }) {
+  const Icon = ICON_BY_TYPE[notification.type] ?? Bell;
+  const colorClass = COLOR_BY_TYPE[notification.type] ?? 'text-muted-foreground bg-muted';
+
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      disabled={!notification.actionUrl}
+      className={`block w-full text-left px-4 py-3.5 border-b border-border/40 cursor-pointer hover:bg-muted/40 transition-all group/item disabled:cursor-default ${
+        !notification.read ? 'bg-primary/[0.03]' : ''
+      }`}
+    >
+      <div className="flex items-start gap-3">
+        <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${colorClass}`}>
+          <Icon className="h-4 w-4" />
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2">
+            {!notification.read && <div className="w-1.5 h-1.5 rounded-full bg-primary shrink-0 animate-pulse" />}
+            <p className={`text-sm truncate ${!notification.read ? 'font-bold' : 'font-medium'}`}>
+              {notification.title}
+            </p>
+          </div>
+          <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2 leading-relaxed">{notification.message}</p>
+          <p className="text-[10px] text-muted-foreground/70 mt-1.5 font-medium">{timeAgo(notification.createdAt)}</p>
+        </div>
+        {notification.actionUrl && (
+          <ChevronRight className="h-4 w-4 text-muted-foreground/30 group-hover/item:text-muted-foreground shrink-0 mt-1 transition-colors" />
+        )}
+      </div>
+    </button>
   );
 }

@@ -2,21 +2,66 @@ import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as nodemailer from 'nodemailer';
 import { PrismaService } from '../prisma/prisma.service';
-import { ConfiguracionService } from '../configuracion/configuracion.service';
+import { SettingsService } from '../settings/settings.service';
 import { StorageService } from '../storage/storage.service';
-import { PAIS_POR_DEFECTO, Pais } from '../common/domain/pais';
-import { formatearNota, formatearPuntos } from '../common/domain/calificacion';
-import { RolUsuario } from '../common/interfaces/jwt-payload.interface';
+import { Country, countryName } from '../common/domain/country';
+import { formatScore, formatPoints } from '../common/domain/grading';
+import { UserRole } from '../common/interfaces/jwt-payload.interface';
 import { UpdateTemplateDto } from './dto/update-template.dto';
 
 /** Reintentos ante un fallo puntual del proveedor de correo. */
-const MAX_REINTENTOS = 3;
+const MAX_RETRIES = 3;
+
+/** Espera máxima por respuesta del proveedor antes de dar el intento por perdido. */
+const TIMEOUT_MS = 15_000;
+
+/**
+ * Correos en curso a la vez en un envío en bloque (avisar a todos los matriculados de un
+ * curso, a todos los administradores de una sede). Sin tope, cientos de peticiones
+ * simultáneas acaban rechazadas por el proveedor.
+ */
+export const MAIL_CONCURRENCY = 5;
+
+/**
+ * Cuánto se reutiliza una plantilla leída de la base. En un envío en bloque todos los
+ * correos usan la misma; editarla desde el panel la invalida en el acto.
+ */
+const TEMPLATE_CACHE_MS = 30_000;
+
+/** Lo que hace falta de una plantilla para componer el correo. */
+interface ActiveTemplate {
+  subject: string;
+  bodyHtml: string;
+}
+
+/**
+ * Variables que la plantilla recibe ya como HTML.
+ *
+ * Son fragmentos que compone este mismo servicio —un párrafo con color según la nota, un
+ * recuadro con el comentario— y por eso se insertan tal cual. Todo lo demás se escapa.
+ * Cualquier texto de una persona que entre en uno de estos fragmentos tiene que escaparse
+ * **aquí**, al componerlo: es la única excepción y conviene que se vea.
+ */
+const MARKUP_VARIABLES = new Set(['mensaje_aprobacion', 'comentario', 'motivo']);
+
+/** Caracteres que cambian el significado del HTML si llegan sin escapar. */
+const ESCAPES: Record<string, string> = {
+  '&': '&amp;',
+  '<': '&lt;',
+  '>': '&gt;',
+  '"': '&quot;',
+  "'": '&#39;',
+};
+
+function escapeHtml(value: string | number): string {
+  return String(value).replace(/[&<>"']/g, (char) => ESCAPES[char]);
+}
 
 /** Nombre visible de cada rol en los correos, en el vocabulario del negocio. */
-const ETIQUETA_ROL: Record<RolUsuario, string> = {
-  ESTUDIANTE: 'Capacitante',
-  PROFESOR: 'Examinador',
-  ADMINISTRADOR: 'Administrador',
+const ROLE_LABELS: Record<UserRole, string> = {
+  STUDENT: 'Estudiante',
+  TEACHER: 'Examinador',
+  ADMIN: 'Administrador',
 };
 
 /**
@@ -37,52 +82,55 @@ const ETIQUETA_ROL: Record<RolUsuario, string> = {
 @Injectable()
 export class MailService implements OnModuleInit {
   private readonly logger = new Logger(MailService.name);
-  private transporte: nodemailer.Transporter | null = null;
-  private claveBrevo: string | null = null;
-  private activo = false;
+  private transport: nodemailer.Transporter | null = null;
+  private brevoApiKey: string | null = null;
 
-  private readonly remitente: string;
-  private readonly nombreRemitente: string;
-  private readonly urlApp: string;
-  private readonly urlApi: string;
+  /**
+   * Plantilla activa de cada evento, o `null` si no tiene. Se guarda la promesa, no el
+   * valor: los correos de un envío en bloque que llegan a la vez comparten una sola lectura.
+   */
+  private readonly templates = new Map<string, { value: Promise<ActiveTemplate | null>; expiresAt: number }>();
+
+  private readonly sender: string;
+  private readonly senderName: string;
+  private readonly appUrl: string;
+  private readonly apiUrl: string;
 
   constructor(
     private readonly config: ConfigService,
     private readonly prisma: PrismaService,
-    private readonly configuracion: ConfiguracionService,
+    private readonly settings: SettingsService,
     private readonly storage: StorageService,
   ) {
-    this.remitente = this.config.get<string>('SMTP_FROM') ?? 'noreply@lms.local';
-    this.nombreRemitente = this.config.get<string>('SMTP_FROM_NAME') ?? 'Campus Virtual';
-    this.urlApp = (this.config.get<string>('APP_URL') ?? 'http://localhost:3100').replace(/\/+$/, '');
+    this.sender = this.config.get<string>('SMTP_FROM') ?? 'noreply@lms.local';
+    this.senderName = this.config.get<string>('SMTP_FROM_NAME') ?? 'Campus Virtual';
+    this.appUrl = (this.config.get<string>('APP_URL') ?? 'http://localhost:3100').replace(/\/+$/, '');
     // Los correos necesitan URLs absolutas: una clave de almacenamiento relativa se ve
     // como una imagen rota en el cliente de correo.
-    this.urlApi = (this.config.get<string>('API_PUBLIC_URL') ?? 'http://localhost:3200').replace(/\/+$/, '');
+    this.apiUrl = (this.config.get<string>('API_PUBLIC_URL') ?? 'http://localhost:3200').replace(/\/+$/, '');
   }
 
   async onModuleInit(): Promise<void> {
-    const claveBrevo = this.config.get<string>('BREVO_API_KEY');
-    if (claveBrevo) {
-      this.claveBrevo = claveBrevo;
-      this.activo = true;
+    const brevoApiKey = this.config.get<string>('BREVO_API_KEY');
+    if (brevoApiKey) {
+      this.brevoApiKey = brevoApiKey;
       this.logger.log('Correo activo mediante la API HTTP de Brevo');
       return;
     }
 
     const host = this.config.get<string>('SMTP_HOST');
-    const usuario = this.config.get<string>('SMTP_USER');
-    const clave = this.config.get<string>('SMTP_PASS');
-    const puerto = Number(this.config.get<string>('SMTP_PORT') ?? 587);
+    const user = this.config.get<string>('SMTP_USER');
+    const password = this.config.get<string>('SMTP_PASS');
+    const port = Number(this.config.get<string>('SMTP_PORT') ?? 587);
 
-    if (host && usuario && clave) {
-      this.transporte = nodemailer.createTransport({
+    if (host && user && password) {
+      this.transport = nodemailer.createTransport({
         host,
-        port: puerto,
-        secure: puerto === 465,
-        auth: { user: usuario, pass: clave },
+        port,
+        secure: port === 465,
+        auth: { user, pass: password },
       });
-      this.activo = true;
-      this.logger.log(`Correo activo mediante SMTP en ${host}:${puerto}`);
+      this.logger.log(`Correo activo mediante SMTP en ${host}:${port}`);
       return;
     }
 
@@ -98,77 +146,100 @@ export class MailService implements OnModuleInit {
    * Envía un correo con reintentos y espera creciente.
    * Nunca lanza: un fallo de correo no debe deshacer la operación que lo originó.
    */
-  async sendMail(destinatario: string, asunto: string, html: string): Promise<boolean> {
-    if (!this.activo) {
-      this.logger.debug(`Correo no enviado (servicio desactivado) → ${destinatario}: ${asunto}`);
+  private async deliverToProvider(recipient: string, subject: string, html: string): Promise<boolean> {
+    if (!this.brevoApiKey && !this.transport) {
+      this.logger.debug(`Correo no enviado (servicio desactivado) → ${recipient}: ${subject}`);
       return false;
     }
 
-    for (let intento = 1; intento <= MAX_REINTENTOS; intento++) {
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
       try {
-        if (this.claveBrevo) {
-          await this.enviarPorBrevo(destinatario, asunto, html);
-        } else if (this.transporte) {
-          await this.transporte.sendMail({
-            from: `"${this.nombreRemitente}" <${this.remitente}>`,
-            to: destinatario,
-            subject: asunto,
+        if (this.brevoApiKey) {
+          await this.sendViaBrevo(this.brevoApiKey, recipient, subject, html);
+        } else if (this.transport) {
+          await this.transport.sendMail({
+            from: `"${this.senderName}" <${this.sender}>`,
+            to: recipient,
+            subject,
             html,
           });
         }
-        this.logger.log(`Correo enviado a ${destinatario}: ${asunto}`);
+        this.logger.log(`Correo enviado a ${recipient}: ${subject}`);
         return true;
       } catch (error) {
-        const ultimo = intento === MAX_REINTENTOS;
-        if (ultimo) {
-          this.logger.error(
-            `Correo a ${destinatario} fallido tras ${MAX_REINTENTOS} intentos: ${(error as Error)?.message}`,
-          );
+        const last = attempt === MAX_RETRIES;
+        if (last) {
+          this.logger.error(`Correo a ${recipient} fallido tras ${MAX_RETRIES} intentos: ${(error as Error)?.message}`);
           return false;
         }
-        await this.esperar(2 ** (intento - 1) * 1000);
+        await this.wait(2 ** (attempt - 1) * 1000);
       }
     }
     return false;
   }
 
-  private async enviarPorBrevo(destinatario: string, asunto: string, html: string): Promise<void> {
-    const respuesta = await fetch('https://api.brevo.com/v3/smtp/email', {
+  private async sendViaBrevo(apiKey: string, recipient: string, subject: string, html: string): Promise<void> {
+    const response = await fetch('https://api.brevo.com/v3/smtp/email', {
       method: 'POST',
+      // Sin límite, un proveedor que no responde deja la petición colgada para siempre y
+      // los reintentos nunca llegan a producirse.
+      signal: AbortSignal.timeout(TIMEOUT_MS),
       headers: {
-        'api-key': this.claveBrevo!,
+        'api-key': apiKey,
         'Content-Type': 'application/json',
         Accept: 'application/json',
       },
       body: JSON.stringify({
-        sender: { name: this.nombreRemitente, email: this.remitente },
-        to: [{ email: destinatario }],
-        subject: asunto,
+        sender: { name: this.senderName, email: this.sender },
+        to: [{ email: recipient }],
+        subject,
         htmlContent: html,
       }),
     });
 
-    if (!respuesta.ok) {
-      throw new Error(`Brevo respondió ${respuesta.status}: ${await respuesta.text()}`);
+    if (!response.ok) {
+      throw new Error(`Brevo respondió ${response.status}: ${await response.text()}`);
     }
   }
 
-  private esperar(ms: number): Promise<void> {
+  private wait(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
   // ── Plantillas ───────────────────────────────────────────────────────────
 
   /** Plantillas editables desde el panel de administración. */
-  getEventos() {
-    return this.prisma.lms_eventos_correo.findMany({
-      include: { plantillas: true },
-      orderBy: { identificador: 'asc' },
+  getEvents() {
+    return this.prisma.emailEvent.findMany({
+      include: { templates: true },
+      orderBy: { key: 'asc' },
     });
   }
 
-  actualizarPlantilla(id: number, dto: UpdateTemplateDto) {
-    return this.prisma.lms_plantillas_correo.update({ where: { id }, data: dto });
+  async updateTemplate(id: number, dto: UpdateTemplateDto) {
+    const updated = await this.prisma.emailTemplate.update({ where: { id }, data: dto });
+    // Activar o desactivar una puede cambiar cuál usa su evento: se vacía todo.
+    this.templates.clear();
+    return updated;
+  }
+
+  /** Plantilla activa del evento, reutilizada durante `TEMPLATE_CACHE_MS`. */
+  private activeTemplate(key: string): Promise<ActiveTemplate | null> {
+    const cached = this.templates.get(key);
+    if (cached && Date.now() < cached.expiresAt) return cached.value;
+
+    const value = this.prisma.emailEvent
+      .findUnique({
+        where: { key },
+        select: { templates: { where: { active: true }, take: 1, select: { subject: true, bodyHtml: true } } },
+      })
+      .then((event) => event?.templates[0] ?? null);
+    this.templates.set(key, { value, expiresAt: Date.now() + TEMPLATE_CACHE_MS });
+    // Un fallo de la base no se queda guardado: el siguiente correo vuelve a intentarlo.
+    value.catch(() => {
+      if (this.templates.get(key)?.value === value) this.templates.delete(key);
+    });
+    return value;
   }
 
   /**
@@ -176,42 +247,44 @@ export class MailService implements OnModuleInit {
    * Devuelve `null` si el evento no existe o no tiene ninguna plantilla activa, y quien
    * llama decide si eso es un fallo o simplemente un aviso que no se envía.
    */
-  private async renderizar(
-    identificador: string,
+  private async render(
+    key: string,
     variables: Record<string, string | number>,
-    pais: Pais,
-  ): Promise<{ asunto: string; html: string } | null> {
-    const evento = await this.prisma.lms_eventos_correo.findUnique({
-      where: { identificador },
-      include: { plantillas: { where: { activo: true }, take: 1 } },
-    });
-
-    const plantilla = evento?.plantillas[0];
-    if (!plantilla) {
-      this.logger.warn(`No hay plantilla activa para el evento de correo "${identificador}"`);
+    country: Country,
+  ): Promise<{ subject: string; html: string } | null> {
+    const template = await this.activeTemplate(key);
+    if (!template) {
+      this.logger.warn(`No hay plantilla activa para el evento de correo "${key}"`);
       return null;
     }
 
-    let html = plantilla.cuerpo_html;
-    let asunto = plantilla.asunto;
-    for (const [clave, valor] of Object.entries(variables)) {
-      const marcador = new RegExp(`{{\\s*${clave}\\s*}}`, 'g');
-      html = html.replace(marcador, String(valor));
-      asunto = asunto.replace(marcador, String(valor));
+    let html = template.bodyHtml;
+    let subject = template.subject;
+    for (const [name, value] of Object.entries(variables)) {
+      const placeholder = new RegExp(`{{\\s*${name}\\s*}}`, 'g');
+      // El valor se escapa salvo que sea uno de los fragmentos que compone el servicio:
+      // buena parte viene de texto que escribe una persona —el comentario de una
+      // calificación, el título de un curso, un nombre con `&`— y sin escapar rompería la
+      // maquetación del correo o metería etiquetas ajenas en él.
+      const content = MARKUP_VARIABLES.has(name) ? String(value) : escapeHtml(value);
+      // Con una función, `replace` no interpreta los `$&`, `$'`… que pueda traer el valor
+      // —un título con «$'» metería en su sitio el resto de la plantilla—.
+      html = html.replace(placeholder, () => content);
+      subject = subject.replace(placeholder, () => String(value));
     }
 
-    return { asunto, html: await this.envolver(html, pais) };
+    return { subject, html: await this.wrap(html, country) };
   }
 
   /** Aplica la cabecera, el pie y los colores de la sede al cuerpo del correo. */
-  private async envolver(contenido: string, pais: Pais): Promise<string> {
-    const config = await this.configuracion.getConfig(pais);
-    const titulo = config.nombre_plataforma;
-    const color = config.color_primario;
+  private async wrap(content: string, country: Country): Promise<string> {
+    const config = await this.settings.getSettings(country);
+    const title = escapeHtml(config.platformName);
+    const color = config.primaryColor;
 
-    const logo = config.logo_url
-      ? `<img src="${this.urlApi}${this.storage.urlDeDescarga(config.logo_url)}" alt="${titulo}" style="max-height:40px;vertical-align:middle" />`
-      : `<h1 style="color:#ffffff;font-size:18px;margin:0;font-weight:700">${titulo}</h1>`;
+    const logo = config.logoUrl
+      ? `<img src="${this.apiUrl}${this.storage.downloadUrl(config.logoUrl)}" alt="${title}" style="max-height:40px;vertical-align:middle" />`
+      : `<h1 style="color:#ffffff;font-size:18px;margin:0;font-weight:700">${title}</h1>`;
 
     return `<!DOCTYPE html>
 <html lang="es">
@@ -219,235 +292,249 @@ export class MailService implements OnModuleInit {
 <body style="margin:0;padding:0;font-family:'Segoe UI',Roboto,Helvetica,Arial,sans-serif;background:#f8fafc">
   <div style="max-width:560px;margin:40px auto;background:#ffffff;border-radius:16px;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,0.06)">
     <div style="background:${color};padding:28px 32px">${logo}</div>
-    <div style="padding:32px">${contenido}</div>
+    <div style="padding:32px">${content}</div>
     <div style="padding:20px 32px;background:#f8fafc;border-top:1px solid #e2e8f0;text-align:center">
-      <p style="color:#94a3b8;font-size:12px;margin:0">Correo automático de ${titulo}. No respondas a este mensaje.</p>
+      <p style="color:#94a3b8;font-size:12px;margin:0">Correo automático de ${title}. No respondas a este mensaje.</p>
     </div>
   </div>
 </body>
 </html>`;
   }
 
-  private async enviarPlantilla(
-    identificador: string,
-    destinatario: string,
+  private async sendTemplate(
+    key: string,
+    recipient: string,
     variables: Record<string, string | number>,
-    pais: Pais,
+    country: Country,
   ): Promise<boolean> {
-    const plantilla = await this.renderizar(identificador, variables, pais);
-    if (!plantilla) return false;
-    return this.sendMail(destinatario, plantilla.asunto, plantilla.html);
+    const template = await this.render(key, variables, country);
+    if (!template) return false;
+    return this.deliverToProvider(recipient, template.subject, template.html);
   }
 
   // ── Correos del sistema ──────────────────────────────────────────────────
 
-  sendPasswordResetEmail(email: string, token: string, nombre: string, pais: Pais) {
-    return this.enviarPlantilla(
+  sendPasswordReset(email: string, token: string, name: string, country: Country) {
+    return this.sendTemplate(
       'RECUPERAR_PASSWORD',
       email,
-      { nombre, resetUrl: `${this.urlApp}/restablecer-contrasena?token=${token}` },
-      pais,
+      { nombre: name, resetUrl: `${this.appUrl}/reset-password?token=${token}` },
+      country,
     );
   }
 
-  sendNewAccessRequest(
+  sendAccessRequest(
     adminEmail: string,
-    adminNombre: string,
-    solicitante: { nombre: string; apellido: string; email: string; rol_pedido: RolUsuario; pais: Pais },
+    adminName: string,
+    requester: { firstName: string; lastName: string; email: string; requestedRole: UserRole; country: Country },
   ) {
-    return this.enviarPlantilla(
+    return this.sendTemplate(
       'NUEVA_SOLICITUD_ACCESO',
       adminEmail,
       {
-        adminNombre,
-        solicitanteNombre: `${solicitante.nombre} ${solicitante.apellido}`,
-        solicitanteEmail: solicitante.email,
-        solicitanteRol: ETIQUETA_ROL[solicitante.rol_pedido],
-        url_solicitudes: `${this.urlApp}/dashboard/admin/solicitudes`,
+        adminNombre: adminName,
+        solicitanteNombre: `${requester.firstName} ${requester.lastName}`,
+        solicitanteEmail: requester.email,
+        solicitanteRol: ROLE_LABELS[requester.requestedRole],
+        url_solicitudes: `${this.appUrl}/dashboard/admin/access-requests`,
       },
-      solicitante.pais,
+      requester.country,
     );
   }
 
-  async sendWelcomeEmail(email: string, nombre: string, claveTemporal: string, pais: Pais) {
-    const enviado = await this.enviarPlantilla(
+  /**
+   * Bienvenida con la contraseña temporal, tanto al aprobar una solicitud como al dar de
+   * alta una cuenta desde el panel. El enlace abre el acceso con la sede ya elegida: la
+   * cuenta sólo puede entrar por la suya.
+   */
+  async sendWelcome(email: string, name: string, temporaryPassword: string, country: Country) {
+    const loginUrl = `${this.appUrl}/login?sede=${country}`;
+    const site = countryName(country);
+    const sent = await this.sendTemplate(
       'USUARIO_APROBADO',
       email,
-      { nombre, email, tempPassword: claveTemporal, url_campus: this.urlApp },
-      pais,
+      { nombre: name, email, tempPassword: temporaryPassword, sede: site, url_campus: loginUrl },
+      country,
     );
-    if (enviado) return true;
+    if (sent) return true;
 
     // Sin plantilla configurada la cuenta quedaría creada y el usuario sin conocer su
     // clave temporal, así que este correo tiene respaldo propio.
-    const html = await this.envolver(
-      `<h2 style="color:#1e293b;margin:0 0 16px">¡Hola ${nombre}!</h2>
-       <p style="color:#64748b;font-size:15px;line-height:1.6">Tu solicitud de acceso ha sido <strong style="color:#10b981">aprobada</strong>.</p>
+    const html = await this.wrap(
+      `<h2 style="color:#1e293b;margin:0 0 16px">¡Hola ${escapeHtml(name)}!</h2>
+       <p style="color:#64748b;font-size:15px;line-height:1.6">Tu cuenta en el campus de <strong>${escapeHtml(site)}</strong> está lista.</p>
        <div style="background:#f0f9ff;border:1px solid #bae6fd;border-radius:12px;padding:20px;margin:20px 0">
-         <p style="margin:4px 0"><strong>Correo:</strong> ${email}</p>
-         <p style="margin:4px 0"><strong>Contraseña temporal:</strong> <code style="background:#e2e8f0;padding:2px 8px;border-radius:4px">${claveTemporal}</code></p>
+         <p style="margin:4px 0"><strong>Sede:</strong> ${escapeHtml(site)}</p>
+         <p style="margin:4px 0"><strong>Correo:</strong> ${escapeHtml(email)}</p>
+         <p style="margin:4px 0"><strong>Contraseña temporal:</strong> <code style="background:#e2e8f0;padding:2px 8px;border-radius:4px">${escapeHtml(temporaryPassword)}</code></p>
        </div>
        <p style="color:#ef4444;font-weight:600">Deberás crear tu propia contraseña la primera vez que entres.</p>
        <div style="text-align:center;margin:32px 0">
-         <a href="${this.urlApp}/login" style="display:inline-block;background:#4f46e5;color:#fff;font-weight:700;padding:14px 36px;border-radius:12px;text-decoration:none;font-size:15px">Entrar al campus</a>
+         <a href="${loginUrl}" style="display:inline-block;background:#4f46e5;color:#fff;font-weight:700;padding:14px 36px;border-radius:12px;text-decoration:none;font-size:15px">Entrar al campus</a>
        </div>`,
-      pais,
+      country,
     );
-    return this.sendMail(email, 'Tu acceso al campus virtual está listo', html);
+    return this.deliverToProvider(email, 'Tu acceso al campus virtual está listo', html);
+  }
+
+  /** Aviso a quien pidió acceso de que su solicitud no se aprobó, con el motivo si lo hay. */
+  sendAccessRequestRejected(email: string, name: string, reason: string | null, country: Country) {
+    // El motivo lo escribe el administrador: se escapa antes de entrar en el marcado.
+    const reasonBlock = reason
+      ? `<div style="background:#f1f5f9;border-radius:12px;padding:16px;margin:16px 0"><p style="color:#64748b;font-size:13px;margin:0"><strong>Motivo:</strong> ${escapeHtml(reason)}</p></div>`
+      : '';
+    return this.sendTemplate(
+      'SOLICITUD_RECHAZADA',
+      email,
+      { nombre: name, sede: countryName(country), motivo: reasonBlock },
+      country,
+    );
   }
 
   /** Aviso de calificación. La nota se formatea siempre con la escala del sistema. */
-  sendGradeNotification(
-    email: string,
-    nombre: string,
-    tarea: string,
-    calificacion: number,
-    notaAprobacion: number,
-    pais: Pais,
-  ) {
-    const aprobada = calificacion >= notaAprobacion;
-    return this.enviarPlantilla(
+  sendGrade(email: string, name: string, assignment: string, score: number, passingScore: number, country: Country) {
+    const passed = score >= passingScore;
+    return this.sendTemplate(
       'CALIFICACION_RECIBIDA',
       email,
       {
-        nombre,
-        tarea,
-        calificacion: formatearNota(calificacion),
-        emoji: aprobada ? '🎉' : '⚠️',
-        mensaje_aprobacion: aprobada
+        nombre: name,
+        tarea: assignment,
+        calificacion: formatScore(score),
+        emoji: passed ? '🎉' : '⚠️',
+        mensaje_aprobacion: passed
           ? '<p style="color:#10b981;font-size:14px;font-weight:600">¡Buen trabajo! Sigue así.</p>'
-          : `<p style="color:#ef4444;font-size:14px;font-weight:600">Necesitas al menos ${formatearPuntos(notaAprobacion)} puntos. Puedes subir una nueva versión de tu entrega.</p>`,
-        url_campus: `${this.urlApp}/dashboard`,
+          : `<p style="color:#ef4444;font-size:14px;font-weight:600">Necesitas al menos ${formatPoints(passingScore)} puntos. Puedes subir una nueva versión de tu entrega.</p>`,
+        url_campus: `${this.appUrl}/dashboard`,
       },
-      pais,
+      country,
     );
   }
 
   sendSubmissionRejected(
     email: string,
-    nombre: string,
-    tarea: string,
-    calificacion: number,
-    pais: Pais,
-    comentario?: string | null,
+    name: string,
+    assignment: string,
+    score: number,
+    country: Country,
+    feedback?: string | null,
   ) {
-    const bloqueComentario = comentario
-      ? `<div style="background:#f1f5f9;border-radius:12px;padding:16px;margin:16px 0"><p style="color:#64748b;font-size:13px;margin:0"><strong>Comentario del examinador:</strong> ${comentario}</p></div>`
+    // El comentario lo escribe una persona: se escapa antes de entrar en el marcado.
+    const feedbackBlock = feedback
+      ? `<div style="background:#f1f5f9;border-radius:12px;padding:16px;margin:16px 0"><p style="color:#64748b;font-size:13px;margin:0"><strong>Comentario del examinador:</strong> ${escapeHtml(feedback)}</p></div>`
       : '';
-    return this.enviarPlantilla(
+    return this.sendTemplate(
       'ENTREGA_RECHAZADA',
       email,
       {
-        nombre,
-        tarea,
-        calificacion: formatearNota(calificacion),
-        comentario: bloqueComentario,
-        url_campus: `${this.urlApp}/dashboard`,
+        nombre: name,
+        tarea: assignment,
+        calificacion: formatScore(score),
+        comentario: feedbackBlock,
+        url_campus: `${this.appUrl}/dashboard`,
       },
-      pais,
+      country,
     );
   }
 
-  sendNewSubmissionNotification(
-    examinadorEmail: string,
-    examinadorNombre: string,
-    estudiante: string,
-    tarea: string,
-    curso: string,
-    pais: Pais,
+  sendNewSubmission(
+    examinerEmail: string,
+    examinerName: string,
+    student: string,
+    assignment: string,
+    course: string,
+    country: Country,
   ) {
-    return this.enviarPlantilla(
+    return this.sendTemplate(
       'NUEVA_ENTREGA',
-      examinadorEmail,
+      examinerEmail,
       {
-        examinerNombre: examinadorNombre,
-        estudiante,
-        tarea,
-        curso,
-        url_calificaciones: `${this.urlApp}/dashboard/examiner/calificaciones`,
+        examinerNombre: examinerName,
+        estudiante: student,
+        tarea: assignment,
+        curso: course,
+        url_calificaciones: `${this.appUrl}/dashboard/examiner/grading`,
       },
-      pais,
+      country,
     );
   }
 
-  sendQuizFailedModuleReset(
-    email: string,
-    nombre: string,
-    quizTitulo: string,
-    moduloTitulo: string,
-    nota: number,
-    pais: Pais,
-  ) {
-    return this.enviarPlantilla(
+  sendQuizFailed(email: string, name: string, quizTitle: string, moduleTitle: string, score: number, country: Country) {
+    return this.sendTemplate(
       'MODULO_REINICIADO',
       email,
-      { nombre, quizTitulo, moduloTitulo, nota: formatearNota(nota), url_campus: `${this.urlApp}/dashboard` },
-      pais,
+      {
+        nombre: name,
+        quizTitulo: quizTitle,
+        moduloTitulo: moduleTitle,
+        nota: formatScore(score),
+        url_campus: `${this.appUrl}/dashboard`,
+      },
+      country,
     );
   }
 
-  sendCourseMaintenanceNotification(email: string, nombre: string, cursoTitulo: string, pais: Pais) {
-    return this.enviarPlantilla(
+  sendCourseUnderMaintenance(email: string, name: string, courseTitle: string, country: Country) {
+    return this.sendTemplate(
       'CURSO_MANTENIMIENTO',
       email,
-      { nombre, cursoTitulo, url_campus: `${this.urlApp}/dashboard` },
-      pais,
+      { nombre: name, cursoTitulo: courseTitle, url_campus: `${this.appUrl}/dashboard` },
+      country,
     );
   }
 
-  sendCourseReactivated(email: string, nombre: string, cursoTitulo: string, pais: Pais) {
-    return this.enviarPlantilla(
+  sendCourseReactivated(email: string, name: string, courseTitle: string, country: Country) {
+    return this.sendTemplate(
       'CURSO_REACTIVADO',
       email,
-      { nombre, cursoTitulo, url_campus: `${this.urlApp}/dashboard` },
-      pais,
+      { nombre: name, cursoTitulo: courseTitle, url_campus: `${this.appUrl}/dashboard` },
+      country,
     );
   }
 
-  sendEnrollmentNotification(email: string, nombre: string, cursoTitulo: string, cursoGuid: string, pais: Pais) {
-    return this.enviarPlantilla(
+  sendEnrollment(email: string, name: string, courseTitle: string, courseGuid: string, country: Country) {
+    return this.sendTemplate(
       'MATRICULA_NUEVA',
       email,
-      { nombre, cursoTitulo, url_curso: `${this.urlApp}/cursos/${cursoGuid}` },
-      pais,
+      { nombre: name, cursoTitulo: courseTitle, url_curso: `${this.appUrl}/courses/${courseGuid}` },
+      country,
     );
   }
 
-  sendCertificateGenerated(email: string, nombre: string, cursoTitulo: string, codigo: string, pais: Pais) {
-    return this.enviarPlantilla(
+  sendCertificateIssued(email: string, name: string, courseTitle: string, code: string, country: Country) {
+    return this.sendTemplate(
       'CERTIFICADO_GENERADO',
       email,
-      { nombre, cursoTitulo, codigo, url_certificado: `${this.urlApp}/dashboard/student/certificados` },
-      pais,
+      {
+        nombre: name,
+        cursoTitulo: courseTitle,
+        codigo: code,
+        url_certificado: `${this.appUrl}/dashboard/student/certificates`,
+      },
+      country,
     );
   }
 
-  sendCourseCompletedNotification(
-    email: string,
-    examinadorNombre: string,
-    estudiante: string,
-    cursoTitulo: string,
-    pais: Pais,
-  ) {
-    return this.enviarPlantilla(
+  sendCourseCompleted(email: string, examinerName: string, student: string, courseTitle: string, country: Country) {
+    return this.sendTemplate(
       'CURSO_COMPLETADO',
       email,
       {
-        examinerNombre: examinadorNombre,
-        estudiante,
-        cursoTitulo,
-        url_monitoreo: `${this.urlApp}/dashboard/examiner/monitoreo`,
+        examinerNombre: examinerName,
+        estudiante: student,
+        cursoTitulo: courseTitle,
+        url_monitoreo: `${this.appUrl}/dashboard/examiner/monitoring`,
       },
-      pais,
+      country,
     );
   }
 
-  sendInactivityReminder(email: string, nombre: string, diasInactivo: number, pais: Pais) {
-    return this.enviarPlantilla(
+  sendInactivityReminder(email: string, name: string, inactiveDays: number, country: Country) {
+    return this.sendTemplate(
       'RECORDATORIO_INACTIVIDAD',
       email,
-      { nombre, diasInactivo, url_campus: `${this.urlApp}/dashboard` },
-      pais,
+      { nombre: name, diasInactivo: inactiveDays, url_campus: `${this.appUrl}/dashboard` },
+      country,
     );
   }
 
@@ -456,20 +543,20 @@ export class MailService implements OnModuleInit {
    * Se envía antes de que exista cuenta, así que no hay sede de la que tomar la marca: se
    * usa la de la sede indicada o, en su defecto, la principal.
    */
-  async sendEmailVerificationCode(email: string, codigo: string, pais: Pais = PAIS_POR_DEFECTO): Promise<boolean> {
-    const html = await this.envolver(
+  async sendVerificationCode(email: string, code: string, country: Country): Promise<boolean> {
+    const html = await this.wrap(
       `<h2 style="color:#1e293b;font-size:20px;margin:0 0 12px">Verificación de correo electrónico</h2>
        <p style="color:#475569;font-size:14px;line-height:1.6;margin:0 0 20px">
          Escribe este código en la página de solicitud de acceso para confirmar que este correo es tuyo:
        </p>
        <div style="background:#f1f5f9;border-radius:12px;padding:24px;text-align:center;margin:0 0 20px">
-         <span style="font-size:36px;font-weight:800;letter-spacing:8px;color:#1e293b;font-family:monospace">${codigo}</span>
+         <span style="font-size:36px;font-weight:800;letter-spacing:8px;color:#1e293b;font-family:monospace">${code}</span>
        </div>
        <p style="color:#94a3b8;font-size:12px;margin:0">
          El código caduca en <strong>10 minutos</strong>. Si no has solicitado acceso, puedes ignorar este correo.
        </p>`,
-      pais,
+      country,
     );
-    return this.sendMail(email, 'Tu código de verificación', html);
+    return this.deliverToProvider(email, 'Tu código de verificación', html);
   }
 }

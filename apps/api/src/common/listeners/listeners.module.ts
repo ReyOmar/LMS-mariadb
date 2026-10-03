@@ -1,6 +1,6 @@
 import { Module } from '@nestjs/common';
-import { LmsEventListener } from './lms-event.listener';
-import { CertificadosModule } from '../../certificados/certificados.module';
+import { EventsListener } from './events.listener';
+import { CertificatesModule } from '../../certificates/certificates.module';
 
 /**
  * Manejadores de los eventos de dominio.
@@ -8,7 +8,7 @@ import { CertificadosModule } from '../../certificados/certificados.module';
  * sitio en lugar de arrastrarla hasta el módulo raíz.
  */
 @Module({
-  imports: [CertificadosModule],
-  providers: [LmsEventListener],
+  imports: [CertificatesModule],
+  providers: [EventsListener],
 })
 export class ListenersModule {}

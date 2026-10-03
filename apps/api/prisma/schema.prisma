@@ -7,10 +7,10 @@
 //     Las tablas raíz (`usuarios`, `lms_cursos`, `lms_configuracion`,
 //     `lms_solicitudes_acceso`) llevan columna `pais`; el resto lo hereda por
 //     relación. Una matrícula sólo es válida si alumno y curso comparten país,
-//     invariante que se verifica en `MatriculasService`.
+//     invariante que se verifica en `EnrollmentsService`.
 //
 //  2. CALIFICACIÓN SOBRE 100. Toda nota vive en el rango 0–100 y el umbral de
-//     aprobación por defecto es 80. Ver `src/common/domain/calificacion.ts`.
+//     aprobación por defecto es 80. Ver `src/common/domain/grading.ts`.
 // ═══════════════════════════════════════════════════════════════════════════
 
 generator client {
@@ -23,443 +23,549 @@ datasource db {
 
 // ── Separación por país ────────────────────────────────────────────────────
 
-enum lms_pais {
+enum Country {
   COLOMBIA
   MEXICO
 }
 
 // ── Autenticación ──────────────────────────────────────────────────────────
 
-enum lms_rol_usuario {
-  ADMINISTRADOR
-  PROFESOR
-  ESTUDIANTE
+enum Role {
+  ADMIN   @map("ADMINISTRADOR")
+  TEACHER @map("PROFESOR")
+  STUDENT @map("ESTUDIANTE")
 }
 
-model usuarios {
-  guid       String          @id @default(uuid())
+model User {
+  guid      String   @id @default(uuid())
   // El correo identifica a la persona en todo el sistema: una persona pertenece a
   // una sola sede. Cambiar esto a @@unique([email, pais]) rompería la recuperación
   // de contraseña, que sólo dispone del correo.
-  email      String          @unique
-  contrasena String? // Nulo mientras el administrador no fija clave temporal
-  nombre     String
-  apellido   String
-  rol        lms_rol_usuario @default(ESTUDIANTE)
-  pais       lms_pais
-  activo     Boolean         @default(true)
-  created_at DateTime        @default(now())
-  updated_at DateTime        @updatedAt
+  email     String   @unique
+  password  String?  @map("contrasena") // Nulo mientras el administrador no fija clave temporal
+  firstName String   @map("nombre")
+  lastName  String   @map("apellido")
+  role      Role     @default(STUDENT) @map("rol")
+  country   Country  @map("pais")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
 
-  ultimo_acceso     DateTime?
-  usa_clave_defecto Boolean   @default(true)
+  lastAccessAt        DateTime? @map("ultimo_acceso")
+  usesDefaultPassword Boolean   @default(true) @map("usa_clave_defecto")
+
+  /// Prueba de la autorización de tratamiento de datos: cuándo la dio y sobre qué versión
+  /// de la política. Si la política cambia, se vuelve a pedir al entrar.
+  dataConsentAt      DateTime? @map("consentimiento_fecha")
+  dataConsentVersion String?   @map("consentimiento_version") @db.VarChar(40)
 
   /// Identificador (`jti`) de la sesión válida en este momento.
   /// El campus admite una sesión activa por cuenta: compartir credenciales invalidaría la
   /// certificación, que acredita que una persona concreta hizo la formación. Guardarlo en
   /// la fila del usuario —y no sólo en memoria— hace que la política sobreviva a un
   /// reinicio del servidor.
-  sesion_actual_jti String?
+  currentSessionJti String? @map("sesion_actual_jti")
 
   // Firma del examinador, impresa en los certificados que emite
-  firma_url    String?
-  firma_nombre String?
-  firma_cargo  String?
+  signatureUrl   String? @map("firma_url")
+  signatureName  String? @map("firma_nombre")
+  signatureTitle String? @map("firma_cargo")
 
-  foto_url String?
+  photoUrl String? @map("foto_url")
 
-  cursos_impartidos  lms_cursos[]
-  matriculas         lms_matriculas[]
-  entregas           lms_entregas[]
-  progreso_recurso   lms_progreso_recurso[]
-  notificaciones     lms_notificaciones[]
-  metricas           lms_metricas_capacitacion?
-  certificados       lms_certificados[]
-  sesiones_activas   lms_sesion_activa[]
-  mensajes_enviados  lms_mensajes[]             @relation("mensajes_enviados")
-  mensajes_recibidos lms_mensajes[]             @relation("mensajes_recibidos")
+  taughtCourses       Course[]
+  enrollments         Enrollment[]
+  submissions         Submission[]
+  resourceProgress    ResourceProgress[]
+  notifications       Notification[]
+  certificates        Certificate[]
+  archivedSubmissions ArchivedSubmission[]
+  studySessions       StudySession[]
+  sentMessages        Message[]            @relation("SentMessages")
+  receivedMessages    Message[]            @relation("ReceivedMessages")
+  hiddenConversations HiddenConversation[] @relation("HiddenConversationOwner")
+  hiddenByContacts    HiddenConversation[] @relation("HiddenConversationContact")
+  requestedContacts   ChatContact[]        @relation("RequestedContacts")
+  receivedContacts    ChatContact[]        @relation("ReceivedContacts")
 
-  @@index([pais, rol])
-  @@index([pais, activo])
+  // El listado de cuentas filtra por sede y rol y ordena por fecha de alta. Sin la fecha
+  // en el índice la base ordenaba la sede entera en cada página: con 20.000 cuentas eran
+  // 31 ms por página frente a 1 ms con el índice. Reemplaza a `(pais, rol)`, del que es
+  // prefijo, así que los recuentos por rol siguen resueltos con el mismo índice.
+  @@index([country, role, createdAt])
+  @@map("usuarios")
 }
 
-model lms_verificacion_email {
-  id         Int      @id @default(autoincrement())
-  email      String
-  codigo     String // 6 dígitos
-  verificado Boolean  @default(false)
-  expires_at DateTime
-  created_at DateTime @default(now())
+model EmailVerification {
+  id        Int      @id @default(autoincrement())
+  email     String
+  code      String   @map("codigo") // 6 dígitos
+  verified  Boolean  @default(false) @map("verificado")
+  /// Intentos fallidos. El código se invalida al agotarlos: 6 dígitos son adivinables
+  /// si se puede probar sin límite desde muchas direcciones.
+  attempts  Int      @default(0) @map("intentos")
+  expiresAt DateTime @map("expires_at")
+  createdAt DateTime @default(now()) @map("created_at")
 
   @@index([email])
-  @@index([expires_at])
+  @@index([expiresAt])
+  @@map("lms_verificacion_email")
 }
 
-model lms_password_resets {
-  id         Int      @id @default(autoincrement())
-  email      String
-  token      String   @unique
-  usado      Boolean  @default(false)
-  expires_at DateTime
-  created_at DateTime @default(now())
+model PasswordReset {
+  id        Int      @id @default(autoincrement())
+  email     String
+  token     String   @unique
+  used      Boolean  @default(false) @map("usado")
+  expiresAt DateTime @map("expires_at")
+  createdAt DateTime @default(now()) @map("created_at")
 
   @@index([email])
-  @@index([expires_at])
-}
-
-/// Tokens invalidados antes de su caducidad natural.
-/// Con `jti` se revoca una sola sesión (cerrar sesión en un dispositivo); con `jti` nulo
-/// se revocan todas las del usuario (cuenta borrada o contraseña cambiada).
-/// Se persiste —y no sólo se guarda en memoria— para que un reinicio del servidor no
-/// devuelva la validez a tokens ya revocados.
-model lms_token_revocations {
-  id           Int      @id @default(autoincrement())
-  usuario_guid String
-  jti          String?  @unique
-  revoked_at   DateTime @default(now())
-  expires_at   DateTime // Se purga al superar la vida máxima del JWT
-
-  @@index([usuario_guid])
-  @@index([expires_at])
+  @@index([expiresAt])
+  @@map("lms_password_resets")
 }
 
 // ── Solicitudes de acceso ──────────────────────────────────────────────────
 
-enum lms_estado_solicitud {
-  PENDIENTE
-  ACEPTADA
-  RECHAZADA
+enum AccessRequestStatus {
+  PENDING  @map("PENDIENTE")
+  ACCEPTED @map("ACEPTADA")
+  REJECTED @map("RECHAZADA")
 }
 
-model lms_solicitudes_acceso {
-  id         Int                  @id @default(autoincrement())
-  email      String               @unique
-  nombre     String
-  apellido   String
-  rol_pedido lms_rol_usuario
-  pais       lms_pais
-  estado     lms_estado_solicitud @default(PENDIENTE)
+model AccessRequest {
+  id              Int                 @id @default(autoincrement())
+  email           String              @unique
+  firstName       String              @map("nombre")
+  lastName        String              @map("apellido")
+  requestedRole   Role                @map("rol_pedido")
+  country         Country             @map("pais")
+  status          AccessRequestStatus @default(PENDING) @map("estado")
   // Motivo del rechazo, visible para el administrador que lo revise después
-  motivo     String?
-  created_at DateTime             @default(now())
-  updated_at DateTime             @updatedAt
+  rejectionReason String?             @map("motivo")
+  // Autorización de tratamiento de datos dada al enviar la solicitud; pasa a la cuenta al aprobarla.
+  consentAt       DateTime?           @map("consentimiento_fecha")
+  consentVersion  String?             @map("consentimiento_version") @db.VarChar(40)
+  createdAt       DateTime            @default(now()) @map("created_at")
+  updatedAt       DateTime            @updatedAt @map("updated_at")
 
-  @@index([pais, estado])
+  @@index([country, status])
+  @@map("lms_solicitudes_acceso")
 }
 
 // ── Cursos y contenido ─────────────────────────────────────────────────────
 
-enum lms_estado_curso {
-  BORRADOR
-  PUBLICADO
-  ARCHIVADO
+enum CourseStatus {
+  DRAFT     @map("BORRADOR")
+  PUBLISHED @map("PUBLICADO")
+  ARCHIVED  @map("ARCHIVADO")
 }
 
-enum lms_nivel_dificultad {
-  PRINCIPIANTE
-  INTERMEDIO
-  AVANZADO
-  EXPERTO
+enum DifficultyLevel {
+  BEGINNER     @map("PRINCIPIANTE")
+  INTERMEDIATE @map("INTERMEDIO")
+  ADVANCED     @map("AVANZADO")
+  EXPERT       @map("EXPERTO")
 }
 
-enum lms_tipo_recurso {
-  TEXTO
+enum ResourceType {
+  TEXT       @map("TEXTO")
   VIDEO
   PDF
-  ENLACE
-  TAREA
+  LINK       @map("ENLACE")
+  ASSIGNMENT @map("TAREA")
 }
 
-model lms_cursos {
-  guid              String               @id @default(uuid())
-  pais              lms_pais
-  titulo            String
-  descripcion       String?              @db.Text
-  descripcion_corta String?
-  imagen_portada    String?
-  nivel             lms_nivel_dificultad @default(PRINCIPIANTE)
-  estado            lms_estado_curso     @default(BORRADOR)
-  duracion_horas    Int?
-  fecha_inicio      DateTime?
-  fecha_fin         DateTime?
-  codigo_acceso     String?              @unique
-  max_estudiantes   Int?
+model Course {
+  guid             String          @id @default(uuid())
+  country          Country         @map("pais")
+  title            String          @map("titulo")
+  description      String?         @map("descripcion") @db.Text
+  shortDescription String?         @map("descripcion_corta")
+  coverImage       String?         @map("imagen_portada")
+  level            DifficultyLevel @default(BEGINNER) @map("nivel")
+  status           CourseStatus    @default(DRAFT) @map("estado")
+  durationHours    Int?            @map("duracion_horas")
+  startDate        DateTime?       @map("fecha_inicio")
+  endDate          DateTime?       @map("fecha_fin")
+  accessCode       String?         @unique @map("codigo_acceso")
+  maxStudents      Int?            @map("max_estudiantes")
 
   // Reglas de negocio
-  // Nota mínima para aprobar, en escala 0–100 (ver common/domain/calificacion.ts)
-  nota_aprobacion   Decimal @default(80) @db.Decimal(5, 2)
-  orden_estricto    Boolean @default(true) // Obliga a avanzar sin saltarse recursos
-  emite_certificado Boolean @default(true)
+  // Nota mínima para aprobar, en escala 0–100 (ver common/domain/grading.ts)
+  passingScore Decimal @default(80) @map("nota_aprobacion") @db.Decimal(5, 2)
+  strictOrder  Boolean @default(true) @map("orden_estricto") // Obliga a avanzar sin saltarse recursos
 
-  created_at DateTime  @default(now())
-  updated_at DateTime  @updatedAt
-  deleted_at DateTime?
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
 
-  profesor_guid    String
-  profesor         usuarios            @relation(fields: [profesor_guid], references: [guid], onDelete: Restrict)
-  modulos          lms_modulos[]
-  matriculas       lms_matriculas[]
-  certificados     lms_certificados[]
-  sesiones_activas lms_sesion_activa[]
+  teacherGuid   String         @map("profesor_guid")
+  teacher       User           @relation(fields: [teacherGuid], references: [guid], onDelete: Restrict)
+  modules       CourseModule[]
+  enrollments   Enrollment[]
+  certificates  Certificate[]
+  studySessions StudySession[]
 
-  @@index([profesor_guid])
-  @@index([pais, estado])
+  archivedSubmissions ArchivedSubmission[]
+
+  @@index([teacherGuid])
+  @@index([country, status])
+  @@map("lms_cursos")
 }
 
-model lms_modulos {
-  guid              String     @id @default(uuid())
-  curso_guid        String
-  curso             lms_cursos @relation(fields: [curso_guid], references: [guid], onDelete: Cascade)
-  titulo            String
-  descripcion       String?
-  orden             Int        @default(0)
-  requiere_anterior Boolean    @default(false)
-  created_at        DateTime   @default(now())
-  updated_at        DateTime   @updatedAt
-  deleted_at        DateTime?
+model CourseModule {
+  guid             String   @id @default(uuid())
+  courseGuid       String   @map("curso_guid")
+  course           Course   @relation(fields: [courseGuid], references: [guid], onDelete: Cascade)
+  title            String   @map("titulo")
+  description      String?  @map("descripcion")
+  position         Int      @default(0) @map("orden")
+  requiresPrevious Boolean  @default(false) @map("requiere_anterior")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
 
-  recursos lms_recursos[]
+  resources Resource[]
 
-  @@index([curso_guid, orden])
+  @@index([courseGuid, position])
+  @@map("lms_modulos")
 }
 
-model lms_recursos {
-  guid        String           @id @default(uuid())
-  modulo_guid String
-  modulo      lms_modulos      @relation(fields: [modulo_guid], references: [guid], onDelete: Cascade)
-  titulo      String
-  tipo        lms_tipo_recurso
+model Resource {
+  guid       String       @id @default(uuid())
+  moduleGuid String       @map("modulo_guid")
+  module     CourseModule @relation(fields: [moduleGuid], references: [guid], onDelete: Cascade)
+  title      String       @map("titulo")
+  type       ResourceType @map("tipo")
 
-  contenido_html String? @db.Text
-  url_archivo    String?
-  url_referencia String? // Enlace externo complementario
+  contentHtml  String? @map("contenido_html") @db.Text
+  fileUrl      String? @map("url_archivo")
+  referenceUrl String? @map("url_referencia") // Enlace externo complementario
 
   // Clave del adjunto en el almacenamiento (ej. "recursos/1699-ab.pdf"), no el binario
-  archivo_adjunto        String?
-  archivo_adjunto_nombre String? // Nombre original, para la descarga
-  archivo_max_size_mb    Int? // Límite de subida para la entrega del alumno
+  attachmentKey  String? @map("archivo_adjunto")
+  attachmentName String? @map("archivo_adjunto_nombre") // Nombre original, para la descarga
+  maxUploadMb    Int?    @map("archivo_max_size_mb") // Límite de subida para la entrega del alumno
 
-  // Configuración del cuestionario cuando tipo = TAREA. JSON serializado; su forma
-  // y validación están en `src/cursos/quiz-config.ts`. Contiene las respuestas
+  // Configuración del cuestionario cuando `type` es ASSIGNMENT. JSON serializado; su forma
+  // y validación están en `src/courses/quiz-config.ts`. Contiene las respuestas
   // correctas, por lo que nunca se envía íntegro a un estudiante.
-  quiz_config String? @db.Text
+  quizConfig String? @map("quiz_config") @db.MediumText
 
-  orden          Int       @default(0)
-  obligatorio    Boolean   @default(true)
-  tiempo_lectura Int? // Minutos estimados
-  created_at     DateTime  @default(now())
-  updated_at     DateTime  @updatedAt
-  deleted_at     DateTime?
+  position       Int      @default(0) @map("orden")
+  required       Boolean  @default(true) @map("obligatorio")
+  readingMinutes Int?     @map("tiempo_lectura") // Minutos estimados
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
 
-  progreso lms_progreso_recurso[]
-  entregas lms_entregas[]
+  progress            ResourceProgress[]
+  submissions         Submission[]
+  archivedSubmissions ArchivedSubmission[]
 
-  @@index([modulo_guid, orden])
+  @@index([moduleGuid, position])
+  @@map("lms_recursos")
 }
 
 // ── Entregas y evaluación ──────────────────────────────────────────────────
 
-enum lms_estado_entrega {
-  BORRADOR // Intento de cuestionario en curso
-  ENTREGADA
-  ENTREGADA_TARDE
-  CALIFICADA
-  EN_REVISION // Reenvío tras una calificación insuficiente
+enum SubmissionStatus {
+  DRAFT     @map("BORRADOR") // Intento de cuestionario en curso
+  SUBMITTED @map("ENTREGADA")
+  GRADED    @map("CALIFICADA")
+  IN_REVIEW @map("EN_REVISION") // Reenvío tras una calificación insuficiente
 }
 
-model lms_entregas {
-  guid         String        @id @default(uuid())
-  usuario_guid String
-  usuario      usuarios      @relation(fields: [usuario_guid], references: [guid], onDelete: Cascade)
-  tarea_guid   String?
-  tarea        lms_recursos? @relation(fields: [tarea_guid], references: [guid], onDelete: SetNull)
+model Submission {
+  guid           String    @id @default(uuid())
+  userGuid       String    @map("usuario_guid")
+  user           User      @relation(fields: [userGuid], references: [guid], onDelete: Cascade)
+  assignmentGuid String?   @map("tarea_guid")
+  assignment     Resource? @relation(fields: [assignmentGuid], references: [guid], onDelete: SetNull)
 
-  url_archivo_adjunto String? // Clave en el almacenamiento
-  respuesta_texto     String? // Nombre original del archivo entregado
+  attachmentKey  String? @map("url_archivo_adjunto") // Clave en el almacenamiento
+  attachmentName String? @map("respuesta_texto") // Nombre original del archivo entregado
 
-  estado         lms_estado_entrega @default(ENTREGADA)
-  intento_numero Int                @default(1)
-  fecha_inicio   DateTime? // Inicio del intento, para el límite de tiempo
-  fecha_entrega  DateTime?
+  status        SubmissionStatus @default(SUBMITTED) @map("estado")
+  attemptNumber Int              @default(1) @map("intento_numero")
+  startedAt     DateTime?        @map("fecha_inicio") // Inicio del intento, para el límite de tiempo
+  submittedAt   DateTime?        @map("fecha_entrega")
 
   // Nota en escala 0–100. Nula mientras no se haya calificado.
-  calificacion            Decimal? @db.Decimal(5, 2)
-  comentario_calificacion String?  @db.Text
+  score    Decimal? @map("calificacion") @db.Decimal(5, 2)
+  feedback String?  @map("comentario_calificacion") @db.Text
 
-  ip_address      String?
-  archivo_purgado Boolean @default(false) // El archivo se borró tras emitir el certificado
+  // Sólo marca entregas antiguas cuyo archivo se retiró al certificar; ya nada lo activa.
+  // Se retirará cuando el panel del examinador y el del alumno dejen de leerlo.
+  filePurged Boolean @default(false) @map("archivo_purgado")
 
-  created_at DateTime @default(now())
-  updated_at DateTime @updatedAt
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
 
-  @@index([usuario_guid])
-  @@index([tarea_guid, usuario_guid])
-  @@index([estado, fecha_entrega])
+  @@index([userGuid])
+  // Las entregas de un alumno en una tarea. Con el estado y la nota dentro, los paneles que
+  // parten de las matrículas (tareas y monitoreo) cuentan y reparten notas sin leer las
+  // filas: a 5 años, 2,8 s → 2,2 s el panel de tareas en curso y 9 s → 5 s el histórico.
+  @@index([assignmentGuid, userGuid, status, score])
+  @@index([status, submittedAt])
+  // La cola del examinador: las tareas de un curso, por estado y de la más reciente a la
+  // más antigua. Sin él, una página recorría el rango entero de un estado en toda la sede.
+  @@index([assignmentGuid, status, submittedAt])
+  // Actividad semanal del panel de administración: sin él recorría todas las entregas de la
+  // historia para quedarse con las de 7 días (5 años de datos: 661 ms frente a 25).
+  @@index([submittedAt])
+  // Promedio de la sede: la nota y el alumno salen del índice sin leer las filas (1 s → 0,1 s).
+  @@index([status, userGuid, score])
+  @@map("lms_entregas")
 }
 
-model lms_progreso_recurso {
-  id               Int          @id @default(autoincrement())
-  usuario_guid     String
-  usuario          usuarios     @relation(fields: [usuario_guid], references: [guid], onDelete: Cascade)
-  recurso_guid     String
-  recurso          lms_recursos @relation(fields: [recurso_guid], references: [guid], onDelete: Cascade)
-  completado       Boolean      @default(true)
-  fecha_completado DateTime     @default(now())
-  tiempo_invertido Int? // Segundos
+model ResourceProgress {
+  id           Int      @id @default(autoincrement())
+  userGuid     String   @map("usuario_guid")
+  user         User     @relation(fields: [userGuid], references: [guid], onDelete: Cascade)
+  resourceGuid String   @map("recurso_guid")
+  resource     Resource @relation(fields: [resourceGuid], references: [guid], onDelete: Cascade)
+  completed    Boolean  @default(true) @map("completado")
+  completedAt  DateTime @default(now()) @map("fecha_completado")
 
-  @@unique([usuario_guid, recurso_guid])
-  @@index([recurso_guid])
-  @@index([fecha_completado])
+  @@unique([userGuid, resourceGuid])
+  // Con el usuario dentro, el avance por curso se agrupa leyendo sólo el índice: sin él, el
+  // resumen de monitoreo volvía a la tabla por cada una de las filas (139 ms frente a 96).
+  @@index([resourceGuid, userGuid])
+  @@index([completedAt])
+  @@map("lms_progreso_recurso")
 }
 
 // ── Matrículas ─────────────────────────────────────────────────────────────
 
-enum lms_tipo_matricula {
+enum EnrollmentType {
   MANUAL // Inscrito por un administrador
-  CODIGO_ACCESO // El alumno usó un código
-  SISTEMA // Inscripción automática por reglas
+  ACCESS_CODE @map("CODIGO_ACCESO") // El alumno usó un código
+  SYSTEM      @map("SISTEMA") // Inscripción automática por reglas
 }
 
-model lms_matriculas {
-  id              Int                @id @default(autoincrement())
-  usuario_guid    String
-  usuario         usuarios           @relation(fields: [usuario_guid], references: [guid], onDelete: Cascade)
-  curso_guid      String
-  curso           lms_cursos         @relation(fields: [curso_guid], references: [guid], onDelete: Cascade)
-  tipo            lms_tipo_matricula @default(MANUAL)
-  activa          Boolean            @default(true)
-  fecha_matricula DateTime           @default(now())
-  fecha_baja      DateTime?
+model Enrollment {
+  id           Int            @id @default(autoincrement())
+  userGuid     String         @map("usuario_guid")
+  user         User           @relation(fields: [userGuid], references: [guid], onDelete: Cascade)
+  courseGuid   String         @map("curso_guid")
+  course       Course         @relation(fields: [courseGuid], references: [guid], onDelete: Cascade)
+  type         EnrollmentType @default(MANUAL) @map("tipo")
+  active       Boolean        @default(true) @map("activa")
+  /// Inicio de la vuelta actual: se renueva al volver a matricular.
+  enrolledAt   DateTime       @default(now()) @map("fecha_matricula")
+  unenrolledAt DateTime?      @map("fecha_baja")
 
-  @@unique([usuario_guid, curso_guid])
-  @@index([curso_guid])
+  /// Cuándo terminó la vuelta actual: la fecha del certificado que la cerró. Nulo mientras
+  /// el curso está en curso. Una matrícula activa y terminada sigue dando acceso al curso y
+  /// al chat con su profesor, pero ya no es formación pendiente: ni recibe recordatorios ni
+  /// cuenta en el trabajo vivo de los paneles.
+  completedAt DateTime? @map("fecha_finalizacion")
+
+  /// Recursos del curso que el alumno tiene completados. Es un recuento derivado de
+  /// `lms_progreso_recurso`, guardado para que el monitoreo no tenga que agrupar todo el
+  /// progreso de la sede: lo recalcula `refreshCompletedResources` en cada cambio de avance
+  /// y la tarea nocturna lo reconcilia en las matrículas en curso (el borrado de contenido,
+  /// en cascada, no pasa por ningún servicio).
+  completedResources Int @default(0) @map("recursos_completados")
+
+  @@unique([userGuid, courseGuid])
+  // La lista de matriculados de un curso va por fecha; con la fecha en el índice la base
+  // no tiene que ordenar el curso entero para devolver una página.
+  @@index([courseGuid, enrolledAt])
+  // Las matrículas en curso de unos cursos (monitoreo, panel de tareas): sin él se leía la
+  // tabla entera en cada consulta (página del monitoreo a 5 años: 457 ms frente a 57).
+  @@index([courseGuid, active, completedAt])
+  @@map("lms_matriculas")
 }
 
 // ── Comunicación ───────────────────────────────────────────────────────────
 
-enum lms_tipo_notificacion {
-  EVALUACION_NUEVA
-  DEADLINE_PROXIMO
-  DEADLINE_URGENTE
-  TAREA_CALIFICADA
-  ANUNCIO_CURSO
-  ANUNCIO_GLOBAL
-  BIENVENIDA_CURSO
-  BADGE_DESBLOQUEADO
-  MODULO_COMPLETADO
-  MODULO_REINICIADO
-  REVISION_ENTREGA
-  ENTREGA_RECHAZADA
-  CURSO_REACTIVADO
-  RECORDATORIO_INACTIVIDAD
-  MENSAJE_NUEVO
+enum NotificationType {
+  NEW_ASSESSMENT      @map("EVALUACION_NUEVA")
+  DEADLINE_SOON       @map("DEADLINE_PROXIMO")
+  DEADLINE_URGENT     @map("DEADLINE_URGENTE")
+  ASSIGNMENT_GRADED   @map("TAREA_CALIFICADA")
+  COURSE_ANNOUNCEMENT @map("ANUNCIO_CURSO")
+  GLOBAL_ANNOUNCEMENT @map("ANUNCIO_GLOBAL")
+  COURSE_WELCOME      @map("BIENVENIDA_CURSO")
+  BADGE_UNLOCKED      @map("BADGE_DESBLOQUEADO")
+  MODULE_COMPLETED    @map("MODULO_COMPLETADO")
+  MODULE_RESET        @map("MODULO_REINICIADO")
+  SUBMISSION_REVIEW   @map("REVISION_ENTREGA")
+  SUBMISSION_REJECTED @map("ENTREGA_RECHAZADA")
+  COURSE_REACTIVATED  @map("CURSO_REACTIVADO")
+  INACTIVITY_REMINDER @map("RECORDATORIO_INACTIVIDAD")
+  NEW_MESSAGE         @map("MENSAJE_NUEVO")
 }
 
-model lms_notificaciones {
-  id           Int                   @id @default(autoincrement())
-  usuario_guid String
-  usuario      usuarios              @relation(fields: [usuario_guid], references: [guid], onDelete: Cascade)
-  tipo         lms_tipo_notificacion
-  titulo       String
-  mensaje      String                @db.Text
-  leida        Boolean               @default(false)
-  url_accion   String?
-  ref_tipo     String? // 'curso' | 'entrega' | 'quiz' | 'certificado' | 'mensaje'
-  ref_guid     String?
-  created_at   DateTime              @default(now())
+model Notification {
+  id        Int              @id @default(autoincrement())
+  userGuid  String           @map("usuario_guid")
+  user      User             @relation(fields: [userGuid], references: [guid], onDelete: Cascade)
+  type      NotificationType @map("tipo")
+  title     String           @map("titulo")
+  message   String           @map("mensaje") @db.Text
+  read      Boolean          @default(false) @map("leida")
+  actionUrl String?          @map("url_accion")
+  refType   String?          @map("ref_tipo") // 'curso' | 'entrega' | 'quiz' | 'certificado' | 'mensaje'
+  refGuid   String?          @map("ref_guid")
+  createdAt DateTime         @default(now()) @map("created_at")
 
-  @@index([usuario_guid, leida])
-  @@index([usuario_guid, created_at])
+  @@index([userGuid, read])
+  @@index([userGuid, createdAt])
+  // El recordatorio de inactividad busca, alumno por alumno, si ya se le avisó en los
+  // últimos días: sin él materializaba todos los avisos de la tabla (1,6 s frente a 37 ms).
+  @@index([userGuid, type, createdAt])
+  @@map("lms_notificaciones")
 }
 
-model lms_mensajes {
-  id                Int      @id @default(autoincrement())
-  remitente_guid    String
-  remitente         usuarios @relation("mensajes_enviados", fields: [remitente_guid], references: [guid], onDelete: Cascade)
-  destinatario_guid String
-  destinatario      usuarios @relation("mensajes_recibidos", fields: [destinatario_guid], references: [guid], onDelete: Cascade)
-  asunto            String
-  contenido         String   @db.Text
-  leido             Boolean  @default(false)
-  ref_tipo          String?
-  ref_guid          String?
-  created_at        DateTime @default(now())
+model Message {
+  id            Int      @id @default(autoincrement())
+  senderGuid    String   @map("remitente_guid")
+  sender        User     @relation("SentMessages", fields: [senderGuid], references: [guid], onDelete: Cascade)
+  recipientGuid String   @map("destinatario_guid")
+  recipient     User     @relation("ReceivedMessages", fields: [recipientGuid], references: [guid], onDelete: Cascade)
+  subject       String   @map("asunto")
+  content       String   @map("contenido") @db.Text
+  read          Boolean  @default(false) @map("leido")
+  refType       String?  @map("ref_tipo")
+  refGuid       String?  @map("ref_guid")
+  createdAt     DateTime @default(now()) @map("created_at")
 
-  @@index([remitente_guid, destinatario_guid])
-  @@index([destinatario_guid, leido])
+  @@index([senderGuid, recipientGuid])
+  @@index([recipientGuid, read])
+  @@map("lms_mensajes")
 }
 
-enum lms_estado_contacto {
-  PENDIENTE
-  ACEPTADO
-  RECHAZADO
+enum ContactStatus {
+  PENDING  @map("PENDIENTE")
+  ACCEPTED @map("ACEPTADO")
+  REJECTED @map("RECHAZADO")
 }
 
-model lms_contacto_chat {
-  id               Int                 @id @default(autoincrement())
-  solicitante_guid String
-  receptor_guid    String
-  curso_guid       String
-  estado           lms_estado_contacto @default(PENDIENTE)
-  created_at       DateTime            @default(now())
-  updated_at       DateTime            @updatedAt
+/**
+ * Hasta qué momento ha ocultado alguien su copia de una conversación.
+ * Borrar la conversación es una decisión de quien la borra: la otra persona conserva la
+ * suya. Se guarda un punto de corte por pareja en lugar de una marca por mensaje —vaciar
+ * una conversación larga es una sola escritura, no una por mensaje— y los mensajes
+ * posteriores vuelven a verse, que es lo que se espera al seguir hablando.
+ */
+model HiddenConversation {
+  id          Int      @id @default(autoincrement())
+  userGuid    String   @map("usuario_guid")
+  user        User     @relation("HiddenConversationOwner", fields: [userGuid], references: [guid], onDelete: Cascade)
+  contactGuid String   @map("contacto_guid")
+  contact     User     @relation("HiddenConversationContact", fields: [contactGuid], references: [guid], onDelete: Cascade)
+  /**
+   * Los mensajes anteriores a este instante no se le muestran a `usuario_guid`.
+   */
+  hiddenUntil DateTime @map("oculta_hasta")
+  updatedAt   DateTime @updatedAt @map("updated_at")
 
-  @@unique([solicitante_guid, receptor_guid, curso_guid])
-  @@index([receptor_guid, estado])
-  @@index([solicitante_guid, estado])
+  @@unique([userGuid, contactGuid])
+  @@map("lms_conversacion_oculta")
+}
+
+model ChatContact {
+  id            Int           @id @default(autoincrement())
+  requesterGuid String        @map("solicitante_guid")
+  requester     User          @relation("RequestedContacts", fields: [requesterGuid], references: [guid], onDelete: Cascade)
+  receiverGuid  String        @map("receptor_guid")
+  receiver      User          @relation("ReceivedContacts", fields: [receiverGuid], references: [guid], onDelete: Cascade)
+  courseGuid    String        @map("curso_guid")
+  status        ContactStatus @default(PENDING) @map("estado")
+  createdAt     DateTime      @default(now()) @map("created_at")
+  updatedAt     DateTime      @updatedAt @map("updated_at")
+
+  @@unique([requesterGuid, receiverGuid, courseGuid])
+  @@index([receiverGuid, status])
+  @@index([requesterGuid, status])
+  @@map("lms_contacto_chat")
 }
 
 // ── Métricas y seguimiento ─────────────────────────────────────────────────
 
-model lms_metricas_capacitacion {
-  id                     Int      @id @default(autoincrement())
-  usuario_guid           String   @unique
-  usuario                usuarios @relation(fields: [usuario_guid], references: [guid], onDelete: Cascade)
-  dias_consecutivos      Int      @default(0)
-  total_horas_invertidas Decimal  @default(0) @db.Decimal(10, 2)
-  cursos_completados     Int      @default(0)
-  // Promedio en escala 0–100
-  promedio_global        Decimal  @default(0) @db.Decimal(5, 2)
+/**
+ * Tiempo que un alumno dedica de verdad a un curso.
+ * Es la única fuente del tiempo de capacitación: las cifras del panel del alumno, las del
+ * examinador y las horas que imprime el certificado se suman de aquí al vuelo. No hay
+ * tabla de totales acumulados, y es a propósito: un total guardado se desincroniza en
+ * cuanto algo se borra o se rehace, y estas sumas son baratas.
+ * Cada fila es un tramo de trabajo real: se abre cuando el alumno empieza a interactuar
+ * dentro del curso y se cierra cuando deja de hacerlo. Tener la pestaña abierta sin tocar
+ * nada no suma (lo decide el cliente, en `useTiempoDeEstudio`).
+ */
+model StudySession {
+  id              Int       @id @default(autoincrement())
+  userGuid        String    @map("usuario_guid")
+  user            User      @relation(fields: [userGuid], references: [guid], onDelete: Cascade)
+  courseGuid      String    @map("curso_guid")
+  course          Course    @relation(fields: [courseGuid], references: [guid], onDelete: Cascade)
+  startedAt       DateTime  @default(now()) @map("inicio_sesion")
+  endedAt         DateTime? @map("fin_sesion")
+  durationSeconds Int       @default(0) @map("duracion_seg")
 
-  updated_at DateTime @updatedAt
-}
-
-model lms_sesion_activa {
-  id            Int        @id @default(autoincrement())
-  usuario_guid  String
-  usuario       usuarios   @relation(fields: [usuario_guid], references: [guid], onDelete: Cascade)
-  curso_guid    String
-  curso         lms_cursos @relation(fields: [curso_guid], references: [guid], onDelete: Cascade)
-  inicio_sesion DateTime   @default(now())
-  fin_sesion    DateTime?
-  duracion_seg  Int        @default(0)
-
-  @@index([usuario_guid, curso_guid])
-  @@index([curso_guid])
+  // El latido de cada minuto busca el tramo abierto por su fin: con la fecha en el índice lo
+  // encuentra sin ordenar los tramos del alumno en el curso.
+  @@index([userGuid, courseGuid, endedAt])
+  @@index([courseGuid])
+  @@map("lms_sesion_activa")
 }
 
 // ── Certificados ───────────────────────────────────────────────────────────
 
-model lms_certificados {
-  id                  Int        @id @default(autoincrement())
-  guid                String     @unique @default(uuid())
-  usuario_guid        String
-  usuario             usuarios   @relation(fields: [usuario_guid], references: [guid], onDelete: Cascade)
-  curso_guid          String
-  curso               lms_cursos @relation(fields: [curso_guid], references: [guid], onDelete: Cascade)
-  codigo_verificacion String     @unique
-  archivo_pdf         String // Clave en el almacenamiento
-  fecha_inicio        DateTime
-  fecha_completado    DateTime   @default(now())
-  tiempo_total_horas  Decimal    @default(0) @db.Decimal(10, 2)
-  tiempo_activo_seg   Int        @default(0)
+/**
+ * Certificado emitido al completar un curso.
+ * Un alumno puede repetir el mismo curso años después —otra infracción, otra capacitación—
+ * y cada vuelta emite **su propio certificado**. El anterior no se borra: su código de
+ * verificación es público y puede estar impreso en un documento ya entregado, así que
+ * anularlo haría desaparecer una formación que sí ocurrió. Lo que hace el nuevo es
+ * sustituirlo, y el viejo queda como histórico con su fecha y su vigencia.
+ */
+model Certificate {
+  id               Int       @id @default(autoincrement())
+  guid             String    @unique @default(uuid())
+  /**
+   * Titular, mientras su cuenta exista. Queda en nulo si se borra: el certificado sigue
+   * acreditando la formación y se verifica con el nombre guardado en `holderName`.
+   */
+  userGuid         String?   @map("usuario_guid")
+  user             User?     @relation(fields: [userGuid], references: [guid], onDelete: SetNull)
+  // Nombre completo del titular tal como se emitió; no cambia si después edita su perfil.
+  holderName       String    @map("nombre_titular")
+  /**
+   * El curso del que salió, mientras siga existiendo.
+   * Queda en nulo si el curso se elimina: el certificado acredita una formación que
+   * ocurrió y no puede desaparecer porque después se retire el curso del catálogo.
+   */
+  courseGuid       String?   @map("curso_guid")
+  course           Course?   @relation(fields: [courseGuid], references: [guid], onDelete: SetNull)
+  /**
+   * Título con el que se emitió.
+   * Se guarda aquí y no se lee del curso a propósito: un certificado es un documento con
+   * fecha, y renombrar el curso no puede cambiar lo que acredita uno ya entregado.
+   */
+  courseTitle      String    @map("curso_titulo")
+  /**
+   * Número de vuelta del alumno por este curso: 1 la primera vez, 2 la siguiente…
+   */
+  attempt          Int       @default(1) @map("intento")
+  verificationCode String    @unique @map("codigo_verificacion")
+  pdfKey           String    @map("archivo_pdf") // Clave en el almacenamiento
+  startedAt        DateTime  @map("fecha_inicio")
+  completedAt      DateTime  @default(now()) @map("fecha_completado")
+  /**
+   * Hasta cuándo acredita, según la vigencia configurada en la sede. Nulo = sin caducidad.
+   */
+  validUntil       DateTime? @map("valido_hasta")
+  totalHours       Decimal   @default(0) @map("tiempo_total_horas") @db.Decimal(10, 2)
+  activeSeconds    Int       @default(0) @map("tiempo_activo_seg")
   // Promedio del curso en escala 0–100
-  nota_promedio       Decimal?   @db.Decimal(5, 2)
-  created_at          DateTime   @default(now())
+  averageScore     Decimal?  @map("nota_promedio") @db.Decimal(5, 2)
+  createdAt        DateTime  @default(now()) @map("created_at")
 
-  @@unique([usuario_guid, curso_guid])
-  @@index([usuario_guid])
-  @@index([curso_guid])
+  // La restricción única sirve también de índice por alumno: empieza por `usuario_guid`.
+  @@unique([userGuid, courseGuid, attempt])
+  @@index([courseGuid])
+  @@map("lms_certificados")
 }
 
 // ── Configuración por sede ─────────────────────────────────────────────────
@@ -467,84 +573,173 @@ model lms_certificados {
 /// Una fila por país. Marca, textos de la landing y textos legales son propios de
 /// cada sede: los datos de contacto, la dirección y la normativa difieren entre
 /// Colombia y México.
-model lms_configuracion {
-  id   Int      @id @default(autoincrement())
-  pais lms_pais @unique
+model CountrySettings {
+  id      Int     @id @default(autoincrement())
+  country Country @unique @map("pais")
 
   // Identidad visual
-  nombre_plataforma String  @default("Campus Virtual")
-  logo_url          String?
-  favicon_url       String?
-  color_primario    String  @default("#1e3a8a")
-  color_secundario  String  @default("#ea580c")
-  fuente            String  @default("Inter")
-  border_radius     Int     @default(12)
-  login_fondo_url   String?
+  platformName       String  @default("Campus Virtual") @map("nombre_plataforma")
+  logoUrl            String? @map("logo_url")
+  faviconUrl         String? @map("favicon_url")
+  primaryColor       String  @default("#1e3a8a") @map("color_primario")
+  secondaryColor     String  @default("#ea580c") @map("color_secundario")
+  font               String  @default("Inter") @map("fuente")
+  borderRadius       Int     @default(12) @map("border_radius")
+  loginBackgroundUrl String? @map("login_fondo_url")
 
   // Operativa
-  mensaje_bienvenida String  @default("Bienvenido")
-  idioma             String  @default("es")
-  zona_horaria       String  @default("America/Bogota")
-  max_archivo_mb     Int     @default(10)
-  contrasena_defecto String  @default("pesvauth2026") // Clave temporal de altas nuevas
-  email_remitente    String?
-  email_nombre       String?
-  bienvenida_html    String? @db.Text
+  welcomeMessage String @default("Bienvenido") @map("mensaje_bienvenida")
+  timeZone       String @default("America/Bogota") @map("zona_horaria")
+  maxFileMb      Int    @default(10) @map("max_archivo_mb")
 
   // Certificados
-  cert_titulo_personalizado  String?
-  cert_subtitulo             String?
-  cert_texto_legal           String? @db.Text
-  cert_mostrar_modulos       Boolean @default(true)
-  cert_mostrar_recursos      Boolean @default(true)
-  cert_mostrar_nota          Boolean @default(true)
-  cert_mostrar_firma         Boolean @default(true)
-  cert_mostrar_fecha_ingreso Boolean @default(false)
+  certCustomTitle        String? @map("cert_titulo_personalizado")
+  certSubtitle           String? @map("cert_subtitulo")
+  certLegalText          String? @map("cert_texto_legal") @db.Text
+  certShowModules        Boolean @default(true) @map("cert_mostrar_modulos")
+  certShowResources      Boolean @default(true) @map("cert_mostrar_recursos")
+  certShowScore          Boolean @default(true) @map("cert_mostrar_nota")
+  certShowSignature      Boolean @default(true) @map("cert_mostrar_firma")
+  certShowEnrollmentDate Boolean @default(false) @map("cert_mostrar_fecha_ingreso")
+  /**
+   * Meses que acredita un certificado de esta sede. Nulo o 0 = sin caducidad.
+   */
+  certValidityMonths     Int?    @map("cert_vigencia_meses")
 
   // Landing
-  landing_hero_titulo1   String @default("Transporte Seguro,")
-  landing_hero_titulo2   String @default("Personal Capacitado")
-  landing_hero_subtitulo String @db.Text
+  landingHeroTitle1   String @default("Transporte Seguro,") @map("landing_hero_titulo1")
+  landingHeroTitle2   String @default("Personal Capacitado") @map("landing_hero_titulo2")
+  landingHeroSubtitle String @map("landing_hero_subtitulo") @db.Text
 
-  landing_telefono     String
-  landing_telefono_sub String @default("Lun-Vie 8am-6pm")
-  landing_email        String
-  landing_email_sub    String @default("Respuesta en 24h")
-  landing_oficina      String
-  landing_oficina_sub  String
+  landingPhone     String @map("landing_telefono")
+  landingPhoneSub  String @default("Lun-Vie 8am-6pm") @map("landing_telefono_sub")
+  landingEmail     String @map("landing_email")
+  landingEmailSub  String @default("Respuesta en 24h") @map("landing_email_sub")
+  landingOffice    String @map("landing_oficina")
+  landingOfficeSub String @map("landing_oficina_sub")
 
-  landing_footer_texto String @db.Text
+  landingFooterText String @map("landing_footer_texto") @db.Text
 
-  // Legal
-  legal_terminos   String? @db.Text
-  legal_privacidad String? @db.Text
-  legal_datos      String? @db.Text
+  // Legal. El responsable del tratamiento se identifica en la política y en el aviso de privacidad.
+  legalEntityName  String?   @map("legal_razon_social")
+  legalEntityTaxId String?   @map("legal_identificacion")
+  legalAddress     String?   @map("legal_domicilio")
+  privacyEmail     String?   @map("legal_email_privacidad")
+  // Fecha de la versión vigente de los textos legales; cambia al editarlos.
+  legalUpdatedAt   DateTime? @map("legal_actualizado")
+  legalTerms       String?   @map("legal_terminos") @db.Text
+  legalPrivacy     String?   @map("legal_privacidad") @db.Text
+  legalData        String?   @map("legal_datos") @db.Text
 
-  updated_at DateTime @updatedAt
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("lms_configuracion")
 }
 
 // ── Plantillas de correo ───────────────────────────────────────────────────
 
-model lms_eventos_correo {
-  id             Int                     @id @default(autoincrement())
-  identificador  String                  @unique // Ej: 'RECUPERAR_PASSWORD'
-  nombre_legible String
-  descripcion    String
-  variables      String                  @db.Text // JSON: ["nombre", "token", ...]
-  plantillas     lms_plantillas_correo[]
+model EmailEvent {
+  id          Int             @id @default(autoincrement())
+  key         String          @unique @map("identificador") // Ej: 'RECUPERAR_PASSWORD'
+  displayName String          @map("nombre_legible")
+  description String          @map("descripcion")
+  variables   String          @db.Text // JSON: ["nombre", "token", ...]
+  templates   EmailTemplate[]
+
+  @@map("lms_eventos_correo")
 }
 
-model lms_plantillas_correo {
-  id             Int                @id @default(autoincrement())
-  evento_id      Int
-  evento         lms_eventos_correo @relation(fields: [evento_id], references: [id], onDelete: Cascade)
-  nombre_interno String
-  asunto         String
-  cuerpo_html    String             @db.Text
-  activo         Boolean            @default(true)
-  es_sistema     Boolean            @default(false) // Las de sistema no se borran
-  created_at     DateTime           @default(now())
-  updated_at     DateTime           @updatedAt
+model EmailTemplate {
+  id           Int        @id @default(autoincrement())
+  eventId      Int        @map("evento_id")
+  event        EmailEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  // Cada sede edita sus propios correos: la de una sede nunca cambia los de la otra.
+  country      Country    @map("pais")
+  internalName String     @map("nombre_interno")
+  subject      String     @map("asunto")
+  bodyHtml     String     @map("cuerpo_html") @db.Text
+  active       Boolean    @default(true) @map("activo")
+  isSystem     Boolean    @default(false) @map("es_sistema") // Las de sistema no se borran
+  createdAt    DateTime   @default(now()) @map("created_at")
+  updatedAt    DateTime   @updatedAt @map("updated_at")
 
-  @@index([evento_id])
+  @@index([eventId, country])
+  @@map("lms_plantillas_correo")
+}
+
+// ── Versiones de los textos legales ────────────────────────────────────────
+
+/// Lo que decía cada versión de los textos legales de una sede: la prueba de lo que aceptó
+/// cada persona, cuyo `consentimiento_version` apunta a `version`. Se escribe al publicarse
+/// la versión, en la misma transacción que la configuración, y no se modifica después.
+/// Un campo nulo significa que se publicó el texto de serie del campus, que vive en el código
+/// del cliente (`BASE_LEGAL_DATE`) y se versiona con él.
+model LegalVersion {
+  id               Int      @id @default(autoincrement())
+  country          Country  @map("pais")
+  /// El mismo valor que queda en `consentimiento_version` de usuarios y solicitudes.
+  version          String   @db.VarChar(40)
+  legalEntityName  String?  @map("razon_social")
+  legalEntityTaxId String?  @map("identificacion")
+  legalAddress     String?  @map("domicilio")
+  privacyEmail     String?  @map("email_privacidad")
+  legalTerms       String?  @map("terminos") @db.Text
+  legalPrivacy     String?  @map("privacidad") @db.Text
+  legalData        String?  @map("datos") @db.Text
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  @@unique([country, version])
+  @@map("lms_versiones_legales")
+}
+
+// ── Entregas de vueltas anteriores ─────────────────────────────────────────
+
+/**
+ * Entrega de una vuelta ya certificada.
+ * Al rematricular a quien ya obtuvo el certificado, sus entregas se trasladan aquí para que
+ * empiece de cero sin perder la evidencia de la formación acreditada. Sólo se borran con la
+ * cuenta o con el curso, que son borrados explícitos.
+ */
+model ArchivedSubmission {
+  guid            String    @id // El de la entrega original
+  userGuid        String    @map("usuario_guid")
+  user            User      @relation(fields: [userGuid], references: [guid], onDelete: Cascade)
+  courseGuid      String    @map("curso_guid")
+  course          Course    @relation(fields: [courseGuid], references: [guid], onDelete: Cascade)
+  assignmentGuid  String?   @map("tarea_guid")
+  assignment      Resource? @relation(fields: [assignmentGuid], references: [guid], onDelete: SetNull)
+  // Título de la actividad al archivarla, por si después se borra.
+  assignmentTitle String    @map("tarea_titulo")
+
+  attachmentKey  String?          @map("url_archivo_adjunto")
+  attachmentName String?          @map("respuesta_texto")
+  status         SubmissionStatus @map("estado")
+  attemptNumber  Int              @map("intento_numero")
+  submittedAt    DateTime?        @map("fecha_entrega")
+  score          Decimal?         @map("calificacion") @db.Decimal(5, 2)
+  feedback       String?          @map("comentario_calificacion") @db.Text
+  archivedAt     DateTime         @default(now()) @map("fecha_archivo")
+
+  @@index([userGuid, courseGuid])
+  @@index([courseGuid])
+  @@map("lms_entregas_archivadas")
+}
+
+// ── Registro de subidas ────────────────────────────────────────────────────
+
+/**
+ * Quién subió cada archivo.
+ * Una clave sólo puede guardarse en un curso, recurso, firma o configuración si la subió
+ * quien la guarda: sin este registro, cualquiera podría apuntar a un archivo ajeno (de otro
+ * profesor o de la otra sede), descargarlo y, al sustituirlo, borrarlo.
+ */
+model StoredFile {
+  key          String   @id @map("clave") @db.VarChar(191)
+  folder       String   @map("carpeta") @db.VarChar(20)
+  uploaderGuid String   @map("subido_por")
+  country      Country  @map("pais")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  @@index([uploaderGuid])
+  @@map("lms_archivos")
 }

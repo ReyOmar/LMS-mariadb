@@ -29,5 +29,26 @@ services:
       timeout: 5s
       retries: 5
 
+  # Buzón de correo local. No recibe ni envía nada a internet: se queda con todo lo que
+  # la API intenta mandar y lo muestra en http://localhost:8025.
+  #
+  # Sirve para comprobar de verdad los flujos que dependen del correo —código de
+  # verificación, enlace de recuperación, bienvenida con clave temporal— sin necesidad de
+  # una cuenta de Brevo ni de un servidor SMTP real. Apunta el `.env` a él con:
+  #
+  #   SMTP_HOST="127.0.0.1"
+  #   SMTP_PORT="1025"
+  #
+  # SÓLO DESARROLLO, igual que la base de datos de arriba: este archivo no se despliega.
+  # En cPanel el correo sale por Brevo (BREVO_API_KEY) y este buzón no existe. No son
+  # alternativas entre sí: Brevo envía en producción, esto retiene en tu máquina.
+  buzon:
+    image: axllent/mailpit:latest
+    container_name: lms-buzon
+    restart: unless-stopped
+    ports:
+      - '1025:1025' # SMTP al que escribe la API
+      - '8025:8025' # Interfaz web para leer lo enviado
+
 volumes:
   datos_mariadb:

@@ -10,18 +10,18 @@ import { UpdateTemplateDto } from './dto/update-template.dto';
  * según el país del destinatario, de modo que un solo texto sirve para ambas. Editarlas
  * queda reservado al administrador.
  */
-@Roles('ADMINISTRADOR')
-@Controller('mail-templates')
+@Roles('ADMIN')
+@Controller('email-templates')
 export class MailController {
   constructor(private readonly mail: MailService) {}
 
-  @Get('/eventos')
-  getEventos() {
-    return this.mail.getEventos();
+  @Get('/events')
+  getEvents() {
+    return this.mail.getEvents();
   }
 
   @Put('/:id')
-  actualizarPlantilla(@Param('id', ParseIntPipe) id: number, @Body() dto: UpdateTemplateDto) {
-    return this.mail.actualizarPlantilla(id, dto);
+  updateTemplate(@Param('id', ParseIntPipe) id: number, @Body() dto: UpdateTemplateDto) {
+    return this.mail.updateTemplate(id, dto);
   }
 }

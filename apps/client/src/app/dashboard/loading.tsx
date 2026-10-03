@@ -1,5 +1,5 @@
-﻿import { PageLoader } from "@/components/ui/PageLoader";
+import { PageLoader } from '@/components/ui/PageLoader';
 
 export default function DashboardLoading() {
-  return <PageLoader message="Cargando panel..." />;
+  return <PageLoader message="Cargando panel…" />;
 }

@@ -1,5 +1,6 @@
 import { IsNotEmpty, IsOptional, IsString, MaxLength } from 'class-validator';
-import { Transform } from 'class-transformer';
+import { MAX_PASSWORD_LENGTH } from '../../common/domain/password';
+import { Trim } from '../../common/validation/transforms';
 
 /**
  * Datos editables del propio perfil.
@@ -12,23 +13,23 @@ export class UpdateProfileDto {
   @IsString()
   @IsNotEmpty({ message: 'El nombre no puede quedar vacío.' })
   @MaxLength(100)
-  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
-  nombre?: string;
+  @Trim()
+  firstName?: string;
 
   @IsOptional()
   @IsString()
   @IsNotEmpty({ message: 'El apellido no puede quedar vacío.' })
   @MaxLength(100)
-  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
-  apellido?: string;
+  @Trim()
+  lastName?: string;
 
   @IsOptional()
   @IsString()
-  @MaxLength(128)
-  contrasena_actual?: string;
+  @MaxLength(MAX_PASSWORD_LENGTH)
+  currentPassword?: string;
 
   @IsOptional()
   @IsString()
-  @MaxLength(128)
-  nueva_contrasena?: string;
+  @MaxLength(MAX_PASSWORD_LENGTH)
+  newPassword?: string;
 }

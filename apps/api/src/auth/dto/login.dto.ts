@@ -1,24 +1,25 @@
 import { IsEmail, IsNotEmpty, IsString, MaxLength } from 'class-validator';
-import { Transform } from 'class-transformer';
-import { EsPais } from '../../common/dto/pais.validator';
-import { Pais } from '../../common/domain/pais';
+import { MAX_PASSWORD_LENGTH } from '../../common/domain/password';
+import { NormalizeEmail } from '../../common/validation/transforms';
+import { IsCountry } from '../../common/validation/country.validator';
+import { Country } from '../../common/domain/country';
 
 export class LoginDto {
   @IsEmail({}, { message: 'El correo electrónico no es válido.' })
   @IsNotEmpty({ message: 'El correo es obligatorio.' })
   @MaxLength(255)
-  @Transform(({ value }) => (typeof value === 'string' ? value.trim().toLowerCase() : value))
+  @NormalizeEmail()
   email: string;
 
   @IsString()
   @IsNotEmpty({ message: 'La contraseña es obligatoria.' })
-  @MaxLength(128)
-  contrasena: string;
+  @MaxLength(MAX_PASSWORD_LENGTH)
+  password: string;
 
   /**
    * Sede desde la que se intenta entrar. Debe coincidir con la de la cuenta: es la
    * comprobación que impide que un usuario de una sede acceda a los datos de la otra.
    */
-  @EsPais()
-  pais: Pais;
+  @IsCountry()
+  country: Country;
 }

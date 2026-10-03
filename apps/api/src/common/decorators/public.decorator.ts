@@ -1,9 +1,9 @@
 import { SetMetadata } from '@nestjs/common';
 
-export const IS_PUBLIC_KEY = 'isPublic';
+export const IS_PUBLIC = 'isPublic';
 
 /**
- * Mark a route as public — bypasses JWT authentication.
- * Use on login, registration, and other public endpoints.
+ * Marca una ruta como pública: no exige token.
+ * Se usa en el acceso, el alta y demás rutas abiertas.
  */
-export const Public = () => SetMetadata(IS_PUBLIC_KEY, true);
+export const Public = () => SetMetadata(IS_PUBLIC, true);

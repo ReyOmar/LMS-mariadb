@@ -1,0 +1,191 @@
+import {
+  groupByModuleAndAssignment,
+  scoreDistribution,
+  normalizeTypedScore,
+  gradedPercent,
+  statusBreakdown,
+  countryTotals,
+  mergeFirstPage,
+  type CourseSummary,
+} from './grouping';
+import type { SubmissionToGrade } from '@/types/models';
+
+/**
+ * Lo que la pantalla de calificación calcula por su cuenta.
+ *
+ * La lista de entregas llega por páginas, así que aquí no se cuenta nada del curso: las
+ * cifras vienen del servidor y estas funciones sólo les dan forma o agrupan lo que hay
+ * cargado. Lo que se fija aquí es que no vuelvan a confundirse las dos cosas —una cifra de
+ * curso sacada de una página sería falsa— y que las etiquetas de la gráfica sigan el
+ * umbral de cada curso en vez de un número escrito a mano.
+ */
+
+const COURSE: CourseSummary = {
+  courseGuid: 'curso-1',
+  title: 'Manejo defensivo',
+  coverImage: null,
+  threshold: 80,
+  borderline: 60,
+  total: 3000,
+  pending: 1800,
+  graded: 1200,
+  scores: { low: 200, mid: 400, high: 600 },
+};
+
+function submission(guid: string, status: string, module: string, assignment: string): SubmissionToGrade {
+  return {
+    guid,
+    status,
+    moduleTitle: module,
+    assignmentTitle: assignment,
+  } as SubmissionToGrade;
+}
+
+describe('scoreDistribution', () => {
+  it('describe los tramos respecto al umbral del curso, no a números sueltos', () => {
+    const ranges = scoreDistribution(COURSE);
+
+    expect(ranges.map((t) => t.name)).toEqual(['Por debajo de 60', 'Entre 60 y 79', '80 o más (aprobado)']);
+  });
+
+  it('sigue al umbral cuando el curso lo cambia', () => {
+    const ranges = scoreDistribution({ ...COURSE, threshold: 70, borderline: 53 });
+
+    expect(ranges.map((t) => t.name)).toEqual(['Por debajo de 53', 'Entre 53 y 69', '70 o más (aprobado)']);
+  });
+
+  it('usa los recuentos del servidor tal cual: son del curso entero, no de la página', () => {
+    expect(scoreDistribution(COURSE).map((t) => t.count)).toEqual([200, 400, 600]);
+  });
+
+  it('oculta los tramos vacíos para no dibujar barras de altura cero', () => {
+    const ranges = scoreDistribution({ ...COURSE, scores: { low: 0, mid: 0, high: 5 } });
+
+    expect(ranges).toHaveLength(1);
+    expect(ranges[0].name).toBe('80 o más (aprobado)');
+  });
+});
+
+describe('statusBreakdown', () => {
+  it('reparte pendientes y calificadas', () => {
+    expect(statusBreakdown(3, 7).map((p) => [p.name, p.value])).toEqual([
+      ['Pendientes', 3],
+      ['Calificadas', 7],
+    ]);
+  });
+
+  it('sin entregas devuelve una porción gris en lugar de un hueco en blanco', () => {
+    const slices = statusBreakdown(0, 0);
+
+    expect(slices).toHaveLength(1);
+    expect(slices[0].name).toBe('Sin entregas');
+  });
+
+  it('no dibuja la porción que vale cero', () => {
+    expect(statusBreakdown(0, 4).map((p) => p.name)).toEqual(['Calificadas']);
+  });
+});
+
+describe('groupByModuleAndAssignment', () => {
+  const loaded = [
+    submission('e1', 'SUBMITTED', 'Módulo 1', 'Informe'),
+    submission('e2', 'GRADED', 'Módulo 1', 'Informe'),
+    submission('e3', 'IN_REVIEW', 'Módulo 1', 'Evaluación'),
+    submission('e4', 'GRADED', 'Módulo 2', 'Informe'),
+  ];
+
+  it('ordena en módulo → tarea → alumnos', () => {
+    const modules = groupByModuleAndAssignment(loaded);
+
+    expect(modules.map((m) => m.moduleTitle)).toEqual(['Módulo 1', 'Módulo 2']);
+    expect(modules[0].assignments.map((t) => t.assignmentTitle)).toEqual(['Informe', 'Evaluación']);
+  });
+
+  it('una reenviada cuenta como pendiente: vuelve a la cola del examinador', () => {
+    const [module] = groupByModuleAndAssignment(loaded);
+    const assessment = module.assignments.find((t) => t.assignmentTitle === 'Evaluación')!;
+
+    expect(assessment.pending).toBe(1);
+    expect(assessment.graded).toBe(0);
+  });
+
+  it('no funde dos tareas distintas que se llaman igual', () => {
+    // Agrupar por título sumaría en una sola fila los pendientes de las dos «Informe».
+    const first = { ...submission('x1', 'SUBMITTED', 'Módulo 1', 'Informe'), assignmentGuid: 'informe-a' };
+    const second = { ...submission('x2', 'SUBMITTED', 'Módulo 1', 'Informe'), assignmentGuid: 'informe-b' };
+
+    const [module] = groupByModuleAndAssignment([first, second]);
+
+    expect(module.assignments).toHaveLength(2);
+    expect(module.assignments.map((t) => t.pending)).toEqual([1, 1]);
+  });
+
+  it('da a cada grupo una clave propia aunque los títulos se repitan', () => {
+    const inFirst = { ...submission('y1', 'SUBMITTED', 'Módulo 1', 'Tarea'), moduleGuid: 'm1', assignmentGuid: 't1' };
+    const inSecond = { ...submission('y2', 'SUBMITTED', 'Módulo 1', 'Tarea'), moduleGuid: 'm2', assignmentGuid: 't2' };
+
+    const modules = groupByModuleAndAssignment([inFirst, inSecond]);
+
+    expect(modules.map((m) => m.key)).toEqual(['m1', 'm2']);
+    expect(modules.map((m) => m.assignments[0].key)).toEqual(['t1', 't2']);
+  });
+
+  it('las entregas sin módulo no se pierden: caen bajo un nombre por defecto', () => {
+    const modules = groupByModuleAndAssignment([submission('e9', 'SUBMITTED', '', '')]);
+
+    expect(modules[0].moduleTitle).toBe('Módulo principal');
+    expect(modules[0].assignments[0].assignmentTitle).toBe('Sin título');
+  });
+});
+
+describe('countryTotals', () => {
+  it('suma los cursos para la portada del selector', () => {
+    const other: CourseSummary = { ...COURSE, courseGuid: 'curso-2', total: 10, pending: 4, graded: 6 };
+
+    expect(countryTotals([COURSE, other])).toEqual({ total: 3010, pending: 1804, graded: 1206 });
+  });
+
+  it('sin cursos devuelve ceros, no NaN', () => {
+    expect(countryTotals([])).toEqual({ total: 0, pending: 0, graded: 0 });
+  });
+});
+
+describe('gradedPercent', () => {
+  it('redondea el avance de la corrección', () => {
+    expect(gradedPercent({ total: 3, graded: 1 })).toBe(33);
+  });
+
+  it('un curso sin entregas está al 100 %: no hay nada pendiente', () => {
+    expect(gradedPercent({ total: 0, graded: 0 })).toBe(100);
+  });
+});
+
+describe('normalizeTypedScore', () => {
+  it('deja pasar un entero y un decimal', () => {
+    expect(normalizeTypedScore('87.5')).toBe('87.5');
+  });
+
+  it('recorta lo que pasa de la nota máxima', () => {
+    expect(normalizeTypedScore('120')).toBe('100');
+  });
+
+  it('se queda con un solo decimal', () => {
+    expect(normalizeTypedScore('87.55')).toBe('87.5');
+  });
+
+  it('quita las letras en vez de dejar escribir algo que luego no vale', () => {
+    expect(normalizeTypedScore('8a7')).toBe('87');
+  });
+});
+
+describe('mergeFirstPage', () => {
+  const rows = (...guids: string[]) => guids.map((guid) => ({ guid }));
+
+  it('pone delante lo nuevo y conserva las páginas ya cargadas', () => {
+    expect(mergeFirstPage(rows('n', 'a', 'b'), rows('a', 'b', 'c', 'd'))).toEqual(rows('n', 'a', 'b', 'c', 'd'));
+  });
+
+  it('no repite una fila que ya venía en la página nueva', () => {
+    expect(mergeFirstPage(rows('c', 'a'), rows('a', 'b', 'c', 'd'))).toEqual(rows('c', 'a', 'b', 'd'));
+  });
+});

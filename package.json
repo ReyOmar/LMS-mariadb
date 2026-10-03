@@ -5,32 +5,30 @@
   "private": true,
   "scripts": {
     "init": "npm ci && concurrently --success all -n api,client -c green,cyan \"cd apps/api && npm ci && npx prisma generate\" \"cd apps/client && npm ci\"",
-    "dev:api": "dotenv -e .env -- npm run dev --prefix apps/api",
-    "dev:client": "dotenv -e .env -- npm run dev --prefix apps/client",
+    "dev:api": "dotenv -e .env -v NODE_ENV=development -- npm run dev --prefix apps/api",
+    "dev:client": "dotenv -e .env -v NODE_ENV=development -- npm run dev --prefix apps/client",
     "dev": "dotenv -e .env -- concurrently -k -n api,client -c green,cyan \"npm run dev:api\" \"npm run dev:client\"",
-    "build:api": "dotenv -e .env -- npm run build --prefix apps/api",
-    "build:client": "dotenv -e .env -- npm run build --prefix apps/client",
+    "build:api": "dotenv -e .env -v NODE_ENV=production -- npm run build --prefix apps/api",
+    "build:client": "dotenv -e .env -v NODE_ENV=production -- npm run build --prefix apps/client",
     "build": "concurrently --success all -n api,client -c green,cyan \"npm run build:api\" \"npm run build:client\"",
     "start:api": "dotenv -e .env -- npm run start --prefix apps/api",
-    "start:client": "dotenv -e .env -- npm run start --prefix apps/client",
+    "start:client": "dotenv -e .env -v PORT=3100 -- npm run start --prefix apps/client",
     "start": "concurrently -k -n api,client -c green,cyan \"npm run start:api\" \"npm run start:client\"",
     "db:generate": "cd apps/api && npx prisma generate",
     "db:push": "cd apps/api && dotenv -e ../../.env -- npx prisma db push",
     "db:seed": "cd apps/api && dotenv -e ../../.env -- npx prisma db seed",
     "typecheck": "concurrently --success all \"cd apps/api && npx tsc --noEmit\" \"cd apps/client && npx tsc --noEmit\"",
-    "test": "cd apps/api && npm test",
+    "lint": "concurrently --success all -n api,client -c green,cyan \"npm run lint --prefix apps/api\" \"npm run lint --prefix apps/client\"",
+    "test:api": "cd apps/api && npm test",
+    "test:client": "cd apps/client && npm test",
+    "test": "concurrently --success all -n api,client -c green,cyan \"npm run test:api\" \"npm run test:client\"",
     "prepare": "husky"
   },
-  "lint-staged": {
-    "apps/api/src/**/*.ts": [
-      "prettier --write"
-    ],
-    "apps/client/src/**/*.{ts,tsx}": [
-      "prettier --write"
-    ]
+  "engines": {
+    "node": "^20.19 || ^22.12 || >=24"
   },
   "devDependencies": {
-    "concurrently": "^9.0.0",
+    "concurrently": "^10.0.5",
     "dotenv-cli": "^10.0.0",
     "husky": "^9.1.7",
     "lint-staged": "^17.0.3",

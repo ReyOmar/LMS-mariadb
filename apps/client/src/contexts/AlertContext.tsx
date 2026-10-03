@@ -1,67 +1,89 @@
 'use client';
 
 import React, { createContext, useContext, useState, useCallback, useMemo, useRef, useEffect, ReactNode } from 'react';
-import { AlertTriangle, CheckCircle, Info, XCircle, X } from 'lucide-react';
+import { AlertTriangle, CheckCircle, Info, XCircle, X, type LucideIcon } from 'lucide-react';
+import { useDialog } from '@/hooks/useDialog';
 
-let toastIdCounter = 0;
+/**
+ * Avisos al usuario: diálogos, mensajes pasajeros y confirmaciones.
+ *
+ * ## Cuál usar
+ *
+ * | Situación | Herramienta | Por qué |
+ * |---|---|---|
+ * | Algo salió bien | `notify.success` | No interrumpe: el usuario ya está en lo siguiente |
+ * | No se pudo cargar la pantalla | `notify.error` | La pantalla queda vacía; el aviso explica el hueco sin bloquear |
+ * | Falló algo que el usuario pidió | `showAlert.error` | Creyó que se guardó: hay que detenerlo y decírselo |
+ * | Hace falta decidir antes de seguir | `showConfirmation` | Borrados y acciones que no se deshacen |
+ *
+ * La regla de fondo: **se bloquea sólo cuando ignorar el aviso llevaría al usuario a creer
+ * algo falso**. Un listado que no carga se nota; una nota que no se guardó, no.
+ *
+ * Ningún fallo debe quedarse sólo en `console.error`: la consola no la mira nadie mientras
+ * usa el campus.
+ */
+
+let toastCounter = 0;
 
 type AlertType = 'success' | 'error' | 'warning' | 'info';
-type ConfirmVariant = 'danger' | 'warning' | 'info';
+type ConfirmationStyle = 'danger' | 'warning' | 'info';
 
 interface AlertState {
   open: boolean;
   type: AlertType;
   title: string;
   message: string;
-  autoClose: number | false; // ms to auto-close, false to disable
+  /** Milisegundos hasta cerrarse solo; `false` lo desactiva. */
+  autoClose: number | false;
 }
 
-interface ConfirmState {
+interface ConfirmationState {
   open: boolean;
   title: string;
   message: string;
   confirmText: string;
-  variant: ConfirmVariant;
+  variant: ConfirmationStyle;
   onConfirm: () => void;
   onCancel: () => void;
 }
 
-interface ToastItem {
+interface Toast {
   id: number;
   type: AlertType;
   title: string;
   message: string;
-  duration: number; // ms
+  durationMs: number;
   closing: boolean;
 }
 
-interface AlertContextType {
-  showAlert: {
-    success: (title: string, message?: string, autoClose?: number | false) => void;
-    error: (title: string, message?: string, autoClose?: number | false) => void;
-    warning: (title: string, message?: string, autoClose?: number | false) => void;
-    info: (title: string, message?: string, autoClose?: number | false) => void;
-  };
-  showToast: {
-    success: (title: string, message?: string) => void;
-    error: (title: string, message?: string) => void;
-    warning: (title: string, message?: string) => void;
-    info: (title: string, message?: string) => void;
-  };
-  showConfirm: (title: string, message: string, confirmText?: string, variant?: ConfirmVariant) => Promise<boolean>;
+type ShowAlert = (title: string, message?: string, autoClose?: number | false) => void;
+type Notify = (title: string, message?: string) => void;
+
+interface Alerts {
+  /** Diálogo que interrumpe: se usa cuando ignorarlo dejaría al usuario creyendo algo falso. */
+  showAlert: Record<AlertType, ShowAlert>;
+  /** Mensaje pasajero, que no interrumpe lo que se esté haciendo. */
+  notify: Record<AlertType, Notify>;
+  showConfirmation: (
+    title: string,
+    message: string,
+    confirmText?: string,
+    style?: ConfirmationStyle,
+  ) => Promise<boolean>;
 }
 
-const AlertContext = createContext<AlertContextType | undefined>(undefined);
+const AlertsContext = createContext<Alerts | undefined>(undefined);
 
-// Default auto-close times per type (ms)
-const AUTO_CLOSE_DEFAULTS: Record<AlertType, number | false> = {
+/** Cuánto tarda en cerrarse solo cada tipo de diálogo, en milisegundos. */
+const AUTO_CLOSE_MS: Record<AlertType, number | false> = {
   success: 3000,
-  error: false, // errors stay until dismissed
+  error: false, // los errores se quedan hasta que alguien los cierra
   warning: 5000,
   info: 4000,
 };
 
-const TOAST_DEFAULTS: Record<AlertType, number> = {
+/** Cuánto dura a la vista cada tipo de mensaje pasajero, en milisegundos. */
+const TOAST_DURATION_MS: Record<AlertType, number> = {
   success: 3500,
   error: 6000,
   warning: 5000,
@@ -69,6 +91,55 @@ const TOAST_DEFAULTS: Record<AlertType, number> = {
 };
 
 const MAX_TOASTS = 3;
+
+/** Icono y clases de color de cada tipo de aviso. */
+const ALERT_STYLES: Record<
+  AlertType,
+  { icon: LucideIcon; iconColor: string; iconBackground: string; border: string; bar: string; button: string }
+> = {
+  success: {
+    icon: CheckCircle,
+    iconColor: 'text-emerald-500',
+    iconBackground: 'bg-emerald-500/15',
+    border: 'border-l-emerald-500',
+    bar: 'bg-emerald-500',
+    button: 'bg-success hover:bg-success/90 text-success-foreground',
+  },
+  error: {
+    icon: XCircle,
+    iconColor: 'text-red-500',
+    iconBackground: 'bg-red-500/15',
+    border: 'border-l-red-500',
+    bar: 'bg-red-500',
+    button: 'bg-red-600 hover:bg-red-700 text-white',
+  },
+  warning: {
+    icon: AlertTriangle,
+    iconColor: 'text-amber-500',
+    iconBackground: 'bg-amber-500/15',
+    border: 'border-l-amber-500',
+    bar: 'bg-amber-500',
+    button: 'bg-amber-500 hover:bg-amber-600 text-amber-950',
+  },
+  info: {
+    icon: Info,
+    iconColor: 'text-blue-500',
+    iconBackground: 'bg-blue-500/15',
+    border: 'border-l-blue-500',
+    bar: 'bg-blue-500',
+    button: 'bg-blue-600 hover:bg-blue-700 text-white',
+  },
+};
+
+const CONFIRMATION_STYLES: Record<ConfirmationStyle, { background: string; icon: string; button: string }> = {
+  danger: { background: 'bg-red-500/15', icon: 'text-red-500', button: 'bg-red-600 hover:bg-red-700 text-white' },
+  warning: {
+    background: 'bg-amber-500/15',
+    icon: 'text-amber-500',
+    button: 'bg-amber-500 hover:bg-amber-600 text-amber-950',
+  },
+  info: { background: 'bg-blue-500/15', icon: 'text-blue-500', button: 'bg-blue-600 hover:bg-blue-700 text-white' },
+};
 
 export function AlertProvider({ children }: { children: ReactNode }) {
   const [alert, setAlert] = useState<AlertState>({
@@ -78,7 +149,7 @@ export function AlertProvider({ children }: { children: ReactNode }) {
     message: '',
     autoClose: false,
   });
-  const [confirm, setConfirm] = useState<ConfirmState>({
+  const [confirmation, setConfirmation] = useState<ConfirmationState>({
     open: false,
     title: '',
     message: '',
@@ -88,22 +159,9 @@ export function AlertProvider({ children }: { children: ReactNode }) {
     onCancel: () => {},
   });
   const [closing, setClosing] = useState(false);
-  const autoCloseTimerRef = useRef<NodeJS.Timeout | null>(null);
-  const [toasts, setToasts] = useState<ToastItem[]>([]);
-  const toastTimersRef = useRef<Map<number, NodeJS.Timeout>>(new Map());
-
-  // Auto-close logic
-  useEffect(() => {
-    if (autoCloseTimerRef.current) clearTimeout(autoCloseTimerRef.current);
-    if (alert.open && alert.autoClose && alert.autoClose > 0) {
-      autoCloseTimerRef.current = setTimeout(() => {
-        closeAlert();
-      }, alert.autoClose);
-    }
-    return () => {
-      if (autoCloseTimerRef.current) clearTimeout(autoCloseTimerRef.current);
-    };
-  }, [alert.open, alert.autoClose]);
+  const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [toasts, setToasts] = useState<Toast[]>([]);
+  const toastTimers = useRef<Map<number, ReturnType<typeof setTimeout>>>(new Map());
 
   const closeAlert = useCallback(() => {
     setClosing(true);
@@ -113,208 +171,131 @@ export function AlertProvider({ children }: { children: ReactNode }) {
     }, 150);
   }, []);
 
-  const displayAlert = useCallback((type: AlertType, title: string, message?: string, autoClose?: number | false) => {
-    const resolvedAutoClose = autoClose !== undefined ? autoClose : AUTO_CLOSE_DEFAULTS[type];
+  // Cierre automático de los diálogos que lo piden.
+  useEffect(() => {
+    if (closeTimer.current) clearTimeout(closeTimer.current);
+    if (alert.open && alert.autoClose && alert.autoClose > 0) {
+      closeTimer.current = setTimeout(closeAlert, alert.autoClose);
+    }
+    return () => {
+      if (closeTimer.current) clearTimeout(closeTimer.current);
+    };
+  }, [alert.open, alert.autoClose, closeAlert]);
+
+  const show = useCallback((type: AlertType, title: string, message?: string, autoClose?: number | false) => {
     setClosing(false);
-    setAlert({ open: true, type, title, message: message || '', autoClose: resolvedAutoClose });
+    setAlert({ open: true, type, title, message: message || '', autoClose: autoClose ?? AUTO_CLOSE_MS[type] });
   }, []);
 
-  // El objeto se memoriza: si cambiara de identidad en cada render, cualquier efecto o
-  // `useCallback` que lo tenga como dependencia se repetiría en bucle.
-  const showAlertObj = useMemo(
+  // Los objetos se memorizan: si cambiaran de identidad en cada render, cualquier efecto o
+  // `useCallback` que los tenga como dependencia se repetiría en bucle.
+  const showAlert = useMemo<Alerts['showAlert']>(
     () => ({
-      success: (title: string, message?: string, autoClose?: number | false) =>
-        displayAlert('success', title, message, autoClose),
-      error: (title: string, message?: string, autoClose?: number | false) =>
-        displayAlert('error', title, message, autoClose),
-      warning: (title: string, message?: string, autoClose?: number | false) =>
-        displayAlert('warning', title, message, autoClose),
-      info: (title: string, message?: string, autoClose?: number | false) =>
-        displayAlert('info', title, message, autoClose),
+      success: (title, message, autoClose) => show('success', title, message, autoClose),
+      error: (title, message, autoClose) => show('error', title, message, autoClose),
+      warning: (title, message, autoClose) => show('warning', title, message, autoClose),
+      info: (title, message, autoClose) => show('info', title, message, autoClose),
     }),
-    [displayAlert],
+    [show],
   );
 
-  const dismissToast = useCallback((id: number) => {
-    setToasts((prev) => prev.map((t) => (t.id === id ? { ...t, closing: true } : t)));
+  const closeToast = useCallback((id: number) => {
+    setToasts((prev) => prev.map((toast) => (toast.id === id ? { ...toast, closing: true } : toast)));
     setTimeout(() => {
-      setToasts((prev) => prev.filter((t) => t.id !== id));
+      setToasts((prev) => prev.filter((toast) => toast.id !== id));
     }, 250);
-    const timer = toastTimersRef.current.get(id);
+    const timer = toastTimers.current.get(id);
     if (timer) {
       clearTimeout(timer);
-      toastTimersRef.current.delete(id);
+      toastTimers.current.delete(id);
     }
   }, []);
 
   const addToast = useCallback(
     (type: AlertType, title: string, message?: string) => {
-      const id = ++toastIdCounter;
-      const duration = TOAST_DEFAULTS[type];
-      const newToast: ToastItem = { id, type, title, message: message || '', duration, closing: false };
+      const id = ++toastCounter;
+      const durationMs = TOAST_DURATION_MS[type];
+      const toast: Toast = { id, type, title, message: message || '', durationMs, closing: false };
 
       setToasts((prev) => {
-        const updated = [...prev, newToast];
-        // Remove oldest if exceeding max
-        if (updated.length > MAX_TOASTS) {
-          const oldest = updated[0];
-          const oldTimer = toastTimersRef.current.get(oldest.id);
-          if (oldTimer) {
-            clearTimeout(oldTimer);
-            toastTimersRef.current.delete(oldest.id);
-          }
-          return updated.slice(1);
+        const updated = [...prev, toast];
+        if (updated.length <= MAX_TOASTS) return updated;
+
+        // Si se acumulan, cae el más antiguo.
+        const oldest = updated[0];
+        const oldestTimer = toastTimers.current.get(oldest.id);
+        if (oldestTimer) {
+          clearTimeout(oldestTimer);
+          toastTimers.current.delete(oldest.id);
         }
-        return updated;
+        return updated.slice(1);
       });
 
-      const timer = setTimeout(() => {
-        dismissToast(id);
-      }, duration);
-      toastTimersRef.current.set(id, timer);
+      toastTimers.current.set(
+        id,
+        setTimeout(() => closeToast(id), durationMs),
+      );
     },
-    [dismissToast],
+    [closeToast],
   );
 
-  const showToastObj = useMemo(
+  const notify = useMemo<Alerts['notify']>(
     () => ({
-      success: (title: string, message?: string) => addToast('success', title, message),
-      error: (title: string, message?: string) => addToast('error', title, message),
-      warning: (title: string, message?: string) => addToast('warning', title, message),
-      info: (title: string, message?: string) => addToast('info', title, message),
+      success: (title, message) => addToast('success', title, message),
+      error: (title, message) => addToast('error', title, message),
+      warning: (title, message) => addToast('warning', title, message),
+      info: (title, message) => addToast('info', title, message),
     }),
     [addToast],
   );
 
-  const showConfirm = useCallback(
+  const showConfirmation = useCallback(
     (
       title: string,
       message: string,
       confirmText = 'Confirmar',
-      variant: ConfirmVariant = 'danger',
+      variant: ConfirmationStyle = 'danger',
     ): Promise<boolean> => {
       return new Promise((resolve) => {
-        setConfirm({
+        const answer = (confirmed: boolean) => {
+          setConfirmation((prev) => ({ ...prev, open: false }));
+          resolve(confirmed);
+        };
+        setConfirmation({
           open: true,
           title,
           message,
           confirmText,
           variant,
-          onConfirm: () => {
-            setConfirm((prev) => ({ ...prev, open: false }));
-            resolve(true);
-          },
-          onCancel: () => {
-            setConfirm((prev) => ({ ...prev, open: false }));
-            resolve(false);
-          },
+          onConfirm: () => answer(true),
+          onCancel: () => answer(false),
         });
       });
     },
     [],
   );
 
-  const getAlertIcon = (type: AlertType) => {
-    switch (type) {
-      case 'success':
-        return <CheckCircle className="h-8 w-8 text-emerald-500" />;
-      case 'error':
-        return <XCircle className="h-8 w-8 text-red-500" />;
-      case 'warning':
-        return <AlertTriangle className="h-8 w-8 text-amber-500" />;
-      case 'info':
-        return <Info className="h-8 w-8 text-blue-500" />;
-    }
-  };
+  const contextValue = useMemo(() => ({ showAlert, notify, showConfirmation }), [showAlert, notify, showConfirmation]);
 
-  const getAlertColorClass = (type: AlertType) => {
-    switch (type) {
-      case 'success':
-        return 'bg-emerald-500/15 text-emerald-500';
-      case 'error':
-        return 'bg-red-500/15 text-red-500';
-      case 'warning':
-        return 'bg-amber-500/15 text-amber-500';
-      case 'info':
-        return 'bg-blue-500/15 text-blue-500';
-    }
-  };
+  const alertStyle = ALERT_STYLES[alert.type];
+  const AlertIcon = alertStyle.icon;
+  const confirmationStyle = CONFIRMATION_STYLES[confirmation.variant];
+  const autoCloseMs = typeof alert.autoClose === 'number' && alert.autoClose > 0 ? alert.autoClose : null;
 
-  const getToastBorderClass = (type: AlertType) => {
-    switch (type) {
-      case 'success':
-        return 'border-l-emerald-500';
-      case 'error':
-        return 'border-l-red-500';
-      case 'warning':
-        return 'border-l-amber-500';
-      case 'info':
-        return 'border-l-blue-500';
-    }
-  };
-
-  const getToastProgressClass = (type: AlertType) => {
-    switch (type) {
-      case 'success':
-        return 'bg-emerald-500';
-      case 'error':
-        return 'bg-red-500';
-      case 'warning':
-        return 'bg-amber-500';
-      case 'info':
-        return 'bg-blue-500';
-    }
-  };
-
-  const getToastIcon = (type: AlertType) => {
-    switch (type) {
-      case 'success':
-        return <CheckCircle className="h-5 w-5 text-emerald-500" />;
-      case 'error':
-        return <XCircle className="h-5 w-5 text-red-500" />;
-      case 'warning':
-        return <AlertTriangle className="h-5 w-5 text-amber-500" />;
-      case 'info':
-        return <Info className="h-5 w-5 text-blue-500" />;
-    }
-  };
-
-  const getAlertButtonClass = (type: AlertType) => {
-    switch (type) {
-      case 'success':
-        return 'bg-emerald-500 hover:bg-emerald-600';
-      case 'error':
-        return 'bg-red-500 hover:bg-red-600';
-      case 'warning':
-        return 'bg-amber-500 hover:bg-amber-600';
-      case 'info':
-        return 'bg-blue-500 hover:bg-blue-600';
-    }
-  };
-
-  const getConfirmColors = (variant: ConfirmVariant) => {
-    switch (variant) {
-      case 'danger':
-        return { bg: 'bg-red-500/15', icon: 'text-red-500', btn: 'bg-red-500 hover:bg-red-600' };
-      case 'warning':
-        return { bg: 'bg-amber-500/15', icon: 'text-amber-500', btn: 'bg-amber-500 hover:bg-amber-600' };
-      case 'info':
-        return { bg: 'bg-blue-500/15', icon: 'text-blue-500', btn: 'bg-blue-500 hover:bg-blue-600' };
-    }
-  };
-
-  const confirmColors = getConfirmColors(confirm.variant);
-
-  const valorDelContexto = useMemo(
-    () => ({ showAlert: showAlertObj, showToast: showToastObj, showConfirm }),
-    [showAlertObj, showToastObj, showConfirm],
-  );
+  const alertDialog = useDialog({ open: alert.open, onClose: closeAlert, role: 'alertdialog' });
+  const confirmationDialog = useDialog({
+    open: confirmation.open,
+    onClose: confirmation.onCancel,
+    role: 'alertdialog',
+  });
+  const alertMessageId = `${alertDialog.titleId}-message`;
+  const confirmationMessageId = `${confirmationDialog.titleId}-message`;
 
   return (
-    <AlertContext.Provider value={valorDelContexto}>
+    <AlertsContext.Provider value={contextValue}>
       {children}
 
-      {/* Alert Modal */}
+      {/* Ventana de aviso */}
       {alert.open && (
         <div
           className={`fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 transition-opacity duration-150 ${closing ? 'opacity-0' : 'opacity-100 animate-in fade-in duration-200'}`}
@@ -323,12 +304,10 @@ export function AlertProvider({ children }: { children: ReactNode }) {
           }}
         >
           <div
-            role="alertdialog"
-            aria-live="assertive"
-            aria-label={alert.title}
-            className={`bg-card border border-border rounded-2xl shadow-2xl w-full max-w-md overflow-hidden transition-all duration-150 ${closing ? 'scale-95 opacity-0' : 'animate-in zoom-in-95 duration-200'}`}
+            {...alertDialog.dialogProps}
+            aria-describedby={alert.message ? alertMessageId : undefined}
+            className={`relative bg-card border border-border rounded-2xl shadow-2xl w-full max-w-md overflow-hidden transition-all duration-150 ${closing ? 'scale-95 opacity-0' : 'animate-in zoom-in-95 duration-200'}`}
           >
-            {/* Close button */}
             <button
               type="button"
               onClick={closeAlert}
@@ -339,20 +318,26 @@ export function AlertProvider({ children }: { children: ReactNode }) {
             </button>
             <div className="p-6 flex flex-col items-center text-center">
               <div
-                className={`w-16 h-16 rounded-full flex items-center justify-center mb-4 ${getAlertColorClass(alert.type).split(' ')[0]}`}
+                className={`w-16 h-16 rounded-full flex items-center justify-center mb-4 ${alertStyle.iconBackground}`}
               >
-                {getAlertIcon(alert.type)}
+                <AlertIcon className={`h-8 w-8 ${alertStyle.iconColor}`} />
               </div>
-              <h3 className="text-xl font-bold text-foreground mb-2">{alert.title}</h3>
-              {alert.message && <p className="text-muted-foreground text-sm leading-relaxed">{alert.message}</p>}
+              <h3 id={alertDialog.titleId} className="text-xl font-bold text-foreground mb-2">
+                {alert.title}
+              </h3>
+              {alert.message && (
+                <p id={alertMessageId} className="text-muted-foreground text-sm leading-relaxed">
+                  {alert.message}
+                </p>
+              )}
             </div>
-            {/* Progress bar for auto-close */}
-            {alert.autoClose && alert.autoClose > 0 && (
+            {/* Barra del cierre automático */}
+            {autoCloseMs !== null && (
               <div className="px-6 -mt-2 mb-2">
                 <div className="h-1 bg-muted rounded-full overflow-hidden">
                   <div
-                    className={`h-full rounded-full ${getAlertButtonClass(alert.type)?.split(' ')[0]}`}
-                    style={{ animation: `shrink ${alert.autoClose}ms linear forwards` }}
+                    className={`h-full rounded-full ${alertStyle.bar}`}
+                    style={{ animation: `shrink ${autoCloseMs}ms linear forwards` }}
                   />
                 </div>
               </div>
@@ -361,7 +346,7 @@ export function AlertProvider({ children }: { children: ReactNode }) {
               <button
                 type="button"
                 onClick={closeAlert}
-                className={`w-full text-white font-bold py-3 rounded-xl transition-colors shadow-md ${getAlertButtonClass(alert.type)}`}
+                className={`w-full font-bold py-3 rounded-xl transition-colors shadow-md ${alertStyle.button}`}
               >
                 Aceptar
               </button>
@@ -370,93 +355,110 @@ export function AlertProvider({ children }: { children: ReactNode }) {
         </div>
       )}
 
-      {/* Confirm Modal */}
-      {confirm.open && (
+      {/* Ventana de confirmación */}
+      {confirmation.open && (
         <div
           className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 backdrop-blur-sm animate-in fade-in duration-200 p-4"
           onClick={(e) => {
-            if (e.target === e.currentTarget) confirm.onCancel();
+            if (e.target === e.currentTarget) confirmation.onCancel();
           }}
         >
           <div
-            role="alertdialog"
-            aria-live="assertive"
-            aria-label={confirm.title}
+            {...confirmationDialog.dialogProps}
+            aria-describedby={confirmation.message ? confirmationMessageId : undefined}
             className="bg-card border border-border rounded-2xl shadow-2xl w-full max-w-md overflow-hidden animate-in zoom-in-95 duration-200"
           >
             <div className="p-6 flex flex-col items-center text-center">
-              <div className={`w-16 h-16 ${confirmColors.bg} rounded-full flex items-center justify-center mb-4`}>
-                <AlertTriangle className={`h-8 w-8 ${confirmColors.icon}`} />
+              <div
+                className={`w-16 h-16 ${confirmationStyle.background} rounded-full flex items-center justify-center mb-4`}
+              >
+                <AlertTriangle className={`h-8 w-8 ${confirmationStyle.icon}`} />
               </div>
-              <h3 className="text-xl font-bold text-foreground mb-2">{confirm.title}</h3>
-              {confirm.message && <p className="text-muted-foreground text-sm leading-relaxed">{confirm.message}</p>}
+              <h3 id={confirmationDialog.titleId} className="text-xl font-bold text-foreground mb-2">
+                {confirmation.title}
+              </h3>
+              {confirmation.message && (
+                <p id={confirmationMessageId} className="text-muted-foreground text-sm leading-relaxed">
+                  {confirmation.message}
+                </p>
+              )}
             </div>
             <div className="px-6 pb-6 flex items-center gap-3">
               <button
                 type="button"
-                onClick={confirm.onCancel}
+                onClick={confirmation.onCancel}
                 className="flex-1 bg-muted hover:bg-border text-foreground font-bold py-3 rounded-xl transition-colors"
               >
                 Cancelar
               </button>
               <button
                 type="button"
-                onClick={confirm.onConfirm}
-                className={`flex-1 ${confirmColors.btn} text-white font-bold py-3 rounded-xl transition-colors shadow-md`}
+                onClick={confirmation.onConfirm}
+                className={`flex-1 ${confirmationStyle.button} font-bold py-3 rounded-xl transition-colors shadow-md`}
               >
-                {confirm.confirmText}
+                {confirmation.confirmText}
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* Toast Stack */}
+      {/* Pila de mensajes pasajeros. Las animaciones `shrink` y `toast-shrink` están en globals.css.
+          Sigue activa con una ventana abierta: sus avisos tienen que leerse y poder cerrarse. */}
       <div
+        data-keep-active
         className="fixed top-4 right-4 z-[9998] flex flex-col gap-3 pointer-events-none"
         style={{ maxWidth: '420px', width: '100%' }}
       >
-        {toasts.map((toast) => (
-          <div
-            key={toast.id}
-            className={`pointer-events-auto bg-card border border-border/60 rounded-xl shadow-2xl overflow-hidden border-l-4 ${getToastBorderClass(toast.type)} transition-all duration-250 ${
-              toast.closing ? 'opacity-0 translate-x-8 scale-95' : 'animate-in slide-in-from-right-4 duration-300'
-            }`}
-          >
-            <div className="flex items-start gap-3 p-4">
-              <div className="shrink-0 mt-0.5">{getToastIcon(toast.type)}</div>
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-bold text-foreground leading-tight">{toast.title}</p>
-                {toast.message && <p className="text-xs text-muted-foreground mt-1 leading-relaxed">{toast.message}</p>}
+        {toasts.map((toast) => {
+          const toastStyle = ALERT_STYLES[toast.type];
+          const ToastIcon = toastStyle.icon;
+          return (
+            <div
+              key={toast.id}
+              role={toast.type === 'error' ? 'alert' : 'status'}
+              className={`pointer-events-auto bg-card border border-border/60 rounded-xl shadow-2xl overflow-hidden border-l-4 ${toastStyle.border} transition-all duration-250 ${
+                toast.closing ? 'opacity-0 translate-x-8 scale-95' : 'animate-in slide-in-from-right-4 duration-300'
+              }`}
+            >
+              <div className="flex items-start gap-3 p-4">
+                <div className="shrink-0 mt-0.5">
+                  <ToastIcon className={`h-5 w-5 ${toastStyle.iconColor}`} />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-bold text-foreground leading-tight">{toast.title}</p>
+                  {toast.message && (
+                    <p className="text-xs text-muted-foreground mt-1 leading-relaxed">{toast.message}</p>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => closeToast(toast.id)}
+                  aria-label="Cerrar aviso"
+                  className="shrink-0 p-1 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
               </div>
-              <button
-                type="button"
-                onClick={() => dismissToast(toast.id)}
-                className="shrink-0 p-1 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
-              >
-                <X className="h-3.5 w-3.5" />
-              </button>
+              {/* Tiempo que le queda a la vista */}
+              <div className="h-1 bg-muted/30">
+                <div
+                  className={`h-full rounded-r-full ${toastStyle.bar}`}
+                  style={{ animation: `toast-shrink ${toast.durationMs}ms linear forwards` }}
+                />
+              </div>
             </div>
-            {/* Animated progress bar */}
-            <div className="h-1 bg-muted/30">
-              <div
-                className={`h-full rounded-r-full ${getToastProgressClass(toast.type)}`}
-                style={{ animation: `toast-shrink ${toast.duration}ms linear forwards` }}
-              />
-            </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
-
-      {/* Animations defined in globals.css: @keyframes shrink, @keyframes toast-shrink */}
-    </AlertContext.Provider>
+    </AlertsContext.Provider>
   );
 }
 
-export function useAlert() {
-  const context = useContext(AlertContext);
+export function useAlerts(): Alerts {
+  const context = useContext(AlertsContext);
   if (context === undefined) {
-    throw new Error('useAlert must be used within an AlertProvider');
+    throw new Error('useAlerts debe usarse dentro de AlertProvider.');
   }
   return context;
 }

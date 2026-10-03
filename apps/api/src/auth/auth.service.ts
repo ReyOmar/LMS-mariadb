@@ -2,31 +2,51 @@ import { BadRequestException, Injectable, Logger, NotFoundException, Unauthorize
 import { JwtService } from '@nestjs/jwt';
 import * as crypto from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
-import { MailService } from '../mail/mail.service';
+import { MAIL_CONCURRENCY, MailService } from '../mail/mail.service';
 import { RealtimeService } from '../realtime/realtime.service';
-import { ConfiguracionService } from '../configuracion/configuracion.service';
-import { TokenBlacklistService } from './token-blacklist.service';
-import { Pais, nombrePais } from '../common/domain/pais';
-import { cifrar, coincide, validarFortaleza } from '../common/domain/password';
-import { JwtClaims, RolUsuario } from '../common/interfaces/jwt-payload.interface';
-import { SolicitarAccesoDto } from './dto/solicitar-acceso.dto';
+import { SettingsService } from '../settings/settings.service';
+import { Country, countryName } from '../common/domain/country';
+import { countRejected, settleWithConcurrency } from '../common/domain/concurrency';
+import {
+  generateTemporaryPassword,
+  hashPassword,
+  passwordMatches,
+  simulatePasswordCheck,
+  validateStrength,
+} from '../common/domain/password';
+import { JwtClaims, UserRole } from '../common/interfaces/jwt-payload.interface';
+import { RequestAccessDto } from './dto/request-access.dto';
 
 /** Vigencia del enlace de recuperación de contraseña. */
-const VIGENCIA_RESET_MS = 60 * 60 * 1000;
+const RESET_VALIDITY_MS = 60 * 60 * 1000;
 
 /** Vigencia del código de verificación de correo. */
-const VIGENCIA_CODIGO_MS = 10 * 60 * 1000;
+const CODE_VALIDITY_MS = 10 * 60 * 1000;
 
 /** Espera mínima entre dos envíos de código al mismo correo. */
-const ESPERA_REENVIO_MS = 60 * 1000;
+const RESEND_DELAY_MS = 60 * 1000;
+
+/** Fallos tolerados antes de invalidar un código de verificación. */
+const MAX_CODE_ATTEMPTS = 5;
 
 /**
  * Respuesta neutra de recuperación de contraseña.
  * Se devuelve exista o no la cuenta, para no revelar qué correos están registrados.
  */
-const RESPUESTA_RECUPERACION = {
+const PASSWORD_RESET_RESPONSE = {
   message: 'Si el correo está registrado, recibirás un enlace de recuperación en unos minutos.',
 };
+
+/** El único mensaje con el que se rechaza un acceso: no dice cuál de los datos falló. */
+const INVALID_CREDENTIALS = 'Correo o contraseña incorrectos.';
+
+/**
+ * El único mensaje con el que se rechaza el primer acceso. Cubre a la vez la cuenta que no
+ * existe, la que ya tiene contraseña propia y la clave temporal mal escrita, porque esta
+ * ruta es pública y no puede servir para averiguar qué correos están registrados.
+ */
+const INVALID_TEMPORARY_PASSWORD =
+  'No se pudo verificar la contraseña temporal. Si ya creaste la tuya, entra con ella o usa «¿Olvidaste tu contraseña?».';
 
 /**
  * Flujos de autenticación: entrada, alta de cuenta y recuperación de contraseña.
@@ -41,8 +61,7 @@ export class AuthService {
     private readonly jwtService: JwtService,
     private readonly mail: MailService,
     private readonly realtime: RealtimeService,
-    private readonly configuracion: ConfiguracionService,
-    private readonly tokenBlacklist: TokenBlacklistService,
+    private readonly settings: SettingsService,
   ) {}
 
   // ── Entrada ──────────────────────────────────────────────────────────────
@@ -56,93 +75,83 @@ export class AuthService {
    * persona. La única excepción es la solicitud pendiente de aprobación, que el propio
    * solicitante necesita poder consultar.
    */
-  async login(email: string, contrasena: string, pais: Pais) {
-    const usuario = await this.prisma.usuarios.findUnique({ where: { email } });
+  async login(email: string, password: string, country: Country) {
+    const user = await this.prisma.user.findUnique({ where: { email } });
 
-    if (!usuario) {
-      const solicitud = await this.prisma.lms_solicitudes_acceso.findUnique({ where: { email } });
-      if (solicitud?.estado === 'PENDIENTE') {
-        throw new UnauthorizedException('Tu solicitud de acceso aún está pendiente de aprobación.');
+    // Sin cuenta, o con una cuenta sin contraseña —que sólo puede recuperarse probando que
+    // el correo es suyo—, se dedica el mismo tiempo que a una comprobación real: si no, la
+    // rapidez de la respuesta delataría qué correos están registrados.
+    if (!user?.password) {
+      await simulatePasswordCheck(password);
+
+      if (!user) {
+        const accessRequest = await this.prisma.accessRequest.findUnique({ where: { email } });
+        if (accessRequest?.status === 'PENDING') {
+          throw new UnauthorizedException('Tu solicitud de acceso aún está pendiente de aprobación.');
+        }
+        if (accessRequest?.status === 'REJECTED') {
+          throw new UnauthorizedException('Tu solicitud de acceso fue rechazada. Contacta con el administrador.');
+        }
       }
-      if (solicitud?.estado === 'RECHAZADA') {
-        throw new UnauthorizedException('Tu solicitud de acceso fue rechazada. Contacta con el administrador.');
-      }
-      throw new UnauthorizedException('Correo o contraseña incorrectos.');
+      throw new UnauthorizedException(INVALID_CREDENTIALS);
     }
 
-    if (!usuario.activo) {
-      throw new UnauthorizedException('Tu cuenta está desactivada. Contacta con el administrador.');
+    if (!(await passwordMatches(password, user.password))) {
+      throw new UnauthorizedException(INVALID_CREDENTIALS);
     }
 
-    if (!(await coincide(contrasena, usuario.contrasena))) {
-      // Una cuenta aprobada sin contraseña todavía necesita el flujo de primer acceso,
-      // pero sólo se revela después de comprobar que la sede coincide.
-      if (!usuario.contrasena && usuario.pais === pais) {
-        return this.respuestaPrimerAcceso(usuario.email, usuario.nombre, 'Crea tu contraseña para entrar.');
-      }
-      throw new UnauthorizedException('Correo o contraseña incorrectos.');
+    if (user.country !== country) {
+      this.logger.warn(`Intento de acceso a ${country} con cuenta de ${user.country}: ${email}`);
+      throw new UnauthorizedException(INVALID_CREDENTIALS);
     }
 
-    if (usuario.pais !== pais) {
-      this.logger.warn(`Intento de acceso a ${pais} con cuenta de ${usuario.pais}: ${email}`);
-      throw new UnauthorizedException('Correo o contraseña incorrectos.');
-    }
-
-    // Quien siga usando la clave temporal debe cambiarla antes de obtener un token.
-    const claveTemporal = await this.configuracion.getContrasenaDefecto(usuario.pais);
-    if (usuario.usa_clave_defecto && contrasena === claveTemporal) {
-      return this.respuestaPrimerAcceso(
-        usuario.email,
-        usuario.nombre,
-        'Estás usando la contraseña temporal. Crea una contraseña propia para continuar.',
-      );
+    // Quien siga con una contraseña que no eligió —la clave por defecto de la sede, una
+    // temporal del administrador o la aleatoria de la semilla— la conoce alguien más: debe
+    // cambiarla antes de obtener un token.
+    if (user.usesDefaultPassword) {
+      return {
+        requireSetup: true as const,
+        message: 'Estás usando una contraseña temporal. Crea una contraseña propia para continuar.',
+        user: { email: user.email, firstName: user.firstName },
+      };
     }
 
     return {
       message: 'Inicio de sesión exitoso.',
-      token: await this.emitirToken(usuario),
-      user: this.perfilPublico(usuario),
+      token: await this.issueToken(user),
+      user: await this.publicProfile(user),
     };
-  }
-
-  private respuestaPrimerAcceso(email: string, nombre: string, message: string) {
-    return { requireSetup: true as const, message, user: { email, nombre } };
   }
 
   /**
    * Fija la contraseña definitiva en el primer acceso y devuelve ya la sesión iniciada,
    * para que el usuario no tenga que escribir sus credenciales dos veces seguidas.
    */
-  async setupPassword(email: string, contrasenaTemporal: string, nuevaContrasena: string) {
-    validarFortaleza(nuevaContrasena);
+  async setInitialPassword(email: string, temporaryPassword: string, newPassword: string) {
+    validateStrength(newPassword);
 
-    const usuario = await this.prisma.usuarios.findUnique({ where: { email } });
-    if (!usuario) throw new NotFoundException('No existe ninguna cuenta con ese correo.');
-    if (!usuario.activo) throw new UnauthorizedException('Tu cuenta está desactivada.');
+    const user = await this.prisma.user.findUnique({ where: { email } });
 
-    if (!usuario.usa_clave_defecto) {
-      throw new BadRequestException(
-        'Esta cuenta ya tiene contraseña propia. Si la olvidaste, usa "Recuperar contraseña".',
-      );
+    // Sólo entra por aquí una cuenta que aún tiene su clave temporal. Una cuenta sin
+    // contraseña se recupera demostrando que el correo es suyo, no con este formulario.
+    const hash = user?.usesDefaultPassword ? user.password : null;
+    const temporaryPasswordValid = hash
+      ? await passwordMatches(temporaryPassword, hash)
+      : (await simulatePasswordCheck(temporaryPassword), false);
+
+    if (!user || !temporaryPasswordValid) {
+      throw new UnauthorizedException(INVALID_TEMPORARY_PASSWORD);
     }
 
-    const temporalValida = usuario.contrasena
-      ? await coincide(contrasenaTemporal, usuario.contrasena)
-      : contrasenaTemporal === (await this.configuracion.getContrasenaDefecto(usuario.pais));
-
-    if (!temporalValida) {
-      throw new UnauthorizedException('La contraseña temporal no es correcta.');
-    }
-
-    const actualizado = await this.prisma.usuarios.update({
-      where: { guid: usuario.guid },
-      data: { contrasena: await cifrar(nuevaContrasena), usa_clave_defecto: false },
+    const updated = await this.prisma.user.update({
+      where: { guid: user.guid },
+      data: { password: await hashPassword(newPassword), usesDefaultPassword: false },
     });
 
     return {
       message: 'Contraseña establecida correctamente.',
-      token: await this.emitirToken(actualizado),
-      user: this.perfilPublico(actualizado),
+      token: await this.issueToken(updated),
+      user: await this.publicProfile(updated),
     };
   }
 
@@ -153,53 +162,53 @@ export class AuthService {
    * anterior queda invalidado. La certificación acredita que una persona concreta hizo la
    * formación, así que compartir credenciales la vaciaría de sentido.
    *
-   * La sesión anterior se marca como revocada además de sustituirse, para que su token
-   * deje de valer de inmediato aunque el guard leyera una copia cacheada de la cuenta.
+   * Al sustituirse `currentSessionJti`, el token anterior deja de valer en la siguiente
+   * petición: el guardián sólo acepta el que coincide.
    */
-  private async emitirToken(usuario: {
+  private async issueToken(user: {
     guid: string;
     email: string;
-    rol: RolUsuario;
-    pais: Pais;
-    sesion_actual_jti?: string | null;
+    role: UserRole;
+    country: Country;
+    currentSessionJti?: string | null;
   }): Promise<string> {
     const jti = crypto.randomUUID();
     const claims: JwtClaims = {
-      sub: usuario.guid,
+      sub: user.guid,
       jti,
-      email: usuario.email,
-      role: usuario.rol,
-      pais: usuario.pais,
+      email: user.email,
+      role: user.role,
+      country: user.country,
     };
 
     const token = await this.jwtService.signAsync(claims);
 
-    if (usuario.sesion_actual_jti) {
-      await this.tokenBlacklist.revocarSesion(usuario.guid, usuario.sesion_actual_jti);
-    }
-    await this.prisma.usuarios.update({ where: { guid: usuario.guid }, data: { sesion_actual_jti: jti } });
+    await this.prisma.user.update({ where: { guid: user.guid }, data: { currentSessionJti: jti } });
 
     // Avisa al dispositivo anterior para que limpie su estado y explique lo ocurrido.
-    this.realtime.revocarSesion(usuario.guid, 'sesion_desplazada');
+    // Sólo si lo había: en el primer acceso no hay ninguna sesión a la que desplazar.
+    if (user.currentSessionJti) this.realtime.revokeSession(user.guid, 'session_displaced');
 
     return token;
   }
 
-  private perfilPublico(usuario: {
+  private async publicProfile(user: {
     guid: string;
-    rol: RolUsuario;
-    nombre: string;
-    apellido: string;
-    pais: Pais;
-    foto_url: string | null;
+    role: UserRole;
+    firstName: string;
+    lastName: string;
+    country: Country;
+    photoUrl: string | null;
+    dataConsentVersion: string | null;
   }) {
     return {
-      guid: usuario.guid,
-      role: usuario.rol,
-      nombre: usuario.nombre,
-      apellido: usuario.apellido,
-      pais: usuario.pais,
-      foto_url: usuario.foto_url,
+      guid: user.guid,
+      role: user.role,
+      firstName: user.firstName,
+      lastName: user.lastName,
+      country: user.country,
+      photoUrl: user.photoUrl,
+      consentRequired: user.dataConsentVersion !== (await this.settings.legalVersion(user.country)),
     };
   }
 
@@ -210,83 +219,87 @@ export class AuthService {
    * Exige que el correo haya sido verificado antes y consume esa verificación, para que un
    * mismo código no sirva para solicitudes repetidas.
    */
-  async requestAccess(dto: SolicitarAccesoDto) {
-    const yaExiste = await this.prisma.usuarios.findUnique({
+  async requestAccess(dto: RequestAccessDto) {
+    const alreadyExists = await this.prisma.user.findUnique({
       where: { email: dto.email },
       select: { guid: true },
     });
-    if (yaExiste) {
+    if (alreadyExists) {
       throw new BadRequestException('Este correo ya tiene una cuenta. Inicia sesión directamente.');
     }
 
-    const verificacion = await this.prisma.lms_verificacion_email.findFirst({
-      where: { email: dto.email, verificado: true, expires_at: { gt: new Date() } },
-      orderBy: { created_at: 'desc' },
+    const verification = await this.prisma.emailVerification.findFirst({
+      where: { email: dto.email, verified: true, expiresAt: { gt: new Date() } },
+      orderBy: { createdAt: 'desc' },
     });
-    if (!verificacion) {
+    if (!verification) {
       throw new BadRequestException('Verifica tu correo electrónico antes de enviar la solicitud.');
     }
 
-    const previa = await this.prisma.lms_solicitudes_acceso.findUnique({ where: { email: dto.email } });
-    if (previa?.estado === 'PENDIENTE') {
+    const existing = await this.prisma.accessRequest.findUnique({ where: { email: dto.email } });
+    if (existing?.status === 'PENDING') {
       throw new BadRequestException('Ya tienes una solicitud pendiente de revisión con este correo.');
     }
 
-    const solicitud = await this.prisma.$transaction(async (tx) => {
-      // La verificación se consume aquí para que no pueda reutilizarse.
-      await tx.lms_verificacion_email.deleteMany({ where: { email: dto.email } });
+    const consentVersion = await this.settings.legalVersion(dto.country);
 
-      const datos = {
-        nombre: dto.nombre,
-        apellido: dto.apellido,
-        rol_pedido: dto.rol_pedido,
-        pais: dto.pais,
-        estado: 'PENDIENTE' as const,
-        motivo: null,
+    const accessRequest = await this.prisma.$transaction(async (tx) => {
+      // La verificación se consume aquí para que no pueda reutilizarse.
+      await tx.emailVerification.deleteMany({ where: { email: dto.email } });
+
+      const data = {
+        firstName: dto.firstName,
+        lastName: dto.lastName,
+        requestedRole: dto.requestedRole,
+        country: dto.country,
+        status: 'PENDING' as const,
+        rejectionReason: null,
+        consentAt: new Date(),
+        consentVersion,
       };
 
-      return previa
-        ? tx.lms_solicitudes_acceso.update({ where: { id: previa.id }, data: datos })
-        : tx.lms_solicitudes_acceso.create({ data: { email: dto.email, ...datos } });
+      return existing
+        ? tx.accessRequest.update({ where: { id: existing.id }, data })
+        : tx.accessRequest.create({ data: { email: dto.email, ...data } });
     });
 
-    this.realtime.emitirARol('request:new', { id: solicitud.id }, dto.pais, 'ADMINISTRADOR');
-    void this.avisarAdministradores(dto);
+    this.realtime.emitToRole('request:new', { id: accessRequest.id }, dto.country, 'ADMIN');
+    void this.notifyAdmins(dto);
 
     return {
-      message: `Solicitud enviada a los administradores de ${nombrePais(dto.pais)}. Recibirás un correo cuando sea revisada.`,
-      request_id: solicitud.id,
+      message: `Solicitud enviada a los administradores de ${countryName(dto.country)}. Recibirás un correo cuando sea revisada.`,
+      requestId: accessRequest.id,
     };
   }
 
   /** Avisa por correo a los administradores de la sede. Los fallos se registran, no se propagan. */
-  private async avisarAdministradores(dto: SolicitarAccesoDto): Promise<void> {
+  private async notifyAdmins(dto: RequestAccessDto): Promise<void> {
     try {
-      const admins = await this.prisma.usuarios.findMany({
-        where: { rol: 'ADMINISTRADOR', activo: true, pais: dto.pais },
-        select: { email: true, nombre: true },
+      const admins = await this.prisma.user.findMany({
+        where: { role: 'ADMIN', country: dto.country },
+        select: { email: true, firstName: true },
       });
-      await Promise.all(
-        admins.map((admin) =>
-          this.mail.sendNewAccessRequest(admin.email, admin.nombre, {
-            nombre: dto.nombre,
-            apellido: dto.apellido,
-            email: dto.email,
-            rol_pedido: dto.rol_pedido,
-            pais: dto.pais,
-          }),
-        ),
+      const results = await settleWithConcurrency(admins, MAIL_CONCURRENCY, (admin) =>
+        this.mail.sendAccessRequest(admin.email, admin.firstName, {
+          firstName: dto.firstName,
+          lastName: dto.lastName,
+          email: dto.email,
+          requestedRole: dto.requestedRole,
+          country: dto.country,
+        }),
       );
+      const failed = countRejected(results);
+      if (failed > 0) this.logger.error(`No se pudo avisar a ${failed} administrador(es) de ${dto.country}`);
     } catch (error) {
-      this.logger.error(`No se pudo avisar a los administradores de ${dto.pais}`, error);
+      this.logger.error(`No se pudo avisar a los administradores de ${dto.country}`, error);
     }
   }
 
   /** Solicitudes pendientes de la sede del administrador que consulta. */
-  getPendingRequests(pais: Pais) {
-    return this.prisma.lms_solicitudes_acceso.findMany({
-      where: { estado: 'PENDIENTE', pais },
-      orderBy: { created_at: 'desc' },
+  getPendingAccessRequests(country: Country) {
+    return this.prisma.accessRequest.findMany({
+      where: { status: 'PENDING', country },
+      orderBy: { createdAt: 'desc' },
     });
   }
 
@@ -295,68 +308,69 @@ export class AuthService {
    * La cuenta hereda el país de la solicitud, nunca el del administrador: así una
    * solicitud sólo puede acabar en la sede a la que se dirigió.
    */
-  async approveRequest(id: number, pais: Pais) {
-    const solicitud = await this.solicitudPendiente(id, pais);
+  async approveAccessRequest(id: number, country: Country) {
+    const accessRequest = await this.pendingRequest(id, country);
 
-    const claveTemporal = await this.configuracion.getContrasenaDefecto(solicitud.pais);
-    const hash = await cifrar(claveTemporal);
+    const temporaryPassword = generateTemporaryPassword();
+    const hash = await hashPassword(temporaryPassword);
 
-    const usuario = await this.prisma.$transaction(async (tx) => {
+    const user = await this.prisma.$transaction(async (tx) => {
       // Comprobación dentro de la transacción: entre la solicitud y la aprobación
       // pudo crearse la cuenta por otra vía.
-      const duplicado = await tx.usuarios.findUnique({ where: { email: solicitud.email }, select: { guid: true } });
-      if (duplicado) {
+      const duplicate = await tx.user.findUnique({ where: { email: accessRequest.email }, select: { guid: true } });
+      if (duplicate) {
         throw new BadRequestException('Ya existe una cuenta con ese correo. Rechaza la solicitud.');
       }
 
-      await tx.lms_solicitudes_acceso.update({ where: { id }, data: { estado: 'ACEPTADA', motivo: null } });
+      await tx.accessRequest.update({ where: { id }, data: { status: 'ACCEPTED', rejectionReason: null } });
 
-      return tx.usuarios.create({
+      return tx.user.create({
         data: {
-          email: solicitud.email,
-          nombre: solicitud.nombre,
-          apellido: solicitud.apellido,
-          rol: solicitud.rol_pedido,
-          pais: solicitud.pais,
-          contrasena: hash,
-          usa_clave_defecto: true,
+          email: accessRequest.email,
+          firstName: accessRequest.firstName,
+          lastName: accessRequest.lastName,
+          role: accessRequest.requestedRole,
+          country: accessRequest.country,
+          password: hash,
+          usesDefaultPassword: true,
+          dataConsentAt: accessRequest.consentAt,
+          dataConsentVersion: accessRequest.consentVersion,
         },
       });
     });
 
-    this.realtime.emitirARol('request:resolved', { id, action: 'approved' }, pais, 'ADMINISTRADOR');
-    this.realtime.emitirARol('user:created', { guid: usuario.guid }, pais, 'ADMINISTRADOR');
+    this.realtime.emitToRole('request:resolved', { id, action: 'approved' }, country, 'ADMIN');
+    this.realtime.emitToRole('user:created', { guid: user.guid }, country, 'ADMIN');
 
     this.mail
-      .sendWelcomeEmail(solicitud.email, solicitud.nombre, claveTemporal, solicitud.pais)
+      .sendWelcome(accessRequest.email, accessRequest.firstName, temporaryPassword, accessRequest.country)
       .catch((error) => this.logger.error('No se pudo enviar el correo de bienvenida', error));
 
-    return { message: 'Solicitud aprobada. La cuenta se creó con una contraseña temporal.' };
+    return { message: 'Solicitud aprobada. La persona recibirá por correo una contraseña temporal propia.' };
   }
 
   /**
-   * Rechaza una solicitud conservando el registro.
-   * Antes se borraba la fila, lo que permitía volver a solicitar de inmediato y dejaba sin
-   * trazabilidad quién había sido rechazado y por qué.
+   * Rechaza una solicitud conservando el registro, para que quede constancia de quién fue
+   * rechazado y por qué.
    */
-  async rejectRequest(id: number, pais: Pais, motivo?: string) {
-    await this.solicitudPendiente(id, pais);
+  async rejectAccessRequest(id: number, country: Country, reason?: string) {
+    await this.pendingRequest(id, country);
 
-    await this.prisma.lms_solicitudes_acceso.update({
+    await this.prisma.accessRequest.update({
       where: { id },
-      data: { estado: 'RECHAZADA', motivo: motivo?.trim() || null },
+      data: { status: 'REJECTED', rejectionReason: reason?.trim() || null },
     });
 
-    this.realtime.emitirARol('request:resolved', { id, action: 'rejected' }, pais, 'ADMINISTRADOR');
+    this.realtime.emitToRole('request:resolved', { id, action: 'rejected' }, country, 'ADMIN');
     return { message: 'Solicitud rechazada.' };
   }
 
   /** Carga una solicitud comprobando que es de la sede del administrador y sigue pendiente. */
-  private async solicitudPendiente(id: number, pais: Pais) {
-    const solicitud = await this.prisma.lms_solicitudes_acceso.findFirst({ where: { id, pais } });
-    if (!solicitud) throw new NotFoundException('Solicitud no encontrada.');
-    if (solicitud.estado !== 'PENDIENTE') throw new BadRequestException('Esta solicitud ya fue procesada.');
-    return solicitud;
+  private async pendingRequest(id: number, country: Country) {
+    const accessRequest = await this.prisma.accessRequest.findFirst({ where: { id, country } });
+    if (!accessRequest) throw new NotFoundException('Solicitud no encontrada.');
+    if (accessRequest.status !== 'PENDING') throw new BadRequestException('Esta solicitud ya fue procesada.');
+    return accessRequest;
   }
 
   // ── Recuperación de contraseña ───────────────────────────────────────────
@@ -366,23 +380,23 @@ export class AuthService {
    * Los enlaces anteriores del mismo correo se invalidan para que sólo uno esté vivo.
    */
   async requestPasswordReset(email: string) {
-    const usuario = await this.prisma.usuarios.findUnique({ where: { email } });
-    if (!usuario || !usuario.activo) return RESPUESTA_RECUPERACION;
+    const user = await this.prisma.user.findUnique({ where: { email } });
+    if (!user) return PASSWORD_RESET_RESPONSE;
 
     const token = crypto.randomBytes(32).toString('hex');
 
     await this.prisma.$transaction([
-      this.prisma.lms_password_resets.updateMany({ where: { email, usado: false }, data: { usado: true } }),
-      this.prisma.lms_password_resets.create({
-        data: { email, token, expires_at: new Date(Date.now() + VIGENCIA_RESET_MS) },
+      this.prisma.passwordReset.updateMany({ where: { email, used: false }, data: { used: true } }),
+      this.prisma.passwordReset.create({
+        data: { email, token, expiresAt: new Date(Date.now() + RESET_VALIDITY_MS) },
       }),
     ]);
 
     this.mail
-      .sendPasswordResetEmail(email, token, usuario.nombre, usuario.pais)
+      .sendPasswordReset(email, token, user.firstName, user.country)
       .catch((error) => this.logger.error('No se pudo enviar el correo de recuperación', error));
 
-    return RESPUESTA_RECUPERACION;
+    return PASSWORD_RESET_RESPONSE;
   }
 
   /**
@@ -390,30 +404,31 @@ export class AuthService {
    * si el enlace se usó porque alguien perdió el control de la cuenta, el intruso queda
    * fuera de inmediato.
    */
-  async resetPassword(token: string, nuevaContrasena: string) {
-    validarFortaleza(nuevaContrasena);
+  async resetPassword(token: string, newPassword: string) {
+    validateStrength(newPassword);
 
-    const registro = await this.prisma.lms_password_resets.findUnique({ where: { token } });
-    if (!registro || registro.usado) {
+    const record = await this.prisma.passwordReset.findUnique({ where: { token } });
+    if (!record || record.used) {
       throw new BadRequestException('Este enlace no es válido o ya fue utilizado. Solicita uno nuevo.');
     }
-    if (registro.expires_at < new Date()) {
+    if (record.expiresAt < new Date()) {
       throw new BadRequestException('El enlace ha caducado. Solicita uno nuevo.');
     }
 
-    const usuario = await this.prisma.usuarios.findUnique({ where: { email: registro.email } });
-    if (!usuario) throw new BadRequestException('Este enlace no es válido. Solicita uno nuevo.');
+    const user = await this.prisma.user.findUnique({ where: { email: record.email } });
+    if (!user) throw new BadRequestException('Este enlace no es válido. Solicita uno nuevo.');
 
-    const hash = await cifrar(nuevaContrasena);
+    // Un enlace de recuperación se usa precisamente cuando la sesión anterior puede haber
+    // quedado expuesta: sin sesión vigente, su token deja de valer en la siguiente petición.
+    const hash = await hashPassword(newPassword);
     await this.prisma.$transaction([
-      this.prisma.usuarios.update({
-        where: { guid: usuario.guid },
-        data: { contrasena: hash, usa_clave_defecto: false },
+      this.prisma.user.update({
+        where: { guid: user.guid },
+        data: { password: hash, usesDefaultPassword: false, currentSessionJti: null },
       }),
-      this.prisma.lms_password_resets.update({ where: { id: registro.id }, data: { usado: true } }),
+      this.prisma.passwordReset.update({ where: { id: record.id }, data: { used: true } }),
     ]);
-
-    this.realtime.revocarSesion(usuario.guid, 'password_reset');
+    this.realtime.revokeSession(user.guid, 'password_reset');
 
     return { message: 'Contraseña restablecida. Ya puedes iniciar sesión.' };
   }
@@ -421,52 +436,76 @@ export class AuthService {
   // ── Verificación de correo ───────────────────────────────────────────────
 
   /** Envía un código de 6 dígitos para probar que el correo pertenece a quien solicita acceso. */
-  async sendEmailVerification(email: string) {
-    const yaExiste = await this.prisma.usuarios.findUnique({ where: { email }, select: { guid: true } });
-    if (yaExiste) {
+  async requestVerificationCode(email: string, country: Country) {
+    const alreadyExists = await this.prisma.user.findUnique({ where: { email }, select: { guid: true } });
+    if (alreadyExists) {
       throw new BadRequestException('Este correo ya tiene una cuenta. Inicia sesión directamente.');
     }
 
-    const reciente = await this.prisma.lms_verificacion_email.findFirst({
-      where: { email, created_at: { gt: new Date(Date.now() - ESPERA_REENVIO_MS) } },
+    const recent = await this.prisma.emailVerification.findFirst({
+      where: { email, createdAt: { gt: new Date(Date.now() - RESEND_DELAY_MS) } },
       select: { id: true },
     });
-    if (reciente) {
+    if (recent) {
       throw new BadRequestException('Ya te enviamos un código hace menos de un minuto. Revisa tu bandeja de entrada.');
     }
 
     // `randomInt` en lugar de `Math.random`: el código es un secreto de un solo uso.
-    const codigo = crypto.randomInt(0, 1_000_000).toString().padStart(6, '0');
+    const code = crypto.randomInt(0, 1_000_000).toString().padStart(6, '0');
 
     await this.prisma.$transaction([
-      this.prisma.lms_verificacion_email.deleteMany({ where: { email } }),
-      this.prisma.lms_verificacion_email.create({
-        data: { email, codigo, expires_at: new Date(Date.now() + VIGENCIA_CODIGO_MS) },
+      this.prisma.emailVerification.deleteMany({ where: { email } }),
+      this.prisma.emailVerification.create({
+        data: { email, code, expiresAt: new Date(Date.now() + CODE_VALIDITY_MS) },
       }),
     ]);
 
-    await this.mail.sendEmailVerificationCode(email, codigo);
+    await this.mail.sendVerificationCode(email, code, country);
     return { message: 'Te enviamos un código de verificación a tu correo electrónico.' };
   }
 
-  /** Confirma el código recibido por correo. */
-  async confirmEmailVerification(email: string, codigo: string) {
-    const registro = await this.prisma.lms_verificacion_email.findFirst({
+  /**
+   * Confirma el código recibido por correo.
+   *
+   * Cada fallo se cuenta y, al llegar a {@link MAX_CODE_ATTEMPTS}, el código deja de
+   * valer. El límite por dirección IP no basta: seis dígitos son pocos y probarlos desde
+   * muchas direcciones es barato.
+   */
+  async confirmEmailVerification(email: string, code: string) {
+    const record = await this.prisma.emailVerification.findFirst({
       where: { email },
-      orderBy: { created_at: 'desc' },
+      orderBy: { createdAt: 'desc' },
     });
 
-    if (!registro || registro.codigo !== codigo) {
+    if (!record) {
       throw new BadRequestException('El código no es correcto. Revísalo e inténtalo de nuevo.');
     }
-    if (registro.expires_at < new Date()) {
+    if (record.expiresAt < new Date()) {
       throw new BadRequestException('El código ha caducado. Solicita uno nuevo.');
     }
-
-    if (!registro.verificado) {
-      await this.prisma.lms_verificacion_email.update({ where: { id: registro.id }, data: { verificado: true } });
+    if (record.attempts >= MAX_CODE_ATTEMPTS) {
+      throw new BadRequestException('Has agotado los intentos con este código. Solicita uno nuevo.');
     }
 
-    return { message: 'Correo verificado correctamente.', verificado: true };
+    if (record.code !== code) {
+      const { attempts } = await this.prisma.emailVerification.update({
+        where: { id: record.id },
+        data: { attempts: { increment: 1 } },
+        select: { attempts: true },
+      });
+
+      const remaining = Math.max(MAX_CODE_ATTEMPTS - attempts, 0);
+      throw new BadRequestException(
+        remaining > 0
+          ? `El código no es correcto. Te quedan ${remaining} intento(s).`
+          : 'Has agotado los intentos con este código. Solicita uno nuevo.',
+      );
+    }
+
+    if (!record.verified) {
+      await this.prisma.emailVerification.update({ where: { id: record.id }, data: { verified: true } });
+    }
+
+    return { message: 'Correo verificado correctamente.', verified: true };
   }
 }

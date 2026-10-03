@@ -1,62 +1,64 @@
 import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
 import type { ServerResponse } from 'http';
-import { Pais } from '../common/domain/pais';
-import { JwtPayload, RolUsuario } from '../common/interfaces/jwt-payload.interface';
-import { DestinoRealtime, EventoRealtime, MensajeRealtime } from './realtime.events';
+import { Country } from '../common/domain/country';
+import { JwtPayload, UserRole } from '../common/interfaces/jwt-payload.interface';
+import { EventDestination, EventName, EventMessage } from './events';
 
 /**
  * Intervalo del comentario de mantenimiento del flujo. Apache y los proxies intermedios
  * cierran conexiones inactivas; un `:ping` periódico las mantiene vivas y detecta de
  * inmediato los clientes que ya no están.
  */
-const INTERVALO_LATIDO_MS = 25_000;
+const HEARTBEAT_INTERVAL_MS = 25_000;
 
 /** Conexiones simultáneas permitidas por usuario (pestañas abiertas). */
-const MAX_CONEXIONES_POR_USUARIO = 5;
+const MAX_CONNECTIONS_PER_USER = 5;
 
-interface Conexion {
+interface Connection {
   readonly id: number;
   readonly guid: string;
-  readonly pais: Pais;
-  readonly rol: RolUsuario;
+  readonly country: Country;
+  readonly role: UserRole;
   readonly res: ServerResponse;
 }
 
 /**
  * Tiempo real del LMS sobre Server-Sent Events.
  *
- * Se eligió SSE en lugar de WebSocket porque el despliegue vive en cPanel, donde Apache
- * no propaga la cabecera `Upgrade` y la conexión WebSocket nunca llega a establecerse.
- * SSE es HTTP/1.1 corriente: atraviesa cualquier proxy inverso sin configuración especial
- * y trae reconexión en el propio protocolo.
+ * Se usa SSE y no WebSocket porque el despliegue vive en cPanel, donde Apache no propaga
+ * la cabecera `Upgrade`. SSE es HTTP/1.1 corriente: atraviesa cualquier proxy inverso sin
+ * configuración especial y trae reconexión en el propio protocolo.
  *
- * El flujo es unidireccional (servidor → navegador), que es todo lo que el sistema
- * necesita. La única acción que iba en sentido contrario —el bloqueo de edición de un
- * curso— es ahora una petición HTTP normal (`POST /realtime/cursos/:guid/bloqueo`).
+ * El flujo es unidireccional (servidor → navegador); lo que va en sentido contrario, como
+ * el aviso de edición de un curso, son peticiones HTTP normales.
  *
- * Todo envío exige un destino con país: ningún evento cruza entre sedes.
+ * Todo envío exige un destino con país, y todo estado que se reparte —presencia y cursos
+ * en edición— se filtra por país: nada cruza entre sedes.
  */
 @Injectable()
 export class RealtimeService implements OnModuleDestroy {
   private readonly logger = new Logger(RealtimeService.name);
-  private readonly conexiones = new Map<number, Conexion>();
-  private readonly latido: ReturnType<typeof setInterval>;
-  private siguienteId = 1;
+  private readonly connections = new Map<number, Connection>();
+  private readonly heartbeat: ReturnType<typeof setInterval>;
+  private nextId = 1;
 
-  /** curso_guid → quién lo está editando. Se reconstruye solo al reconectar los clientes. */
-  private readonly editoresPorCurso = new Map<string, EditorDeCurso>();
+  /**
+   * courseGuid → quién lo está editando. Sólo tiene entradas de editores conectados: se
+   * vacía al liberar el aviso o al cerrarse el último flujo de quien lo tenía.
+   */
+  private readonly editorsByCourse = new Map<string, CourseEditor>();
 
   constructor() {
-    this.latido = setInterval(() => this.emitirLatido(), INTERVALO_LATIDO_MS);
-    this.latido.unref?.();
+    this.heartbeat = setInterval(() => this.emitHeartbeat(), HEARTBEAT_INTERVAL_MS);
+    this.heartbeat.unref?.();
   }
 
   onModuleDestroy(): void {
-    clearInterval(this.latido);
-    for (const conexion of this.conexiones.values()) {
-      this.cerrar(conexion);
+    clearInterval(this.heartbeat);
+    for (const connection of this.connections.values()) {
+      this.close(connection);
     }
-    this.conexiones.clear();
+    this.connections.clear();
   }
 
   // ── Ciclo de vida de una conexión ────────────────────────────────────────
@@ -65,41 +67,45 @@ export class RealtimeService implements OnModuleDestroy {
    * Da de alta un flujo SSE ya preparado por el controlador.
    * @returns Función para darlo de baja, que el controlador invoca al cerrarse la conexión.
    */
-  registrar(usuario: JwtPayload, res: ServerResponse): () => void {
-    this.limitarConexionesDe(usuario.sub);
+  register(user: JwtPayload, res: ServerResponse): () => void {
+    this.limitConnectionsFor(user.sub);
 
-    const conexion: Conexion = {
-      id: this.siguienteId++,
-      guid: usuario.sub,
-      pais: usuario.pais,
-      rol: usuario.role,
+    const connection: Connection = {
+      id: this.nextId++,
+      guid: user.sub,
+      country: user.country,
+      role: user.role,
       res,
     };
-    this.conexiones.set(conexion.id, conexion);
+    this.connections.set(connection.id, connection);
 
     // Estado inicial: quién está en línea y qué cursos están siendo editados.
-    this.enviarA(conexion, { event: 'presence:sync', data: { onlineUsers: this.enLinea(usuario.pais) }, ts: Date.now() });
-    this.enviarA(conexion, {
+    this.sendTo(connection, {
+      event: 'presence:sync',
+      data: { onlineUsers: this.onlineUsers(user.country) },
+      ts: Date.now(),
+    });
+    this.sendTo(connection, {
       event: 'course:editing-sync',
-      data: Object.fromEntries(this.editoresPorCurso),
+      data: this.editorsIn(user.country),
       ts: Date.now(),
     });
 
-    const eraPrimeraConexion = this.conexionesDe(usuario.sub).length === 1;
-    if (eraPrimeraConexion) {
-      this.anunciarPresencia(usuario.pais, usuario.sub, 'online');
+    const wasFirstConnection = this.connectionsOf(user.sub).length === 1;
+    if (wasFirstConnection) {
+      this.announcePresence(user.country, user.sub, 'online');
     }
 
-    return () => this.darDeBaja(conexion);
+    return () => this.removeConnection(connection);
   }
 
-  private darDeBaja(conexion: Conexion): void {
-    if (!this.conexiones.delete(conexion.id)) return;
+  private removeConnection(connection: Connection): void {
+    if (!this.connections.delete(connection.id)) return;
 
-    const sigueConectado = this.conexionesDe(conexion.guid).length > 0;
-    if (!sigueConectado) {
-      this.liberarCursosDe(conexion.guid);
-      this.anunciarPresencia(conexion.pais, conexion.guid, 'offline');
+    const stillConnected = this.connectionsOf(connection.guid).length > 0;
+    if (!stillConnected) {
+      this.releaseLocksHeldBy(connection.guid);
+      this.announcePresence(connection.country, connection.guid, 'offline');
     }
   }
 
@@ -107,19 +113,19 @@ export class RealtimeService implements OnModuleDestroy {
    * Evita que una pestaña dejada abierta con recargas continuas acumule flujos muertos.
    * Cierra las más antiguas cuando se supera el límite.
    */
-  private limitarConexionesDe(guid: string): void {
-    const propias = this.conexionesDe(guid);
-    if (propias.length < MAX_CONEXIONES_POR_USUARIO) return;
+  private limitConnectionsFor(guid: string): void {
+    const ownConnections = this.connectionsOf(guid);
+    if (ownConnections.length < MAX_CONNECTIONS_PER_USER) return;
 
-    const sobrantes = propias.slice(0, propias.length - MAX_CONEXIONES_POR_USUARIO + 1);
-    for (const conexion of sobrantes) {
-      this.conexiones.delete(conexion.id);
-      this.cerrar(conexion);
+    const excess = ownConnections.slice(0, ownConnections.length - MAX_CONNECTIONS_PER_USER + 1);
+    for (const connection of excess) {
+      this.connections.delete(connection.id);
+      this.close(connection);
     }
   }
 
-  private conexionesDe(guid: string): Conexion[] {
-    return [...this.conexiones.values()].filter((c) => c.guid === guid);
+  private connectionsOf(guid: string): Connection[] {
+    return [...this.connections.values()].filter((connection) => connection.guid === guid);
   }
 
   // ── Emisión ──────────────────────────────────────────────────────────────
@@ -130,40 +136,47 @@ export class RealtimeService implements OnModuleDestroy {
    * No lanza nunca: el tiempo real es accesorio y un fallo de red en un cliente no puede
    * tumbar la operación de negocio que lo originó.
    */
-  emitir(evento: EventoRealtime, datos: unknown, destino: DestinoRealtime): void {
-    const mensaje: MensajeRealtime = { event: evento, data: datos, ts: Date.now() };
-    for (const conexion of this.conexiones.values()) {
-      if (this.alcanza(conexion, destino)) {
-        this.enviarA(conexion, mensaje);
+  private emit(event: EventName, data: unknown, target: EventDestination): void {
+    const message: EventMessage = { event, data, ts: Date.now() };
+    for (const connection of this.connections.values()) {
+      if (this.reaches(connection, target)) {
+        this.sendTo(connection, message);
       }
     }
   }
 
   /** Atajo para el caso más común: avisar a usuarios concretos de una sede. */
-  emitirAUsuarios(evento: EventoRealtime, datos: unknown, pais: Pais, guids: readonly string[]): void {
+  emitToUsers(event: EventName, data: unknown, country: Country, guids: readonly string[]): void {
     if (guids.length === 0) return;
-    this.emitir(evento, datos, { tipo: 'usuarios', pais, guids });
+    this.emit(event, data, { type: 'users', country, guids });
   }
 
   /** Atajo para avisar a todos los usuarios de un rol dentro de una sede. */
-  emitirARol(evento: EventoRealtime, datos: unknown, pais: Pais, rol: RolUsuario): void {
-    this.emitir(evento, datos, { tipo: 'rol', pais, rol });
+  emitToRole(event: EventName, data: unknown, country: Country, role: UserRole): void {
+    this.emit(event, data, { type: 'role', country, role });
+  }
+
+  /** Avisa a quien gestiona un curso: los administradores de la sede y su examinador. */
+  emitToCourseStaff(event: EventName, data: unknown, country: Country, teacherGuid: string): void {
+    this.emit(event, data, { type: 'staff', country, guids: [teacherGuid] });
   }
 
   /** Atajo para avisar a toda una sede. */
-  emitirASede(evento: EventoRealtime, datos: unknown, pais: Pais): void {
-    this.emitir(evento, datos, { tipo: 'sede', pais });
+  emitToCountry(event: EventName, data: unknown, country: Country): void {
+    this.emit(event, data, { type: 'country', country });
   }
 
-  private alcanza(conexion: Conexion, destino: DestinoRealtime): boolean {
-    if (conexion.pais !== destino.pais) return false;
-    switch (destino.tipo) {
-      case 'usuarios':
-        return destino.guids.includes(conexion.guid);
-      case 'rol':
-        return conexion.rol === destino.rol;
-      case 'sede':
+  private reaches(connection: Connection, target: EventDestination): boolean {
+    if (connection.country !== target.country) return false;
+    switch (target.type) {
+      case 'users':
+        return target.guids.includes(connection.guid);
+      case 'role':
+        return connection.role === target.role;
+      case 'country':
         return true;
+      case 'staff':
+        return connection.role === 'ADMIN' || target.guids.includes(connection.guid);
     }
   }
 
@@ -173,27 +186,27 @@ export class RealtimeService implements OnModuleDestroy {
    * Avisa al usuario de que su sesión dejó de ser válida y cierra sus flujos.
    * El navegador reacciona limpiando el almacenamiento y volviendo al login.
    */
-  revocarSesion(guid: string, motivo: MotivoRevocacion): void {
-    for (const conexion of this.conexionesDe(guid)) {
-      this.enviarA(conexion, { event: 'session:revoked', data: { reason: motivo }, ts: Date.now() });
-      this.conexiones.delete(conexion.id);
-      this.cerrar(conexion);
+  revokeSession(guid: string, reason: RevocationReason): void {
+    for (const connection of this.connectionsOf(guid)) {
+      this.sendTo(connection, { event: 'session:revoked', data: { reason }, ts: Date.now() });
+      this.connections.delete(connection.id);
+      this.close(connection);
     }
   }
 
   // ── Presencia ────────────────────────────────────────────────────────────
 
   /** GUID de los usuarios con al menos un flujo abierto en la sede indicada. */
-  enLinea(pais: Pais): string[] {
+  private onlineUsers(country: Country): string[] {
     const guids = new Set<string>();
-    for (const conexion of this.conexiones.values()) {
-      if (conexion.pais === pais) guids.add(conexion.guid);
+    for (const connection of this.connections.values()) {
+      if (connection.country === country) guids.add(connection.guid);
     }
     return [...guids];
   }
 
-  private anunciarPresencia(pais: Pais, guid: string, estado: 'online' | 'offline'): void {
-    this.emitirASede('presence:update', { guid, status: estado, onlineUsers: this.enLinea(pais) }, pais);
+  private announcePresence(country: Country, guid: string, status: 'online' | 'offline'): void {
+    this.emitToCountry('presence:update', { guid, status, onlineUsers: this.onlineUsers(country) }, country);
   }
 
   // ── Bloqueo de edición de cursos ─────────────────────────────────────────
@@ -203,65 +216,69 @@ export class RealtimeService implements OnModuleDestroy {
    * Es un aviso cooperativo de interfaz, no un bloqueo de integridad: la consistencia real
    * la garantiza la regla de que un curso sólo se modifica en estado BORRADOR.
    */
-  tomarEdicionDeCurso(cursoGuid: string, editor: EditorDeCurso, pais: Pais): EditorDeCurso {
-    const actual = this.editoresPorCurso.get(cursoGuid);
-    if (actual && actual.guid !== editor.guid) return actual;
+  acquireCourseEdit(courseGuid: string, editor: CourseEditor): CourseEditor {
+    const current = this.editorsByCourse.get(courseGuid);
+    if (current && current.guid !== editor.guid) return current;
 
-    this.editoresPorCurso.set(cursoGuid, editor);
-    this.emitirASede('course:editing', { curso_guid: cursoGuid, editor }, pais);
+    this.editorsByCourse.set(courseGuid, editor);
+    this.emitToCountry('course:editing', { courseGuid, editor }, editor.country);
     return editor;
   }
 
-  /** Libera el aviso de edición si lo tenía el usuario indicado (o sin condición si se omite). */
-  liberarEdicionDeCurso(cursoGuid: string, pais: Pais, soloSiEs?: string): void {
-    const actual = this.editoresPorCurso.get(cursoGuid);
-    if (!actual) return;
-    if (soloSiEs && actual.guid !== soloSiEs) return;
+  /** Libera el aviso de edición, sólo si lo tenía el usuario indicado. */
+  releaseCourseLock(courseGuid: string, editorGuid: string): void {
+    const current = this.editorsByCourse.get(courseGuid);
+    if (current?.guid !== editorGuid) return;
 
-    this.editoresPorCurso.delete(cursoGuid);
-    this.emitirASede('course:editing-released', { curso_guid: cursoGuid }, pais);
+    this.editorsByCourse.delete(courseGuid);
+    this.emitToCountry('course:editing-released', { courseGuid }, current.country);
   }
 
-  private liberarCursosDe(guid: string): void {
-    for (const [cursoGuid, editor] of this.editoresPorCurso) {
+  private releaseLocksHeldBy(guid: string): void {
+    for (const [courseGuid, editor] of this.editorsByCourse) {
       if (editor.guid !== guid) continue;
-      this.editoresPorCurso.delete(cursoGuid);
-      this.emitirASede('course:editing-released', { curso_guid: cursoGuid }, editor.pais);
+      this.editorsByCourse.delete(courseGuid);
+      this.emitToCountry('course:editing-released', { courseGuid }, editor.country);
     }
+  }
+
+  /** Cursos en edición dentro de una sede, como `courseGuid → editor`. */
+  private editorsIn(country: Country): Record<string, CourseEditor> {
+    return Object.fromEntries([...this.editorsByCourse].filter(([, editor]) => editor.country === country));
   }
 
   // ── Escritura en el flujo ────────────────────────────────────────────────
 
-  private enviarA(conexion: Conexion, mensaje: MensajeRealtime): void {
+  private sendTo(connection: Connection, message: EventMessage): void {
     try {
-      if (conexion.res.writableEnded) {
-        this.darDeBaja(conexion);
+      if (connection.res.writableEnded) {
+        this.removeConnection(connection);
         return;
       }
-      conexion.res.write(`event: ${mensaje.event}\ndata: ${JSON.stringify(mensaje)}\n\n`);
+      connection.res.write(`event: ${message.event}\ndata: ${JSON.stringify(message)}\n\n`);
     } catch (error) {
-      this.logger.debug(`Flujo SSE de ${conexion.guid} no escribible: ${(error as Error)?.message}`);
-      this.darDeBaja(conexion);
+      this.logger.debug(`Flujo SSE de ${connection.guid} no escribible: ${(error as Error)?.message}`);
+      this.removeConnection(connection);
     }
   }
 
-  private emitirLatido(): void {
-    for (const conexion of this.conexiones.values()) {
+  private emitHeartbeat(): void {
+    for (const connection of this.connections.values()) {
       try {
-        if (conexion.res.writableEnded) {
-          this.darDeBaja(conexion);
+        if (connection.res.writableEnded) {
+          this.removeConnection(connection);
           continue;
         }
-        conexion.res.write(': ping\n\n');
+        connection.res.write(': ping\n\n');
       } catch {
-        this.darDeBaja(conexion);
+        this.removeConnection(connection);
       }
     }
   }
 
-  private cerrar(conexion: Conexion): void {
+  private close(connection: Connection): void {
     try {
-      conexion.res.end();
+      connection.res.end();
     } catch {
       // El socket ya estaba cerrado por el cliente; no hay nada que hacer.
     }
@@ -269,17 +286,18 @@ export class RealtimeService implements OnModuleDestroy {
 }
 
 /** Motivos por los que se corta una sesión; el cliente los traduce a un mensaje. */
-export type MotivoRevocacion =
+export type RevocationReason =
   | 'account_deleted'
-  | 'account_disabled'
   | 'password_changed'
   | 'password_reset'
+  /** Un administrador cambió su rol: las pantallas que tenía abiertas eran las del anterior. */
+  | 'role_changed'
   /** Se inició sesión en otro dispositivo y el campus admite una sola a la vez. */
-  | 'sesion_desplazada';
+  | 'session_displaced';
 
-export interface EditorDeCurso {
+export interface CourseEditor {
   guid: string;
-  nombre: string;
-  rol: string;
-  pais: Pais;
+  name: string;
+  role: UserRole;
+  country: Country;
 }

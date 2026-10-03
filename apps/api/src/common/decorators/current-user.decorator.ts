@@ -6,10 +6,10 @@ import { JwtPayload } from '../interfaces/jwt-payload.interface';
  *
  * Falla si no hay sesión en lugar de devolver `undefined`: un controlador protegido que
  * reciba `undefined` acabaría consultando con un `guid` vacío y devolviendo datos que no
- * corresponden. Las rutas `@Public()` que quieran leer al usuario opcionalmente deben
- * usar `@CurrentUserOptional()`.
+ * corresponden. Una ruta `@Public()` que quiera leer al usuario cuando lo haya debe sacarlo
+ * de la petición por su cuenta, para que quede claro que puede no estar.
  *
- * @example async getMisCursos(@CurrentUser() user: JwtPayload)
+ * @example getMyProfile(@CurrentUser() user: JwtPayload)
  */
 export const CurrentUser = createParamDecorator((_data: unknown, ctx: ExecutionContext): JwtPayload => {
   const user = ctx.switchToHttp().getRequest().user as JwtPayload | undefined;
@@ -17,10 +17,4 @@ export const CurrentUser = createParamDecorator((_data: unknown, ctx: ExecutionC
     throw new UnauthorizedException('Sesión no válida. Vuelve a iniciar sesión.');
   }
   return user;
-});
-
-/** Igual que `@CurrentUser()` pero devuelve `null` en rutas públicas sin sesión. */
-export const CurrentUserOptional = createParamDecorator((_data: unknown, ctx: ExecutionContext): JwtPayload | null => {
-  const user = ctx.switchToHttp().getRequest().user as JwtPayload | undefined;
-  return user?.sub ? user : null;
 });

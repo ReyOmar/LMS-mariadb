@@ -1,25 +1,31 @@
 import DOMPurify from 'dompurify';
 
 /**
- * Restrictive DOMPurify configuration for LMS content.
- * Only allows safe HTML tags used in the rich text editor (Quill).
- * Blocks: forms, scripts, iframes, style tags, event handlers.
+ * Limpieza del HTML que escriben examinadores y administradores: el contenido de los
+ * cursos y las plantillas de correo.
+ *
+ * Todo lo que se pinta con `dangerouslySetInnerHTML` pasa por aquí. La lista es corta a
+ * propósito: se permite lo que producen los editores y nada más. Quedan fuera los
+ * formularios, los `script`, los `iframe`, las etiquetas `style` y cualquier atributo de
+ * evento, que son las formas habituales de colar código ajeno en la sesión de otro usuario.
  */
-const DOMPURIFY_CONFIG = {
+// La lista se lee mejor agrupada por familias que con una etiqueta por línea.
+// prettier-ignore
+const SANITIZE_CONFIG = {
   ALLOWED_TAGS: [
-    // Block elements
+    // Bloques
     'p', 'div', 'br', 'hr',
     'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
     'blockquote', 'pre', 'code',
-    // Inline formatting
+    // Formato en línea
     'b', 'i', 'u', 's', 'em', 'strong', 'sub', 'sup', 'mark', 'small', 'span',
-    // Lists
+    // Listas
     'ul', 'ol', 'li',
-    // Links
+    // Enlaces
     'a',
-    // Media (images only)
+    // Medios (sólo imágenes)
     'img',
-    // Tables
+    // Tablas
     'table', 'thead', 'tbody', 'tfoot', 'tr', 'th', 'td', 'caption', 'colgroup', 'col',
   ],
   ALLOWED_ATTR: [
@@ -29,41 +35,46 @@ const DOMPURIFY_CONFIG = {
     'colspan', 'rowspan', 'scope',
   ],
   ALLOW_DATA_ATTR: false,
-  // Force all links to open in new tab with noopener
   ADD_ATTR: ['target'],
 };
 
 /**
- * Sanitize HTML content to prevent XSS attacks.
- * Returns an object compatible with React's dangerouslySetInnerHTML.
+ * Devuelve el HTML ya limpio, en la forma que espera `dangerouslySetInnerHTML`.
  *
- * Uses a restrictive allowlist of tags and attributes suitable for
- * rich text content from the course editor.
+ * Acepta nulos porque el contenido de un recurso puede no existir todavía; así ninguna
+ * pantalla necesita escribir `|| ''` antes de llamar.
  *
- * @param dirty - Raw HTML string from the server
- * @returns Sanitized HTML object for use with dangerouslySetInnerHTML
+ * @param options.linksInNewTab Por defecto los enlaces salen a una pestaña nueva y sin dar
+ *        acceso a la ventana original. El editor de plantillas lo desactiva: lo que pinta se
+ *        vuelve a guardar, y no debe añadir atributos que el administrador no escribió.
  *
  * @example
- * <div dangerouslySetInnerHTML={sanitizeHTML(content)} />
+ * <div dangerouslySetInnerHTML={sanitizeHTML(resource.contentHtml)} />
  */
-export function sanitizeHTML(dirty: string): { __html: string } {
+export function sanitizeHTML(
+  dirty: string | null | undefined,
+  { linksInNewTab = true }: { linksInNewTab?: boolean } = {},
+): { __html: string } {
+  const input = dirty ?? '';
+
   if (typeof window === 'undefined') {
-    // SSR fallback — strip all tags
-    return { __html: dirty.replace(/<[^>]*>/g, '') };
+    // En el servidor no hay DOM: se entrega el texto sin ninguna etiqueta.
+    return { __html: input.replace(/<[^>]*>/g, '') };
   }
 
-  // Apply hook to force target="_blank" and rel="noopener noreferrer" on links
-  DOMPurify.addHook('afterSanitizeAttributes', (node) => {
-    if (node.tagName === 'A') {
-      node.setAttribute('target', '_blank');
-      node.setAttribute('rel', 'noopener noreferrer');
-    }
-  });
+  if (linksInNewTab) {
+    DOMPurify.addHook('afterSanitizeAttributes', (node) => {
+      if (node.tagName === 'A') {
+        node.setAttribute('target', '_blank');
+        node.setAttribute('rel', 'noopener noreferrer');
+      }
+    });
+  }
 
-  const clean = DOMPurify.sanitize(dirty, DOMPURIFY_CONFIG);
+  const cleaned = DOMPurify.sanitize(input, SANITIZE_CONFIG);
 
-  // Remove the hook to avoid stacking on repeated calls
-  DOMPurify.removeHook('afterSanitizeAttributes');
+  // Se retira el enganche para que no se acumule en la siguiente llamada.
+  if (linksInNewTab) DOMPurify.removeHook('afterSanitizeAttributes');
 
-  return { __html: clean };
+  return { __html: cleaned };
 }

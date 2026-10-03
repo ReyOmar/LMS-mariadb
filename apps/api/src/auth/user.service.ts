@@ -1,34 +1,40 @@
 import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-import { TokenBlacklistService } from './token-blacklist.service';
 import { StorageService } from '../storage/storage.service';
 import { RealtimeService } from '../realtime/realtime.service';
-import { Pais } from '../common/domain/pais';
-import { cifrar, coincide, validarFortaleza } from '../common/domain/password';
-import { RolUsuario } from '../common/interfaces/jwt-payload.interface';
-import { CrearUsuarioDto } from './dto/crear-usuario.dto';
+import { Country } from '../common/domain/country';
+import { encodeCursor, rowsPerPage, decodeCursor } from '../common/domain/pagination';
+import { hashPassword, passwordMatches, validateStrength } from '../common/domain/password';
+import { CreateUserDto } from './dto/create-user.dto';
+import { ListAccountsDto } from './dto/list-accounts.dto';
 import { UpdateProfileDto } from './dto/update-profile.dto';
+import { searchTerm } from '../common/domain/search';
+import { UserRole } from '../common/interfaces/jwt-payload.interface';
+import { SettingsService } from '../settings/settings.service';
 
 /** Campos que se devuelven al listar o consultar una cuenta. Nunca incluyen el hash. */
-const CAMPOS_PUBLICOS = {
+const PUBLIC_FIELDS = {
   guid: true,
   email: true,
-  nombre: true,
-  apellido: true,
-  rol: true,
-  pais: true,
-  activo: true,
-  created_at: true,
-  updated_at: true,
-  ultimo_acceso: true,
-  usa_clave_defecto: true,
-  foto_url: true,
+  firstName: true,
+  lastName: true,
+  role: true,
+  country: true,
+  createdAt: true,
+  updatedAt: true,
+  lastAccessAt: true,
+  usesDefaultPassword: true,
+  photoUrl: true,
 } as const;
+
+/** Una foto de perfil se enseña en todas las pantallas: no hace falta más. */
+const MAX_PHOTO_SIZE = 5 * 1024 * 1024;
 
 /**
  * Gestión de cuentas ya creadas: listado, perfil, foto, alta directa y baja.
- * Todas las operaciones están acotadas a una sede: el `pais` que reciben procede siempre
- * de la sesión del administrador, nunca del cliente.
+ * Todas las operaciones están acotadas a una sede: el `country` que reciben procede siempre
+ * de la sesión, nunca del cliente.
  */
 @Injectable()
 export class UserService {
@@ -36,48 +42,157 @@ export class UserService {
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly tokenBlacklist: TokenBlacklistService,
     private readonly storage: StorageService,
     private readonly realtime: RealtimeService,
+    private readonly settings: SettingsService,
   ) {}
 
   // ── Consulta ─────────────────────────────────────────────────────────────
 
-  /** Cuentas de la sede, con el recuento de cursos y matrículas que impide borrarlas sin más. */
-  async getAllUsers(pais: Pais) {
-    const usuarios = await this.prisma.usuarios.findMany({
-      where: { pais },
-      orderBy: { created_at: 'desc' },
-      select: {
-        ...CAMPOS_PUBLICOS,
-        _count: { select: { cursos_impartidos: true, matriculas: true } },
-      },
-    });
+  /**
+   * Cuentas de la sede, por página y filtradas en el servidor.
+   *
+   * La página avanza con una marca de la última cuenta entregada, no con un número de
+   * filas a saltar: saltando, la base lee y descarta todo lo anterior y cada página cuesta
+   * más que la previa. Ver `common/domain/pagination`.
+   *
+   * Los recuentos sólo se calculan en la primera página —recorren la sede entera— y la
+   * pantalla los conserva mientras trae el resto.
+   */
+  async getUsers(country: Country, filter: ListAccountsDto = {}) {
+    const take = rowsPerPage(filter.limit);
+    const search = searchTerm(filter.search);
+    const cursor = decodeCursor(filter.cursor);
 
-    return usuarios.map(({ _count, ...usuario }) => ({
-      ...usuario,
-      cursos_impartidos: _count.cursos_impartidos,
-      matriculas: _count.matriculas,
-    }));
+    const matchFilter: Prisma.UserWhereInput = {
+      country,
+      ...(filter.role ? { role: filter.role } : {}),
+      ...(search
+        ? {
+            OR: [
+              { firstName: { contains: search } },
+              { lastName: { contains: search } },
+              { email: { contains: search } },
+            ],
+          }
+        : {}),
+    };
+
+    // La marca va dentro de un `AND`: escrita como otro `OR` al mismo nivel pisaría al de
+    // la búsqueda y el listado dejaría de filtrar por texto.
+    const pageWhere: Prisma.UserWhereInput = cursor
+      ? {
+          AND: [
+            matchFilter,
+            { OR: [{ createdAt: { lt: cursor.date } }, { createdAt: cursor.date, guid: { lt: cursor.id } }] },
+          ],
+        }
+      : matchFilter;
+
+    const [rows, summary] = await Promise.all([
+      this.prisma.user.findMany({
+        where: pageWhere,
+        // El identificador desempata: sin él, dos altas del mismo milisegundo podrían
+        // repetirse o perderse al pasar de página.
+        orderBy: [{ createdAt: 'desc' }, { guid: 'desc' }],
+        take: take + 1, // uno de más: así se sabe si queda algo sin pedir otra página
+        select: PUBLIC_FIELDS,
+      }),
+      cursor ? Promise.resolve(null) : this.summarizeAccounts(matchFilter, filter.role),
+    ]);
+
+    const hasMore = rows.length > take;
+    const page = hasMore ? rows.slice(0, take) : rows;
+    const last = page[page.length - 1];
+    const counts = await this.pageCounts(page.map((user) => user.guid));
+
+    return {
+      ...(summary ?? {}),
+      cursor: hasMore && last ? encodeCursor(last.createdAt, last.guid) : null,
+      users: page.map((user) => ({
+        ...user,
+        taughtCourses: counts.taughtCourses.get(user.guid) ?? 0,
+        enrollments: counts.enrollments.get(user.guid) ?? 0,
+      })),
+    };
+  }
+
+  /**
+   * Cursos a cargo y matrículas de las cuentas de la página, y sólo de ellas.
+   *
+   * Pedidos como `_count` dentro del listado, Prisma los resuelve agrupando las tablas
+   * enteras de cursos y matrículas en cada página: con cinco años de alumnos, la página de
+   * estudiantes pasa de 3 ms a más de 400. Así cada recuento recorre el índice por
+   * persona, con como mucho una página de claves.
+   */
+  private async pageCounts(guids: string[]) {
+    if (guids.length === 0) {
+      return { taughtCourses: new Map<string, number>(), enrollments: new Map<string, number>() };
+    }
+
+    const [courses, enrollments] = await Promise.all([
+      this.prisma.course.groupBy({
+        by: ['teacherGuid'],
+        where: { teacherGuid: { in: guids } },
+        _count: { _all: true },
+      }),
+      this.prisma.enrollment.groupBy({ by: ['userGuid'], where: { userGuid: { in: guids } }, _count: { _all: true } }),
+    ]);
+
+    return {
+      taughtCourses: new Map(courses.map((row) => [row.teacherGuid, row._count._all])),
+      enrollments: new Map(enrollments.map((row) => [row.userGuid, row._count._all])),
+    };
+  }
+
+  /**
+   * Cuántas cuentas hay en cada pestaña y cuántas coinciden en total.
+   * El total sale de las pestañas —la del rol elegido o la suma de todas—, sin volver a
+   * contar la sede.
+   */
+  private async summarizeAccounts(matchFilter: Prisma.UserWhereInput, role?: UserRole) {
+    // Las pestañas cuentan sobre la búsqueda pero no sobre el rol elegido: si no, la
+    // pestaña activa sería la única con número.
+    const { role: _role, ...withoutRole } = matchFilter;
+
+    const groups = await this.prisma.user.groupBy({ by: ['role'], where: withoutRole, _count: { _all: true } });
+    const byRole: Record<UserRole, number> = {
+      ADMIN: groups.find((g) => g.role === 'ADMIN')?._count._all ?? 0,
+      TEACHER: groups.find((g) => g.role === 'TEACHER')?._count._all ?? 0,
+      STUDENT: groups.find((g) => g.role === 'STUDENT')?._count._all ?? 0,
+    };
+
+    return { total: role ? byRole[role] : byRole.ADMIN + byRole.TEACHER + byRole.STUDENT, byRole };
   }
 
   /** Perfil de una cuenta concreta de la sede. */
-  async getUserProfile(guid: string, pais: Pais) {
-    const usuario = await this.prisma.usuarios.findFirst({
-      where: { guid, pais },
-      select: CAMPOS_PUBLICOS,
+  async getUserProfile(guid: string, country: Country) {
+    const user = await this.prisma.user.findFirst({
+      where: { guid, country },
+      select: { ...PUBLIC_FIELDS, dataConsentVersion: true },
     });
-    if (!usuario) throw new NotFoundException('Usuario no encontrado.');
-    return usuario;
+    if (!user) throw new NotFoundException('Usuario no encontrado.');
+
+    const { dataConsentVersion, ...profile } = user;
+    return { ...profile, consentRequired: dataConsentVersion !== (await this.settings.legalVersion(country)) };
   }
 
-  /** Resumen de solicitudes aceptadas en la sede, para el panel de administración. */
-  async getAdminStats(pais: Pais) {
-    const [cuentasAprobadas, solicitudesPendientes] = await Promise.all([
-      this.prisma.lms_solicitudes_acceso.count({ where: { estado: 'ACEPTADA', pais } }),
-      this.prisma.lms_solicitudes_acceso.count({ where: { estado: 'PENDIENTE', pais } }),
-    ]);
-    return { cuentasAprobadas, solicitudesPendientes };
+  /**
+   * Registra que la persona acepta la política de datos vigente de su sede. La fecha y la
+   * versión quedan como prueba de la autorización.
+   */
+  async acceptDataPolicy(guid: string, country: Country) {
+    await this.prisma.user.update({
+      where: { guid },
+      data: { dataConsentAt: new Date(), dataConsentVersion: await this.settings.legalVersion(country) },
+    });
+    return { consentRequired: false };
+  }
+
+  /** Solicitudes de acceso de la sede que esperan revisión. */
+  async countPendingRequests(country: Country) {
+    const count = await this.prisma.accessRequest.count({ where: { status: 'PENDING', country } });
+    return { count };
   }
 
   // ── Alta ─────────────────────────────────────────────────────────────────
@@ -87,48 +202,47 @@ export class UserService {
    * Hereda la sede del administrador que la crea: no hay forma de dar de alta a alguien
    * en la otra sede.
    */
-  async createUser(dto: CrearUsuarioDto, pais: Pais) {
-    validarFortaleza(dto.contrasena_temporal);
+  async createUser(dto: CreateUserDto, country: Country) {
+    validateStrength(dto.temporaryPassword);
 
-    const existente = await this.prisma.usuarios.findUnique({ where: { email: dto.email }, select: { guid: true } });
-    if (existente) {
+    const existing = await this.prisma.user.findUnique({ where: { email: dto.email }, select: { guid: true } });
+    if (existing) {
       throw new ConflictException('Ya existe una cuenta con ese correo electrónico.');
     }
 
-    const usuario = await this.prisma.usuarios.create({
+    const user = await this.prisma.user.create({
       data: {
         email: dto.email,
-        nombre: dto.nombre,
-        apellido: dto.apellido,
-        rol: dto.rol,
-        pais,
-        contrasena: await cifrar(dto.contrasena_temporal),
-        usa_clave_defecto: true,
+        firstName: dto.firstName,
+        lastName: dto.lastName,
+        role: dto.role,
+        country,
+        password: await hashPassword(dto.temporaryPassword),
+        usesDefaultPassword: true,
       },
-      select: CAMPOS_PUBLICOS,
+      select: PUBLIC_FIELDS,
     });
 
-    this.realtime.emitirARol('user:created', { guid: usuario.guid }, pais, 'ADMINISTRADOR');
-    this.logger.log(`Cuenta creada por un administrador: ${dto.email} (${dto.rol}, ${pais})`);
+    this.realtime.emitToRole('user:created', { guid: user.guid }, country, 'ADMIN');
+    this.logger.log(`Cuenta creada por un administrador: ${dto.email} (${dto.role}, ${country})`);
 
     return {
-      message: `Cuenta de ${dto.nombre} ${dto.apellido} creada con contraseña temporal.`,
-      user: usuario,
+      message: `Cuenta de ${dto.firstName} ${dto.lastName} creada con contraseña temporal.`,
+      user,
     };
   }
 
   // ── Sesión ───────────────────────────────────────────────────────────────
 
   /**
-   * Cierra la sesión indicada: la revoca y borra el registro de sesión activa.
+   * Cierra la sesión indicada: sin sesión vigente, su token deja de valer.
    * El borrado se condiciona al `jti` para que un cierre tardío de una sesión ya desplazada
    * no eche al dispositivo que entró después.
    */
-  async cerrarSesion(guid: string, jti: string): Promise<void> {
-    await this.tokenBlacklist.revocarSesion(guid, jti);
-    await this.prisma.usuarios.updateMany({
-      where: { guid, sesion_actual_jti: jti },
-      data: { sesion_actual_jti: null },
+  async logout(guid: string, jti: string): Promise<void> {
+    await this.prisma.user.updateMany({
+      where: { guid, currentSessionJti: jti },
+      data: { currentSessionJti: null },
     });
   }
 
@@ -136,235 +250,207 @@ export class UserService {
 
   /**
    * Actualiza nombre, apellido y contraseña del propio usuario.
-   * Cambiar la contraseña revoca todas sus sesiones salvo aquella desde la que se cambió,
-   * que se renueva en el cliente: si alguien tenía la cuenta comprometida, queda fuera.
+   * Cambiar la contraseña cierra todas sus sesiones, también la actual, que el cliente
+   * vuelve a abrir con la clave nueva: si alguien tenía la cuenta comprometida, queda fuera.
    */
   async updateProfile(guid: string, dto: UpdateProfileDto) {
-    const usuario = await this.prisma.usuarios.findUnique({ where: { guid } });
-    if (!usuario) throw new NotFoundException('Usuario no encontrado.');
+    const user = await this.prisma.user.findUnique({ where: { guid }, select: { password: true } });
+    if (!user) throw new NotFoundException('Usuario no encontrado.');
 
-    const datos: { nombre?: string; apellido?: string; contrasena?: string; usa_clave_defecto?: boolean } = {};
-    if (dto.nombre !== undefined) datos.nombre = dto.nombre;
-    if (dto.apellido !== undefined) datos.apellido = dto.apellido;
+    const data: Prisma.UserUpdateInput = {};
+    if (dto.firstName !== undefined) data.firstName = dto.firstName;
+    if (dto.lastName !== undefined) data.lastName = dto.lastName;
 
-    const cambiaContrasena = Boolean(dto.nueva_contrasena);
-    if (cambiaContrasena) {
-      if (!dto.contrasena_actual) {
+    const { newPassword } = dto;
+    if (newPassword) {
+      if (!dto.currentPassword) {
         throw new BadRequestException('Escribe tu contraseña actual para poder cambiarla.');
       }
-      if (!(await coincide(dto.contrasena_actual, usuario.contrasena))) {
+      if (!(await passwordMatches(dto.currentPassword, user.password))) {
         throw new BadRequestException('La contraseña actual no es correcta.');
       }
-      validarFortaleza(dto.nueva_contrasena!);
-      datos.contrasena = await cifrar(dto.nueva_contrasena!);
-      datos.usa_clave_defecto = false;
+      validateStrength(newPassword);
+      data.password = await hashPassword(newPassword);
+      data.usesDefaultPassword = false;
+      data.currentSessionJti = null;
     }
 
-    if (Object.keys(datos).length === 0) {
+    if (Object.keys(data).length === 0) {
       throw new BadRequestException('No hay ningún cambio que guardar.');
     }
 
-    const actualizado = await this.prisma.usuarios.update({
-      where: { guid },
-      data: datos,
-      select: CAMPOS_PUBLICOS,
-    });
+    const updated = await this.prisma.user.update({ where: { guid }, data, select: PUBLIC_FIELDS });
 
-    if (cambiaContrasena) {
-      await this.tokenBlacklist.revocarUsuario(guid);
-      await this.prisma.usuarios.update({ where: { guid }, data: { sesion_actual_jti: null } });
-      this.realtime.revocarSesion(guid, 'password_changed');
-    }
+    if (newPassword) this.realtime.revokeSession(guid, 'password_changed');
 
-    this.realtime.emitirARol('user:updated', { guid }, actualizado.pais, 'ADMINISTRADOR');
+    this.realtime.emitToRole('user:updated', { guid }, updated.country, 'ADMIN');
 
-    return { message: 'Perfil actualizado correctamente.', user: actualizado };
+    return { message: 'Perfil actualizado correctamente.', user: updated };
   }
 
   // ── Foto de perfil ───────────────────────────────────────────────────────
 
   /** Sustituye la foto de perfil y borra la anterior del almacenamiento. */
-  async uploadProfilePhoto(guid: string, contenido: Buffer, nombreOriginal: string) {
-    const usuario = await this.prisma.usuarios.findUnique({
+  async uploadProfilePhoto(guid: string, filePath: string, originalName: string) {
+    const user = await this.prisma.user.findUnique({
       where: { guid },
-      select: { foto_url: true, pais: true },
+      select: { photoUrl: true, country: true },
     });
-    if (!usuario) throw new NotFoundException('Usuario no encontrado.');
+    if (!user) throw new NotFoundException('Usuario no encontrado.');
 
     // Se sube antes de borrar la anterior: si la subida falla, el usuario conserva su foto.
-    const clave = await this.storage.uploadFromBuffer(contenido, nombreOriginal, 'avatars');
+    const key = await this.storage.uploadFromDisk(filePath, originalName, 'avatars', MAX_PHOTO_SIZE);
 
-    await this.prisma.usuarios.update({ where: { guid }, data: { foto_url: clave } });
-
-    if (usuario.foto_url) {
-      await this.storage
-        .deleteFile(usuario.foto_url)
-        .catch((error) => this.logger.warn(`No se pudo borrar la foto anterior ${usuario.foto_url}`, error));
+    try {
+      await this.prisma.user.update({ where: { guid }, data: { photoUrl: key } });
+    } catch (error) {
+      // Sin fila que la referencie, la foto nueva sería un archivo huérfano.
+      await this.storage.deleteFiles([key]);
+      throw error;
     }
 
-    this.realtime.emitirAUsuarios('user:updated', { guid }, usuario.pais, [guid]);
-    return { message: 'Foto de perfil actualizada.', foto_url: clave };
+    if (user.photoUrl) {
+      await this.storage
+        .deleteFile(user.photoUrl)
+        .catch((error) => this.logger.warn(`No se pudo borrar la foto anterior ${user.photoUrl}`, error));
+    }
+
+    this.realtime.emitToUsers('user:updated', { guid }, user.country, [guid]);
+    return { message: 'Foto de perfil actualizada.', photoUrl: key };
   }
 
   /** Elimina la foto de perfil. */
   async deleteProfilePhoto(guid: string) {
-    const usuario = await this.prisma.usuarios.findUnique({
+    const user = await this.prisma.user.findUnique({
       where: { guid },
-      select: { foto_url: true, pais: true },
+      select: { photoUrl: true, country: true },
     });
-    if (!usuario) throw new NotFoundException('Usuario no encontrado.');
-    if (!usuario.foto_url) throw new BadRequestException('No tienes foto de perfil.');
+    if (!user) throw new NotFoundException('Usuario no encontrado.');
+    if (!user.photoUrl) throw new BadRequestException('No tienes foto de perfil.');
 
-    await this.prisma.usuarios.update({ where: { guid }, data: { foto_url: null } });
+    await this.prisma.user.update({ where: { guid }, data: { photoUrl: null } });
     await this.storage
-      .deleteFile(usuario.foto_url)
-      .catch((error) => this.logger.warn(`No se pudo borrar la foto ${usuario.foto_url}`, error));
+      .deleteFile(user.photoUrl)
+      .catch((error) => this.logger.warn(`No se pudo borrar la foto ${user.photoUrl}`, error));
 
-    this.realtime.emitirAUsuarios('user:updated', { guid }, usuario.pais, [guid]);
+    this.realtime.emitToUsers('user:updated', { guid }, user.country, [guid]);
     return { message: 'Foto de perfil eliminada.' };
   }
 
   // ── Baja ─────────────────────────────────────────────────────────────────
 
   /**
-   * Desactiva una cuenta sin borrar su historial.
-   *
-   * Es la operación recomendada frente al borrado: conserva entregas, calificaciones y
-   * certificados —que son el registro documental de la capacitación— pero impide el
-   * acceso de inmediato.
-   */
-  async setUserActive(guid: string, activo: boolean, pais: Pais, adminGuid: string) {
-    if (guid === adminGuid && !activo) {
-      throw new BadRequestException('No puedes desactivar tu propia cuenta.');
-    }
-
-    const usuario = await this.prisma.usuarios.findFirst({ where: { guid, pais }, select: { guid: true } });
-    if (!usuario) throw new NotFoundException('Usuario no encontrado.');
-
-    await this.prisma.usuarios.update({ where: { guid }, data: { activo } });
-
-    if (!activo) {
-      await this.tokenBlacklist.revocarUsuario(guid);
-      this.realtime.revocarSesion(guid, 'account_disabled');
-    }
-
-    this.realtime.emitirARol('user:updated', { guid, activo }, pais, 'ADMINISTRADOR');
-    return { message: activo ? 'Cuenta reactivada.' : 'Cuenta desactivada.' };
-  }
-
-  /**
    * Borra una cuenta y todo lo que cuelga de ella.
    *
-   * Un profesor con cursos asignados no se puede borrar sin decir a quién pasan: antes se
-   * buscaba «algún administrador» y, si no había ninguno, se seguía adelante y la cascada
-   * de la base de datos se llevaba por delante los cursos con sus módulos, recursos,
-   * matrículas y entregas. Ahora la relación es `Restrict` y el traspaso es explícito.
+   * Un profesor con cursos asignados no se puede borrar sin decir a quién pasan: la relación
+   * es `Restrict` para que la cascada no se lleve los cursos con sus módulos, recursos,
+   * matrículas y entregas.
    *
-   * @param destinoCursosGuid Profesor o administrador que hereda los cursos. Obligatorio
+   * @param courseTargetGuid Profesor o administrador que hereda los cursos. Obligatorio
    *        si la cuenta tiene cursos asignados.
    */
-  async deleteUser(guid: string, pais: Pais, adminGuid: string, destinoCursosGuid?: string) {
+  async deleteUser(guid: string, country: Country, adminGuid: string, courseTargetGuid?: string) {
     if (guid === adminGuid) {
       throw new BadRequestException('No puedes eliminar tu propia cuenta.');
     }
 
-    const usuario = await this.prisma.usuarios.findFirst({
-      where: { guid, pais },
-      select: { guid: true, rol: true, foto_url: true, firma_url: true, _count: { select: { cursos_impartidos: true } } },
+    const user = await this.prisma.user.findFirst({
+      where: { guid, country },
+      select: {
+        guid: true,
+        email: true,
+        role: true,
+        photoUrl: true,
+        signatureUrl: true,
+        _count: { select: { taughtCourses: true } },
+      },
     });
-    if (!usuario) throw new NotFoundException('Usuario no encontrado.');
+    if (!user) throw new NotFoundException('Usuario no encontrado.');
 
-    if (usuario._count.cursos_impartidos > 0) {
-      await this.traspasarCursos(guid, usuario._count.cursos_impartidos, pais, destinoCursosGuid);
+    const courses = user._count.taughtCourses;
+    if (courses > 0) {
+      await this.checkCourseTransferTarget(guid, courses, country, courseTargetGuid);
     }
 
-    // Los certificados guardan el PDF en el almacenamiento; se recogen antes de borrar
-    // las filas para no dejar archivos sin dueño.
-    const certificados = await this.prisma.lms_certificados.findMany({
-      where: { usuario_guid: guid },
-      select: { archivo_pdf: true },
-    });
-    const entregas = await this.prisma.lms_entregas.findMany({
-      where: { usuario_guid: guid, url_archivo_adjunto: { not: null } },
-      select: { url_archivo_adjunto: true },
-    });
+    // Los certificados y las entregas guardan archivos en el almacenamiento; se recogen
+    // antes de borrar las filas para no dejar archivos sin dueño.
+    const [certificates, submissions] = await Promise.all([
+      this.prisma.certificate.findMany({ where: { userGuid: guid }, select: { pdfKey: true } }),
+      this.prisma.submission.findMany({
+        where: { userGuid: guid, attachmentKey: { not: null } },
+        select: { attachmentKey: true },
+      }),
+    ]);
 
-    // Las relaciones con `onDelete: Cascade` las resuelve la base de datos; basta con
-    // borrar la fila del usuario dentro de una transacción.
-    await this.prisma.usuarios.delete({ where: { guid } });
+    // Sus secretos pendientes se van con él. Un enlace de recuperación se resuelve por
+    // correo, así que si la cuenta se borra y alguien registra ese mismo correo, un enlace
+    // antiguo todavía vigente serviría para entrar en la cuenta nueva.
+    //
+    // Todo va en una transacción, traspaso de cursos incluido: si el borrado fallara, los
+    // cursos no pueden haber cambiado ya de dueño.
+    await this.prisma.$transaction([
+      ...(courses > 0
+        ? [
+            this.prisma.course.updateMany({
+              where: { teacherGuid: guid },
+              data: { teacherGuid: courseTargetGuid! },
+            }),
+          ]
+        : []),
+      this.prisma.passwordReset.deleteMany({ where: { email: user.email } }),
+      this.prisma.emailVerification.deleteMany({ where: { email: user.email } }),
+      // El resto de lo suyo —matrículas, entregas, progreso, certificados, mensajes,
+      // contactos, notificaciones y métricas— cae por las relaciones en cascada. Lo que
+      // creó como examinador no: sus cursos acaban de pasar a otra cuenta.
+      this.prisma.user.delete({ where: { guid } }),
+    ]);
 
-    await this.tokenBlacklist.revocarUsuario(guid);
-    this.realtime.revocarSesion(guid, 'account_deleted');
-    this.realtime.emitirARol('user:deleted', { guid }, pais, 'ADMINISTRADOR');
+    if (courses > 0) this.logger.log(`Traspasados ${courses} curso(s) de ${guid} a ${courseTargetGuid}`);
 
-    void this.limpiarArchivos([
-      usuario.foto_url,
-      usuario.firma_url,
-      ...certificados.map((c) => c.archivo_pdf),
-      ...entregas.map((e) => e.url_archivo_adjunto),
+    this.realtime.revokeSession(guid, 'account_deleted');
+    this.realtime.emitToRole('user:deleted', { guid }, country, 'ADMIN');
+
+    void this.storage.deleteFiles([
+      user.photoUrl,
+      user.signatureUrl,
+      ...certificates.map((certificate) => certificate.pdfKey),
+      ...submissions.map((submission) => submission.attachmentKey),
     ]);
 
     return { message: 'Cuenta eliminada correctamente.', deletedGuid: guid };
   }
 
-  /** Reasigna los cursos de una cuenta que se va a borrar. */
-  private async traspasarCursos(
+  /** Comprueba que los cursos de una cuenta que se va a borrar tienen a quién pasar. */
+  private async checkCourseTransferTarget(
     guid: string,
-    cuantos: number,
-    pais: Pais,
-    destinoGuid: string | undefined,
+    count: number,
+    country: Country,
+    targetGuid: string | undefined,
   ): Promise<void> {
-    if (!destinoGuid) {
+    if (!targetGuid) {
       throw new BadRequestException(
-        `Esta cuenta tiene ${cuantos} curso(s) asignado(s). Indica a qué profesor o administrador deben pasar antes de eliminarla.`,
+        `Esta cuenta tiene ${count} curso(s) asignado(s). Indica a qué profesor o administrador deben pasar antes de eliminarla.`,
       );
     }
-    if (destinoGuid === guid) {
+    if (targetGuid === guid) {
       throw new BadRequestException('El destino de los cursos debe ser una cuenta distinta.');
     }
 
-    const destino = await this.prisma.usuarios.findFirst({
-      where: { guid: destinoGuid, pais, activo: true, rol: { in: ['ADMINISTRADOR', 'PROFESOR'] } },
+    const target = await this.prisma.user.findFirst({
+      where: { guid: targetGuid, country, role: { in: ['ADMIN', 'TEACHER'] } },
       select: { guid: true },
     });
-    if (!destino) {
-      throw new BadRequestException(
-        'El destino de los cursos debe ser un profesor o administrador activo de la misma sede.',
-      );
-    }
-
-    await this.prisma.lms_cursos.updateMany({
-      where: { profesor_guid: guid },
-      data: { profesor_guid: destinoGuid },
-    });
-    this.logger.log(`Traspasados ${cuantos} curso(s) de ${guid} a ${destinoGuid}`);
-  }
-
-  /** Borra archivos sueltos sin interrumpir la operación principal si alguno falla. */
-  private async limpiarArchivos(claves: (string | null)[]): Promise<void> {
-    for (const clave of claves) {
-      if (!clave) continue;
-      await this.storage
-        .deleteFile(clave)
-        .catch((error) => this.logger.warn(`No se pudo borrar el archivo ${clave}`, error));
+    if (!target) {
+      throw new BadRequestException('El destino de los cursos debe ser un profesor o administrador de la misma sede.');
     }
   }
 
   /** Candidatos válidos para heredar los cursos de una cuenta que se va a eliminar. */
-  getPosiblesDestinosDeCursos(pais: Pais, excluirGuid: string) {
-    return this.prisma.usuarios.findMany({
-      where: { pais, activo: true, rol: { in: ['ADMINISTRADOR', 'PROFESOR'] }, guid: { not: excluirGuid } },
-      select: { guid: true, nombre: true, apellido: true, email: true, rol: true },
-      orderBy: { nombre: 'asc' },
-    });
-  }
-
-  /** Usuarios de la sede con un rol concreto. Base de los selectores del panel. */
-  getUsuariosPorRol(pais: Pais, rol: RolUsuario) {
-    return this.prisma.usuarios.findMany({
-      where: { pais, rol, activo: true },
-      select: { guid: true, nombre: true, apellido: true, email: true },
-      orderBy: [{ nombre: 'asc' }, { apellido: 'asc' }],
+  getPossibleCourseTransferTargets(country: Country, excludeGuid: string) {
+    return this.prisma.user.findMany({
+      where: { country, role: { in: ['ADMIN', 'TEACHER'] }, guid: { not: excludeGuid } },
+      select: { guid: true, firstName: true, lastName: true, email: true, role: true },
+      orderBy: { firstName: 'asc' },
     });
   }
 }

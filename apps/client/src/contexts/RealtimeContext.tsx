@@ -1,38 +1,38 @@
 'use client';
 
-import React, { ReactNode, createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
-import { apiUrl, borrarSesion } from '@/lib/api';
-import { conectarFlujo } from '@/lib/realtime/flujo';
-import { EditorDeCurso, EventoRealtime, MensajeRealtime } from '@/lib/realtime/eventos';
+import React, { ReactNode, createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { apiUrl, clearSession, readToken, redirectToLogin, type LogoutReason } from '@/lib/api';
+import { connectStream } from '@/lib/realtime/stream';
+import { CourseEditor, RealtimeEvent, RealtimeMessage } from '@/lib/realtime/events';
+import { useSession } from './SessionContext';
 
 /**
  * Tiempo real del campus sobre Server-Sent Events.
  *
- * Sustituye al WebSocket anterior porque el despliegue vive en cPanel, donde Apache no
- * propaga la cabecera `Upgrade` y la conexión nunca llegaba a abrirse. SSE es HTTP
- * corriente y atraviesa el proxy sin configuración especial.
+ * SSE y no WebSocket porque el despliegue vive en cPanel, donde Apache no propaga la
+ * cabecera `Upgrade`. SSE es HTTP corriente y atraviesa el proxy sin configuración especial.
  *
  * El flujo es de servidor a cliente. La única acción en sentido contrario —avisar de que
- * se está editando un curso— es ahora una petición HTTP normal (`bloquearCurso`).
+ * se está editando un curso— es una petición HTTP normal (`useCourseLock`).
  */
 
-type Escucha = (datos: unknown) => void;
+type Listener = (data: unknown) => void;
 
 interface RealtimeContextType {
-  conectado: boolean;
+  connected: boolean;
   /** Se suscribe a un evento y devuelve la función para darse de baja. */
-  suscribir: (evento: EventoRealtime, escucha: Escucha) => () => void;
-  usuariosEnLinea: string[];
-  cursosEnEdicion: Record<string, EditorDeCurso>;
-  cursosEnMantenimiento: Record<string, string>;
+  subscribe: (event: RealtimeEvent, listener: Listener) => () => void;
+  onlineUsers: string[];
+  coursesBeingEdited: Record<string, CourseEditor>;
+  coursesUnderMaintenance: Record<string, string>;
 }
 
 const RealtimeContext = createContext<RealtimeContextType>({
-  conectado: false,
-  suscribir: () => () => undefined,
-  usuariosEnLinea: [],
-  cursosEnEdicion: {},
-  cursosEnMantenimiento: {},
+  connected: false,
+  subscribe: () => () => undefined,
+  onlineUsers: [],
+  coursesBeingEdited: {},
+  coursesUnderMaintenance: {},
 });
 
 /**
@@ -42,85 +42,104 @@ const RealtimeContext = createContext<RealtimeContextType>({
  * dispara diez avisos). Agrupar durante un instante evita que cada pantalla montada lance
  * su propia recarga por cada uno.
  */
-const AGRUPACION_MS = 250;
+const DEBOUNCE_MS = 250;
+
+/**
+ * Eventos que traen un elemento nuevo en cada aviso y se reparten sin agrupar: agrupando,
+ * de dos mensajes seguidos sólo llegaría el último a quien los lista o los cuenta.
+ */
+const UNBATCHED_EVENTS: ReadonlySet<RealtimeEvent> = new Set(['notification:new', 'message:new']);
 
 /** Traducción del motivo técnico del servidor al aviso que verá el usuario en el login. */
-const MOTIVO_A_AVISO: Record<string, string> = {
-  sesion_desplazada: 'desplazada',
-  password_changed: 'expirada',
-  password_reset: 'expirada',
-  account_deleted: 'revocada',
-  account_disabled: 'revocada',
+const REASON_TO_LOGOUT: Record<string, LogoutReason> = {
+  session_displaced: 'displaced',
+  password_changed: 'expired',
+  password_reset: 'expired',
+  account_deleted: 'revoked',
 };
 
 export function RealtimeProvider({ children }: { children: ReactNode }) {
-  const [conectado, setConectado] = useState(false);
-  const [usuariosEnLinea, setUsuariosEnLinea] = useState<string[]>([]);
-  const [cursosEnEdicion, setCursosEnEdicion] = useState<Record<string, EditorDeCurso>>({});
-  const [cursosEnMantenimiento, setCursosEnMantenimiento] = useState<Record<string, string>>({});
+  const { authenticated } = useSession();
+  const [connected, setConnected] = useState(false);
+  const [onlineUsers, setOnlineUsers] = useState<string[]>([]);
+  const [coursesBeingEdited, setCoursesBeingEdited] = useState<Record<string, CourseEditor>>({});
+  const [coursesUnderMaintenance, setCoursesUnderMaintenance] = useState<Record<string, string>>({});
 
-  const escuchas = useRef(new Map<EventoRealtime, Set<Escucha>>());
-  const temporizadores = useRef(new Map<EventoRealtime, ReturnType<typeof setTimeout>>());
+  const listeners = useRef(new Map<RealtimeEvent, Set<Listener>>());
+  const timers = useRef(new Map<RealtimeEvent, ReturnType<typeof setTimeout>>());
 
-  /** Reparte un evento entre sus suscriptores, agrupando ráfagas. */
-  const repartir = useCallback((evento: EventoRealtime, datos: unknown) => {
-    const pendiente = temporizadores.current.get(evento);
-    if (pendiente) clearTimeout(pendiente);
-
-    const temporizador = setTimeout(() => {
-      temporizadores.current.delete(evento);
-      escuchas.current.get(evento)?.forEach((escucha) => {
-        try {
-          escucha(datos);
-        } catch (error) {
-          // Un suscriptor que falla no puede dejar sin avisar a los demás.
-          console.error(`Error atendiendo el evento ${evento}`, error);
-        }
-      });
-    }, AGRUPACION_MS);
-
-    temporizadores.current.set(evento, temporizador);
+  const notifyListeners = useCallback((event: RealtimeEvent, data: unknown) => {
+    listeners.current.get(event)?.forEach((listener) => {
+      try {
+        listener(data);
+      } catch (error) {
+        // Un suscriptor que falla no puede dejar sin avisar a los demás.
+        console.error(`Error atendiendo el evento ${event}`, error);
+      }
+    });
   }, []);
 
+  /** Reparte un evento entre sus suscriptores, agrupando ráfagas. */
+  const dispatch = useCallback(
+    (event: RealtimeEvent, data: unknown) => {
+      if (UNBATCHED_EVENTS.has(event)) {
+        notifyListeners(event, data);
+        return;
+      }
+
+      const pending = timers.current.get(event);
+      if (pending) clearTimeout(pending);
+
+      const timer = setTimeout(() => {
+        timers.current.delete(event);
+        notifyListeners(event, data);
+      }, DEBOUNCE_MS);
+
+      timers.current.set(event, timer);
+    },
+    [notifyListeners],
+  );
+
   /** Estado que el propio contexto mantiene, sin que cada pantalla tenga que suscribirse. */
-  const aplicarEstadoInterno = useCallback((mensaje: MensajeRealtime) => {
-    switch (mensaje.event) {
+  const applyInternalState = useCallback((message: RealtimeMessage) => {
+    switch (message.event) {
       case 'presence:sync':
       case 'presence:update': {
-        const datos = mensaje.data as { onlineUsers?: string[] };
-        if (Array.isArray(datos?.onlineUsers)) setUsuariosEnLinea(datos.onlineUsers);
+        const data = message.data as { onlineUsers?: string[] };
+        if (Array.isArray(data?.onlineUsers)) setOnlineUsers(data.onlineUsers);
         break;
       }
       case 'course:editing': {
-        const datos = mensaje.data as { curso_guid: string; editor: EditorDeCurso };
-        setCursosEnEdicion((previo) => ({ ...previo, [datos.curso_guid]: datos.editor }));
+        const data = message.data as { courseGuid: string; editor: CourseEditor };
+        setCoursesBeingEdited((prev) => ({ ...prev, [data.courseGuid]: data.editor }));
         break;
       }
       case 'course:editing-released': {
-        const datos = mensaje.data as { curso_guid: string };
-        setCursosEnEdicion((previo) => {
-          const siguiente = { ...previo };
-          delete siguiente[datos.curso_guid];
-          return siguiente;
+        const data = message.data as { courseGuid: string };
+        setCoursesBeingEdited((prev) => {
+          const next = { ...prev };
+          delete next[data.courseGuid];
+          return next;
         });
         break;
       }
       case 'course:editing-sync': {
-        setCursosEnEdicion((mensaje.data as Record<string, EditorDeCurso>) ?? {});
+        setCoursesBeingEdited((message.data as Record<string, CourseEditor>) ?? {});
         break;
       }
       case 'course:maintenance': {
-        const datos = mensaje.data as { curso_guid: string; titulo: string };
-        setCursosEnMantenimiento((previo) => ({ ...previo, [datos.curso_guid]: datos.titulo }));
+        const data = message.data as { courseGuid: string; title: string };
+        setCoursesUnderMaintenance((prev) => ({ ...prev, [data.courseGuid]: data.title }));
         break;
       }
       case 'course:updated': {
-        const datos = mensaje.data as { guid?: string; estado?: string };
-        if (datos?.estado === 'PUBLICADO' && datos.guid) {
-          setCursosEnMantenimiento((previo) => {
-            const siguiente = { ...previo };
-            delete siguiente[datos.guid as string];
-            return siguiente;
+        const data = message.data as { guid?: string; status?: string };
+        const guid = data?.guid;
+        if (data?.status === 'PUBLISHED' && guid) {
+          setCoursesUnderMaintenance((prev) => {
+            const next = { ...prev };
+            delete next[guid];
+            return next;
           });
         }
         break;
@@ -131,69 +150,65 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
   }, []);
 
   /** La sesión dejó de ser válida: se limpia y se vuelve al login con el motivo. */
-  const cerrarSesionForzada = useCallback((motivo?: string) => {
-    borrarSesion();
-    window.location.href = `/login?motivo=${MOTIVO_A_AVISO[motivo ?? ''] ?? 'revocada'}`;
+  const forceLogout = useCallback((reason?: string) => {
+    clearSession();
+    redirectToLogin((reason && REASON_TO_LOGOUT[reason]) || 'revoked');
   }, []);
 
   useEffect(() => {
-    const token = (() => {
-      try {
-        return window.localStorage.getItem('lms_token');
-      } catch {
-        return null;
-      }
-    })();
+    const token = readToken();
 
     // Sin sesión no hay nada que escuchar: la portada y el login no abren flujo.
-    if (!token) {
-      setConectado(false);
+    if (!authenticated || !token) {
+      setConnected(false);
+      setOnlineUsers([]);
+      setCoursesBeingEdited({});
+      setCoursesUnderMaintenance({});
       return;
     }
 
     const control = new AbortController();
 
-    void conectarFlujo({
+    void connectStream({
       url: `${apiUrl()}/realtime/stream`,
       token,
       signal: control.signal,
-      onEstado: setConectado,
-      onNoAutorizado: () => cerrarSesionForzada(),
-      onMensaje: (mensaje) => {
-        if (mensaje.event === 'session:revoked') {
-          cerrarSesionForzada((mensaje.data as { reason?: string })?.reason);
+      onConnectionChange: setConnected,
+      onUnauthorized: () => forceLogout(),
+      onMessage: (message) => {
+        if (message.event === 'session:revoked') {
+          forceLogout((message.data as { reason?: string })?.reason);
           return;
         }
-        aplicarEstadoInterno(mensaje);
-        repartir(mensaje.event, mensaje.data);
+        applyInternalState(message);
+        dispatch(message.event, message.data);
       },
     });
 
-    const temporizadoresActuales = temporizadores.current;
+    const currentTimers = timers.current;
     return () => {
       control.abort();
-      temporizadoresActuales.forEach((temporizador) => clearTimeout(temporizador));
-      temporizadoresActuales.clear();
+      currentTimers.forEach((timer) => clearTimeout(timer));
+      currentTimers.clear();
     };
-  }, [aplicarEstadoInterno, cerrarSesionForzada, repartir]);
+  }, [authenticated, applyInternalState, forceLogout, dispatch]);
 
-  const suscribir = useCallback((evento: EventoRealtime, escucha: Escucha) => {
-    const conjunto = escuchas.current.get(evento) ?? new Set<Escucha>();
-    conjunto.add(escucha);
-    escuchas.current.set(evento, conjunto);
+  const subscribe = useCallback((event: RealtimeEvent, listener: Listener) => {
+    const listenerSet = listeners.current.get(event) ?? new Set<Listener>();
+    listenerSet.add(listener);
+    listeners.current.set(event, listenerSet);
 
     return () => {
-      escuchas.current.get(evento)?.delete(escucha);
+      listeners.current.get(event)?.delete(listener);
     };
   }, []);
 
-  return (
-    <RealtimeContext.Provider
-      value={{ conectado, suscribir, usuariosEnLinea, cursosEnEdicion, cursosEnMantenimiento }}
-    >
-      {children}
-    </RealtimeContext.Provider>
+  const value = useMemo(
+    () => ({ connected, subscribe, onlineUsers, coursesBeingEdited, coursesUnderMaintenance }),
+    [connected, subscribe, onlineUsers, coursesBeingEdited, coursesUnderMaintenance],
   );
+
+  return <RealtimeContext.Provider value={value}>{children}</RealtimeContext.Provider>;
 }
 
 export function useRealtime() {
@@ -202,12 +217,12 @@ export function useRealtime() {
 
 /**
  * Suscripción a un evento con limpieza automática.
- * Evita el patrón `useEffect` + `return unsub` repetido en cada pantalla.
+ * Siempre llama a la versión más reciente de `listener`, sin volver a suscribirse.
  */
-export function useEventoRealtime(evento: EventoRealtime, escucha: Escucha): void {
-  const { suscribir } = useRealtime();
-  const referencia = useRef(escucha);
-  referencia.current = escucha;
+export function useRealtimeEvent(event: RealtimeEvent, listener: Listener): void {
+  const { subscribe } = useRealtime();
+  const ref = useRef(listener);
+  ref.current = listener;
 
-  useEffect(() => suscribir(evento, (datos) => referencia.current(datos)), [evento, suscribir]);
+  useEffect(() => subscribe(event, (data) => ref.current(data)), [event, subscribe]);
 }

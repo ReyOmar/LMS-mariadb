@@ -1,18 +1,19 @@
-﻿"use client";
+'use client';
 
-import { useRole } from "@/contexts/RoleContext";
-import { AdminDashboard } from "@/components/features/dashboards/AdminDashboard";
-import { TeacherDashboard } from "@/components/features/dashboards/TeacherDashboard";
-import { StudentDashboard } from "@/components/features/dashboards/StudentDashboard";
+import { useSession } from '@/contexts/SessionContext';
+import { AdminDashboard } from '@/components/features/dashboards/AdminDashboard';
+import { ExaminerDashboard } from '@/components/features/dashboards/ExaminerDashboard';
+import { StudentDashboard } from '@/components/features/dashboards/StudentDashboard';
 
-export default function DashboardController() {
-  const { role } = useRole();
+/** El panel de inicio es distinto para cada rol. */
+export default function DashboardPage() {
+  const { role } = useSession();
 
   return (
     <>
-      {role === "admin" && <AdminDashboard />}
-      {role === "teacher" && <TeacherDashboard />}
-      {role === "student" && <StudentDashboard />}
+      {role === 'admin' && <AdminDashboard />}
+      {role === 'teacher' && <ExaminerDashboard />}
+      {role === 'student' && <StudentDashboard />}
     </>
   );
 }

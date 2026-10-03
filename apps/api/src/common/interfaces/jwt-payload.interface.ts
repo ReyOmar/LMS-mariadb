@@ -1,17 +1,19 @@
-import { Pais } from '../domain/pais';
+import { Country } from '../domain/country';
 
-/** Roles del sistema. Espejo de `lms_rol_usuario` en Prisma. */
-export type RolUsuario = 'ADMINISTRADOR' | 'PROFESOR' | 'ESTUDIANTE';
+/** Roles del sistema. Espejo del enum `Role` de Prisma. */
+export const ROLES = ['ADMIN', 'TEACHER', 'STUDENT'] as const;
+
+export type UserRole = (typeof ROLES)[number];
 
 /**
- * Identidad autenticada que `JwtAuthGuard` adjunta a `request.user`.
+ * Identidad autenticada que `JwtGuard` adjunta a `request.user`.
  *
- * `rol` y `pais` se refrescan desde la base de datos en cada petición, no se leen del
- * token: si un administrador cambia el rol de alguien o desactiva su cuenta, el efecto
- * es inmediato sin esperar a que caduque el JWT.
+ * `role` y `country` se refrescan desde la base de datos en cada petición, no se leen del
+ * token: si un administrador cambia el rol de alguien o borra su cuenta, el efecto es
+ * inmediato sin esperar a que caduque el JWT.
  *
  * Es el **único** origen admitido de identidad. Ningún controlador debe aceptar un
- * `usuario_guid` o un `pais` por query o por cuerpo para decidir a quién pertenecen
+ * `userGuid` o un `country` por query o por cuerpo para decidir a quién pertenecen
  * los datos.
  */
 export interface JwtPayload {
@@ -20,9 +22,9 @@ export interface JwtPayload {
   /** Correo, para trazas y correos. */
   email: string;
   /** Rol vigente en base de datos. */
-  role: RolUsuario;
+  role: UserRole;
   /** Sede a la que pertenece el usuario. Acota toda consulta de la petición. */
-  pais: Pais;
+  country: Country;
   /** Identificador único de esta sesión (claim `jti`), para revocarla por separado. */
   jti: string;
   /** Emisión del token, en segundos (claim `iat`). */
@@ -36,6 +38,6 @@ export interface JwtClaims {
   sub: string;
   jti: string;
   email: string;
-  role: RolUsuario;
-  pais: Pais;
+  role: UserRole;
+  country: Country;
 }

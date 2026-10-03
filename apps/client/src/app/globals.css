@@ -1,13 +1,13 @@
-@import "tailwindcss";
+@import 'tailwindcss';
 @plugin "tailwindcss-animate";
 
 /* ═══════════════════════════════════════════════════════════
-   DESIGN SYSTEM — "Asfalto & Señalización"
+   SISTEMA DE DISEÑO — «Asfalto y Señalización»
    Identidad visual para plataforma LMS de movilidad/transporte
    ═══════════════════════════════════════════════════════════ */
 
 @theme {
-  /* ── Core Semantic Tokens ── */
+  /* ── Colores semánticos ── */
   --color-border: hsl(var(--border));
   --color-input: hsl(var(--input));
   --color-ring: hsl(var(--ring));
@@ -35,7 +35,7 @@
   --color-card: hsl(var(--card));
   --color-card-foreground: hsl(var(--card-foreground));
 
-  /* ── Extended Palette ── */
+  /* ── Paleta ampliada ── */
   --color-success: hsl(var(--success));
   --color-success-foreground: hsl(var(--success-foreground));
   --color-warning: hsl(var(--warning));
@@ -43,14 +43,14 @@
   --color-info: hsl(var(--info));
   --color-info-foreground: hsl(var(--info-foreground));
 
-  /* ── Radius ── */
+  /* ── Redondeo ── */
   --radius-lg: var(--radius);
   --radius-md: calc(var(--radius) - 2px);
   --radius-sm: calc(var(--radius) - 4px);
 }
 
 /* ═══════════════════════════════════════════════════════════
-   COLOR PALETTE — LIGHT MODE
+   PALETA DE COLOR — MODO CLARO
    Azul Industrial + Ámbar Señalización + Verde Semáforo
    ═══════════════════════════════════════════════════════════ */
 @layer base {
@@ -85,8 +85,8 @@
     --input: 214 22% 90%;
     --ring: 207 80% 42%;
 
-    /* Extended */
-    --success: 152 60% 40%;
+    /* Ampliada */
+    --success: 152 60% 32%;
     --success-foreground: 0 0% 100%;
     --warning: 38 92% 50%;
     --warning-foreground: 30 60% 12%;
@@ -95,7 +95,7 @@
 
     --radius: 0.75rem;
 
-    /* Shadows */
+    /* Sombras */
     --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.04);
     --shadow-md: 0 4px 12px -1px rgba(0, 0, 0, 0.06), 0 2px 4px -2px rgba(0, 0, 0, 0.04);
     --shadow-lg: 0 10px 25px -3px rgba(0, 0, 0, 0.08), 0 4px 8px -4px rgba(0, 0, 0, 0.04);
@@ -105,7 +105,7 @@
   }
 
   /* ═══════════════════════════════════════════════════════════
-     COLOR PALETTE — DARK MODE
+     PALETA DE COLOR — MODO OSCURO
      ═══════════════════════════════════════════════════════════ */
   .dark {
     --background: 225 25% 6%;
@@ -137,7 +137,7 @@
     --ring: 207 85% 55%;
 
     --success: 152 55% 45%;
-    --success-foreground: 0 0% 100%;
+    --success-foreground: 220 30% 8%;
     --warning: 38 88% 55%;
     --warning-foreground: 30 60% 8%;
     --info: 207 85% 55%;
@@ -153,19 +153,19 @@
 }
 
 /* ═══════════════════════════════════════════════════════════
-   BASE STYLES
+   ESTILOS BASE
    ═══════════════════════════════════════════════════════════ */
 @layer base {
   * {
     @apply border-border;
   }
-  /* Visible keyboard focus for accessibility */
+  /* Foco visible al navegar con el teclado */
   *:focus-visible {
     outline: 2px solid hsl(var(--primary));
     outline-offset: 2px;
     border-radius: 4px;
   }
-  /* Skip to content link - visible only on focus */
+  /* Enlace «Saltar al contenido»: sólo aparece al recibir el foco */
   .skip-to-content {
     position: absolute;
     top: -100%;
@@ -185,23 +185,37 @@
   }
   body {
     @apply bg-background text-foreground;
-    font-family: 'Inter', system-ui, -apple-system, sans-serif;
-    font-feature-settings: "rlig" 1, "calt" 1, "tnum" 1;
+    font-family:
+      var(--font-inter),
+      system-ui,
+      -apple-system,
+      sans-serif;
+    font-feature-settings:
+      'rlig' 1,
+      'calt' 1,
+      'tnum' 1;
     letter-spacing: -0.011em;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
   }
-  h1, h2, h3, h4, h5, h6 {
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
     letter-spacing: -0.02em;
     font-weight: 700;
   }
-  code, pre, .font-mono {
+  code,
+  pre,
+  .font-mono {
     font-family: 'JetBrains Mono', 'Fira Code', monospace;
   }
 }
 
 /* ═══════════════════════════════════════════════════════════
-   KEYFRAME ANIMATIONS
+   ANIMACIONES
    ═══════════════════════════════════════════════════════════ */
 @keyframes fadeSlideIn {
   from {
@@ -214,146 +228,109 @@
   }
 }
 
-@keyframes fadeSlideInLeft {
-  from {
-    opacity: 0;
-    transform: translateX(-8px);
-  }
-  to {
-    opacity: 1;
-    transform: translateX(0);
-  }
-}
-
-@keyframes shimmer {
-  0% { background-position: -200% 0; }
-  100% { background-position: 200% 0; }
-}
-
 @keyframes pageLoaderShimmer {
-  0% { background-position: -200% 0; }
-  100% { background-position: 200% 0; }
-}
-
-@keyframes pulseGlow {
-  0%, 100% {
-    box-shadow: 0 0 4px currentColor;
-    opacity: 1;
+  0% {
+    background-position: -200% 0;
   }
-  50% {
-    box-shadow: 0 0 12px currentColor;
-    opacity: 0.7;
+  100% {
+    background-position: 200% 0;
   }
 }
 
-@keyframes progressFill {
-  from { width: 0%; }
-}
-
-@keyframes ripple {
-  to {
-    transform: scale(4);
-    opacity: 0;
-  }
-}
-
-@keyframes slideDown {
-  from {
-    opacity: 0;
-    transform: translateY(-4px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-@keyframes scaleIn {
-  from {
-    opacity: 0;
-    transform: scale(0.95);
-  }
-  to {
-    opacity: 1;
-    transform: scale(1);
-  }
-}
-
-/* Alert/Toast auto-close progress bar countdown */
+/* Barra de cuenta atrás de los avisos que se cierran solos */
 @keyframes shrink {
-  from { width: 100%; }
-  to { width: 0%; }
+  from {
+    width: 100%;
+  }
+  to {
+    width: 0%;
+  }
 }
 
 @keyframes toast-shrink {
-  from { width: 100%; }
-  to { width: 0%; }
+  from {
+    width: 100%;
+  }
+  to {
+    width: 0%;
+  }
 }
 
-/* Landing page hero animations */
-@keyframes fadeInUp {
-  from { opacity: 0; transform: translateY(30px); }
-  to { opacity: 1; transform: translateY(0); }
-}
-
+/* Animaciones de la portada */
 @keyframes slideRoad {
-  0% { transform: translateX(0); }
-  100% { transform: translateX(-112px); }
+  0% {
+    transform: translateX(0);
+  }
+  100% {
+    transform: translateX(-112px);
+  }
 }
 
 @keyframes floatBg {
-  0%, 100% { transform: translate(0, 0) scale(1); }
-  33% { transform: translate(30px, -50px) scale(1.1); }
-  66% { transform: translate(-20px, 20px) scale(0.9); }
+  0%,
+  100% {
+    transform: translate(0, 0) scale(1);
+  }
+  33% {
+    transform: translate(30px, -50px) scale(1.1);
+  }
+  66% {
+    transform: translate(-20px, 20px) scale(0.9);
+  }
 }
 
-html { scroll-behavior: smooth; }
+html {
+  scroll-behavior: smooth;
+}
 
 /* ═══════════════════════════════════════════════════════════
-   ANIMATION UTILITY CLASSES
+   CLASES DE ANIMACIÓN
    ═══════════════════════════════════════════════════════════ */
 .animate-fade-slide-in {
   animation: fadeSlideIn 0.4s ease-out both;
 }
 
-.animate-fade-slide-left {
-  animation: fadeSlideInLeft 0.35s ease-out both;
+/* Retrasos escalonados para animar listas */
+.stagger-1 {
+  animation-delay: 50ms;
+}
+.stagger-2 {
+  animation-delay: 100ms;
+}
+.stagger-3 {
+  animation-delay: 150ms;
+}
+.stagger-4 {
+  animation-delay: 200ms;
+}
+.stagger-5 {
+  animation-delay: 250ms;
+}
+.stagger-6 {
+  animation-delay: 300ms;
+}
+.stagger-7 {
+  animation-delay: 350ms;
 }
 
-.animate-shimmer {
-  background: linear-gradient(90deg, transparent 25%, hsl(var(--muted)) 50%, transparent 75%);
-  background-size: 200% 100%;
-  animation: shimmer 1.5s infinite;
+/* Quien pide menos movimiento en su sistema ve el contenido en su sitio, sin entradas,
+   pulsos ni desplazamientos. La portada lo resuelve con `motion-reduce:` en su marcado. */
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+  .animate-fade-slide-in,
+  .animate-in,
+  .animate-pulse {
+    animation: none;
+  }
+  .card-interactive:hover {
+    transform: none;
+  }
 }
-
-.animate-pulse-glow {
-  animation: pulseGlow 2s ease-in-out infinite;
-}
-
-.animate-progress-fill {
-  animation: progressFill 0.8s ease-out both;
-}
-
-.animate-scale-in {
-  animation: scaleIn 0.2s ease-out both;
-}
-
-.animate-slide-down {
-  animation: slideDown 0.25s ease-out both;
-}
-
-/* Stagger delays for list animations */
-.stagger-1 { animation-delay: 50ms; }
-.stagger-2 { animation-delay: 100ms; }
-.stagger-3 { animation-delay: 150ms; }
-.stagger-4 { animation-delay: 200ms; }
-.stagger-5 { animation-delay: 250ms; }
-.stagger-6 { animation-delay: 300ms; }
-.stagger-7 { animation-delay: 350ms; }
-.stagger-8 { animation-delay: 400ms; }
 
 /* ═══════════════════════════════════════════════════════════
-   SIDEBAR — Theme-Aware (follows light/dark mode)
+   BARRA LATERAL — sigue el modo claro u oscuro
    ═══════════════════════════════════════════════════════════ */
 .sidebar-nav {
   background: hsl(var(--card));
@@ -386,8 +363,7 @@ html { scroll-behavior: smooth; }
 
 .sidebar-nav .sidebar-section-label {
   color: hsl(var(--muted-foreground));
-  opacity: 0.6;
-  font-size: 0.65rem;
+  font-size: 0.7rem;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.08em;
@@ -396,27 +372,13 @@ html { scroll-behavior: smooth; }
 }
 
 /* ═══════════════════════════════════════════════════════════
-   GLASSMORPHISM UTILITIES
-   ═══════════════════════════════════════════════════════════ */
-.glass {
-  background: hsl(var(--card) / 0.7);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border: 1px solid hsl(var(--border) / 0.5);
-}
-
-.glass-strong {
-  background: hsl(var(--card) / 0.85);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
-  border: 1px solid hsl(var(--border) / 0.6);
-}
-
-/* ═══════════════════════════════════════════════════════════
-   INTERACTIVE CARD
+   TARJETA INTERACTIVA
    ═══════════════════════════════════════════════════════════ */
 .card-interactive {
-  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+  transition:
+    transform 0.2s ease,
+    box-shadow 0.2s ease,
+    border-color 0.2s ease;
 }
 
 .card-interactive:hover {
@@ -430,16 +392,16 @@ html { scroll-behavior: smooth; }
 }
 
 /* ═══════════════════════════════════════════════════════════
-   BROWSER OVERRIDES
+   AJUSTES DEL NAVEGADOR
    ═══════════════════════════════════════════════════════════ */
 
 /* Ocultar el icono del ojito nativo en Edge/Chromium */
-input[type="password"]::-ms-reveal,
-input[type="password"]::-ms-clear {
-    display: none;
+input[type='password']::-ms-reveal,
+input[type='password']::-ms-clear {
+  display: none;
 }
 
-/* Scrollbar styling — thin, themed */
+/* Barras de desplazamiento finas y con los colores del tema */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
@@ -465,7 +427,7 @@ input[type="password"]::-ms-clear {
 }
 
 /* ═══════════════════════════════════════════════════════════
-   REACTQUILL OVERRIDES
+   AJUSTES DEL EDITOR (React Quill)
    ═══════════════════════════════════════════════════════════ */
 .ql-toolbar {
   @apply !bg-muted/30 !border-border/50 !rounded-t-xl;
@@ -496,10 +458,10 @@ input[type="password"]::-ms-clear {
 }
 
 /* ═══════════════════════════════════════════════════════════
-   RESPONSIVE — Touch & Mobile Utilities
+   MÓVIL Y PANTALLAS TÁCTILES
    ═══════════════════════════════════════════════════════════ */
 
-/* Enforce minimum touch targets on mobile sidebar */
+/* Tamaño mínimo de los enlaces de la barra lateral para pulsarlos con el dedo */
 @media (max-width: 1023px) {
   .sidebar-nav .sidebar-link {
     min-height: 44px;
@@ -507,8 +469,12 @@ input[type="password"]::-ms-clear {
   }
 }
 
-/* Responsive text scaling */
+/* Títulos más pequeños en pantallas estrechas */
 @media (max-width: 640px) {
-  h1 { font-size: 1.5rem !important; }
-  h2 { font-size: 1.25rem !important; }
+  h1 {
+    font-size: 1.5rem !important;
+  }
+  h2 {
+    font-size: 1.25rem !important;
+  }
 }

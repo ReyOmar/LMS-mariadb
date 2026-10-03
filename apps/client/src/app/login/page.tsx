@@ -1,138 +1,143 @@
 'use client';
 
 import { FormEvent, Suspense, useEffect, useState } from 'react';
+import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { CheckCircle2, Eye, EyeOff, GraduationCap, Home, Lock, Mail, ShieldCheck, User } from 'lucide-react';
-import api, { mensajeDeError, urlDeArchivo } from '@/lib/api';
-import { SEDES } from '@/lib/pais';
-import { useSede } from '@/contexts/SedeContext';
-import { useRole, UsuarioSesion } from '@/contexts/RoleContext';
+import api, { errorMessage, fileUrlFor, type LogoutReason } from '@/lib/api';
+import { COUNTRY_INFO } from '@/lib/country';
+import { PASSWORD_HINT, passwordProblem } from '@/lib/password';
+import { CountryFlag } from '@/components/ui/CountryFlag';
+import { CountrySwitcher } from '@/components/features/CountrySwitcher';
+import { useCountry } from '@/contexts/CountryContext';
+import { useSession, SessionUser } from '@/contexts/SessionContext';
 import { useConfig } from '@/contexts/ConfigContext';
 import { PageLoader } from '@/components/ui/PageLoader';
-import { SelectorDeSede } from '@/components/features/SelectorDeSede';
-import { AvisoDeSesion, MotivoDeSalida } from './components/AvisoDeSesion';
-import { SolicitudDeAcceso } from './components/SolicitudDeAcceso';
+import { DashboardShell } from '@/components/layout/DashboardShell';
+import { SessionAlert } from './components/SessionAlert';
+import { AccessRequestForm } from './components/AccessRequestForm';
 
-type Vista = 'acceso' | 'primera-contrasena' | 'solicitud' | 'solicitud-enviada' | 'aviso';
+type View = 'login' | 'first-password' | 'request' | 'request-sent' | 'notice';
 
-interface RespuestaAcceso {
+interface LoginResponse {
   requireSetup?: true;
   message: string;
   token?: string;
-  user: UsuarioSesion | { email: string; nombre: string };
+  user: SessionUser | { email: string; firstName: string };
 }
 
-const MOTIVOS_VALIDOS: MotivoDeSalida[] = ['expirada', 'revocada', 'desplazada'];
+const VALID_REASONS: LogoutReason[] = ['expired', 'revoked', 'displaced'];
 
-export default function PaginaDeAcceso() {
+export default function LoginPage() {
   return (
     <Suspense
       fallback={
         <div className="min-h-screen flex items-center justify-center bg-muted/30">
-          <PageLoader message="Cargando…" />
+          <PageLoader message="Cargando campus…" />
         </div>
       }
     >
-      <ContenidoDeAcceso />
+      <LoginContent />
     </Suspense>
   );
 }
 
-function ContenidoDeAcceso() {
+function LoginContent() {
   const router = useRouter();
-  const parametros = useSearchParams();
-  const { sede, listo: sedeLista } = useSede();
-  const { iniciarSesion } = useRole();
+  const params = useSearchParams();
+  const { country, ready: countryReady } = useCountry();
+  const { login } = useSession();
   const { config } = useConfig();
 
-  const [vista, setVista] = useState<Vista>('acceso');
-  const [motivoDeSalida, setMotivoDeSalida] = useState<MotivoDeSalida | null>(null);
+  const [view, setView] = useState<View>('login');
+  const [logoutReason, setLogoutReason] = useState<LogoutReason | null>(null);
 
-  const [correo, setCorreo] = useState('');
-  const [contrasena, setContrasena] = useState('');
-  const [nuevaContrasena, setNuevaContrasena] = useState('');
-  const [verContrasena, setVerContrasena] = useState(false);
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
 
-  const [enviando, setEnviando] = useState(false);
-  const [entrando, setEntrando] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [loggingIn, setLoggingIn] = useState(false);
   const [error, setError] = useState('');
-  const [aviso, setAviso] = useState('');
+  /** Explicación del servidor de por qué hay que crear la contraseña antes de entrar. */
+  const [setupMessage, setSetupMessage] = useState('');
 
   // Motivo por el que el usuario llegó aquí sin pedirlo. Se limpia de la URL para que al
   // recargar no vuelva a aparecer el mismo mensaje.
   useEffect(() => {
-    const motivo = parametros?.get('motivo');
-    if (!motivo || !MOTIVOS_VALIDOS.includes(motivo as MotivoDeSalida)) return;
+    const reason = params?.get('reason');
+    if (!reason || !VALID_REASONS.includes(reason as LogoutReason)) return;
 
-    setMotivoDeSalida(motivo as MotivoDeSalida);
-    setVista('aviso');
+    setLogoutReason(reason as LogoutReason);
+    setView('notice');
     window.history.replaceState({}, '', '/login');
-  }, [parametros]);
+  }, [params]);
 
-  const volverAlAcceso = () => {
-    setVista('acceso');
+  const backToLogin = () => {
+    setView('login');
     setError('');
-    setAviso('');
-    setContrasena('');
-    setNuevaContrasena('');
+    setSetupMessage('');
+    setPassword('');
+    setNewPassword('');
   };
 
-  const acceder = async (evento: FormEvent) => {
-    evento.preventDefault();
-    if (!sede) return;
-
-    setEnviando(true);
+  const handleLogin = async (event: FormEvent) => {
+    event.preventDefault();
+    setSubmitting(true);
     setError('');
     try {
-      const { data } = await api.post<RespuestaAcceso>('/auth/login', {
-        email: correo,
-        contrasena,
-        pais: sede,
-      });
+      const { data } = await api.post<LoginResponse>('/auth/login', { email, password, country });
 
       if (data.requireSetup) {
-        setAviso(data.message);
-        setVista('primera-contrasena');
+        setSetupMessage(data.message);
+        setView('first-password');
         return;
       }
 
-      entrar(data);
-    } catch (fallo) {
-      setError(mensajeDeError(fallo, 'No se pudo iniciar sesión.'));
+      completeLogin(data);
+    } catch (failure) {
+      setError(errorMessage(failure, 'No se pudo iniciar sesión.'));
     } finally {
-      setEnviando(false);
+      setSubmitting(false);
     }
   };
 
-  const establecerContrasena = async (evento: FormEvent) => {
-    evento.preventDefault();
-    setEnviando(true);
+  const submitNewPassword = async (event: FormEvent) => {
+    event.preventDefault();
+    const problem = passwordProblem(newPassword);
+    if (problem) {
+      setError(problem);
+      return;
+    }
+
+    setSubmitting(true);
     setError('');
     try {
-      const { data } = await api.post<RespuestaAcceso>('/auth/establecer-password', {
-        email: correo,
-        contrasenaTemporal: contrasena,
-        nuevaContrasena,
+      const { data } = await api.post<LoginResponse>('/auth/set-password', {
+        email,
+        temporaryPassword: password,
+        newPassword,
       });
-      entrar(data);
-    } catch (fallo) {
-      setError(mensajeDeError(fallo, 'No se pudo establecer la contraseña.'));
+      completeLogin(data);
+    } catch (failure) {
+      setError(errorMessage(failure, 'No se pudo establecer la contraseña.'));
     } finally {
-      setEnviando(false);
+      setSubmitting(false);
     }
   };
 
-  const entrar = (respuesta: RespuestaAcceso) => {
-    if (!respuesta.token) {
+  const completeLogin = (response: LoginResponse) => {
+    if (!response.token) {
       setError('La respuesta del servidor no incluyó la sesión. Inténtalo de nuevo.');
       return;
     }
-    iniciarSesion(respuesta.token, respuesta.user as UsuarioSesion);
-    setEntrando(true);
+    login(response.token, response.user as SessionUser);
+    setLoggingIn(true);
     router.push('/dashboard');
   };
 
-  if (!sedeLista) {
+  if (!countryReady) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-muted/30">
         <PageLoader message="Cargando campus…" />
@@ -140,34 +145,24 @@ function ContenidoDeAcceso() {
     );
   }
 
-  // Sin sede elegida no se puede ni mostrar el formulario: la sede forma parte de las
-  // credenciales, porque la misma pantalla atiende a dos operaciones distintas.
-  if (!sede) {
+  // Ya en el marco del panel: el indicador sigue en el mismo sitio cuando el panel lo releva.
+  if (loggingIn) {
     return (
-      <main className="min-h-screen flex items-center justify-center px-6 py-16 bg-muted/30">
-        <SelectorDeSede
-          titulo="¿A qué sede quieres entrar?"
-          descripcion="Tu cuenta pertenece a una sola sede. Elige la tuya para continuar."
-        />
-      </main>
-    );
-  }
-
-  if (entrando) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-muted/30">
+      <DashboardShell>
         <PageLoader message="Entrando al campus…" />
-      </div>
+      </DashboardShell>
     );
   }
 
-  const fondo = urlDeArchivo(config?.login_fondo_url);
-  const logo = urlDeArchivo(config?.logo_url);
+  const background = fileUrlFor(config?.loginBackgroundUrl);
+  const logo = fileUrlFor(config?.logoUrl);
+  // El mensaje de bienvenida lo escribe cada sede desde «Tema y apariencia».
+  const description = (view === 'login' && config?.welcomeMessage?.trim()) || DESCRIPTIONS[view];
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-muted/30 p-4 relative overflow-hidden">
-      {fondo ? (
-        <img src={fondo} alt="" className="absolute inset-0 w-full h-full object-cover z-0" />
+      {background ? (
+        <img src={background} alt="" className="absolute inset-0 w-full h-full object-cover z-0" />
       ) : (
         <>
           <div className="absolute top-[-10%] left-[-10%] w-[40vw] h-[40vw] rounded-full bg-primary/20 blur-[100px] z-0" />
@@ -177,12 +172,12 @@ function ContenidoDeAcceso() {
 
       <div className="w-full max-w-md bg-card border border-border/50 rounded-3xl shadow-xl p-8 relative z-10 backdrop-blur-sm">
         <div className="flex flex-col items-center text-center gap-4 mb-7">
-          {logo && vista === 'acceso' ? (
+          {logo && view === 'login' ? (
             <img src={logo} alt="" className="max-h-20 max-w-[200px] object-contain" />
           ) : (
             <div className="h-14 w-14 rounded-2xl bg-primary/10 flex items-center justify-center ring-1 ring-primary/20">
-              {vista === 'primera-contrasena' ? (
-                <ShieldCheck className="h-7 w-7 text-emerald-500" />
+              {view === 'first-password' ? (
+                <ShieldCheck className="h-7 w-7 text-primary" />
               ) : (
                 <GraduationCap className="h-7 w-7 text-primary" />
               )}
@@ -190,30 +185,22 @@ function ContenidoDeAcceso() {
           )}
 
           <div>
-            <h1 className="text-2xl font-bold tracking-tight">{TITULOS[vista]}</h1>
-            <p className="text-sm text-muted-foreground mt-2 leading-relaxed">{DESCRIPCIONES[vista]}</p>
+            <h1 className="text-2xl font-bold tracking-tight">{TITLES[view]}</h1>
+            <p className="text-sm text-muted-foreground mt-2 leading-relaxed">{description}</p>
           </div>
         </div>
 
-        {/* Advertencia de sede: siempre visible, porque entrar en la equivocada es el
-            error más probable y el mensaje de rechazo no puede revelar en cuál está la
-            cuenta. */}
-        <div className="mb-6 rounded-2xl border border-primary/20 bg-primary/5 p-4">
-          <div className="flex items-start gap-3">
-            <span className="text-2xl leading-none" aria-hidden="true">
-              {SEDES[sede].bandera}
-            </span>
-            <div className="min-w-0 flex-1">
-              <p className="text-sm font-bold">Vas a entrar en la sede de {SEDES[sede].nombre}</p>
-              <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
-                Colombia y México son operaciones separadas y sus datos no se mezclan. Si tu cuenta es de la otra
-                sede, el acceso será rechazado.
-              </p>
-              <a href="/" className="mt-2 inline-block text-xs font-bold text-primary hover:underline">
-                Cambiar de sede
-              </a>
-            </div>
-          </div>
+        {/* Recordatorio de sede. Entrar en la equivocada es el error más probable y el
+            mensaje de rechazo no puede decir en cuál está la cuenta, así que se avisa
+            antes; el cambio se ofrece aquí mismo para no obligar a volver a la portada. */}
+        <div className="mb-6 flex items-center gap-3 rounded-xl border border-border bg-muted/40 px-3 py-2">
+          <CountryFlag country={country} size="sm" />
+          <p className="flex-1 text-xs leading-snug text-muted-foreground">
+            {view === 'request' ? 'Solicitas acceso a la sede de ' : 'Entrando en la sede de '}
+            <strong className="text-foreground">{COUNTRY_INFO[country].name}</strong>.{' '}
+            {view === 'request' ? 'Tu cuenta pertenecerá sólo a ella.' : 'Tu cuenta pertenece a una sola.'}
+          </p>
+          <CountrySwitcher />
         </div>
 
         {error && (
@@ -225,26 +212,26 @@ function ContenidoDeAcceso() {
           </p>
         )}
 
-        {aviso && vista === 'primera-contrasena' && (
-          <p className="mb-5 flex items-center justify-center gap-2 rounded-xl border border-emerald-500/20 bg-emerald-500/10 px-4 py-3 text-sm font-medium text-emerald-600 dark:text-emerald-400 text-center">
+        {setupMessage && view === 'first-password' && (
+          <p className="mb-5 flex items-center justify-center gap-2 rounded-xl border border-emerald-500/20 bg-emerald-500/10 px-4 py-3 text-sm font-medium text-emerald-700 dark:text-emerald-400 text-center">
             <CheckCircle2 className="h-4 w-4 shrink-0" />
-            {aviso}
+            {setupMessage}
           </p>
         )}
 
-        {vista === 'acceso' && (
-          <form onSubmit={acceder} className="space-y-5">
+        {view === 'login' && (
+          <form onSubmit={handleLogin} className="space-y-5">
             <div className="space-y-1.5">
-              <label htmlFor="correo" className="text-sm font-medium">
+              <label htmlFor="email" className="text-sm font-medium">
                 Correo electrónico
               </label>
               <div className="relative">
                 <Mail className="absolute left-3 top-3.5 h-4.5 w-4.5 text-muted-foreground" />
                 <input
-                  id="correo"
+                  id="email"
                   type="email"
-                  value={correo}
-                  onChange={(evento) => setCorreo(evento.target.value)}
+                  value={email}
+                  onChange={(event) => setEmail(event.target.value)}
                   required
                   autoComplete="email"
                   placeholder="nombre@empresa.com"
@@ -254,111 +241,105 @@ function ContenidoDeAcceso() {
             </div>
 
             <div className="space-y-1.5">
-              <label htmlFor="contrasena" className="text-sm font-medium">
+              <label htmlFor="password" className="text-sm font-medium">
                 Contraseña
               </label>
               <div className="relative">
                 <Lock className="absolute left-3 top-3.5 h-4.5 w-4.5 text-muted-foreground" />
                 <input
-                  id="contrasena"
-                  type={verContrasena ? 'text' : 'password'}
-                  value={contrasena}
-                  onChange={(evento) => setContrasena(evento.target.value)}
+                  id="password"
+                  type={showPassword ? 'text' : 'password'}
+                  value={password}
+                  onChange={(event) => setPassword(event.target.value)}
                   required
                   autoComplete="current-password"
                   className="h-12 w-full rounded-xl border border-input bg-background/60 pl-11 pr-11 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
                 />
                 <button
                   type="button"
-                  onClick={() => setVerContrasena((valor) => !valor)}
-                  aria-label={verContrasena ? 'Ocultar contraseña' : 'Mostrar contraseña'}
+                  onClick={() => setShowPassword((value) => !value)}
+                  aria-label={showPassword ? 'Ocultar contraseña' : 'Mostrar contraseña'}
                   className="absolute right-3 top-3.5 text-muted-foreground hover:text-foreground transition-colors"
                 >
-                  {verContrasena ? <EyeOff className="h-4.5 w-4.5" /> : <Eye className="h-4.5 w-4.5" />}
+                  {showPassword ? <EyeOff className="h-4.5 w-4.5" /> : <Eye className="h-4.5 w-4.5" />}
                 </button>
               </div>
             </div>
 
             <button
               type="submit"
-              disabled={enviando}
+              disabled={submitting}
               className="h-12 w-full rounded-xl bg-primary text-sm font-bold text-primary-foreground shadow transition-all hover:bg-primary/90 disabled:opacity-60"
             >
-              {enviando ? 'Comprobando…' : 'Entrar'}
+              {submitting ? 'Comprobando…' : 'Entrar'}
             </button>
           </form>
         )}
 
-        {vista === 'primera-contrasena' && (
-          <form onSubmit={establecerContrasena} className="space-y-5">
+        {view === 'first-password' && (
+          <form onSubmit={submitNewPassword} className="space-y-5">
             <div className="space-y-1.5">
-              <label htmlFor="nueva-contrasena" className="text-sm font-medium">
+              <label htmlFor="new-password" className="text-sm font-medium">
                 Tu nueva contraseña
               </label>
               <div className="relative">
-                <Lock className="absolute left-3 top-3.5 h-4.5 w-4.5 text-emerald-500" />
+                <Lock className="absolute left-3 top-3.5 h-4.5 w-4.5 text-primary" />
                 <input
-                  id="nueva-contrasena"
-                  type={verContrasena ? 'text' : 'password'}
-                  value={nuevaContrasena}
-                  onChange={(evento) => setNuevaContrasena(evento.target.value)}
+                  id="new-password"
+                  type={showPassword ? 'text' : 'password'}
+                  value={newPassword}
+                  onChange={(event) => setNewPassword(event.target.value)}
                   required
                   autoComplete="new-password"
-                  className="h-12 w-full rounded-xl border border-emerald-500/30 bg-emerald-500/5 pl-11 pr-11 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
+                  className="h-12 w-full rounded-xl border border-primary/30 bg-primary/5 pl-11 pr-11 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
                 />
                 <button
                   type="button"
-                  onClick={() => setVerContrasena((valor) => !valor)}
-                  aria-label={verContrasena ? 'Ocultar contraseña' : 'Mostrar contraseña'}
-                  className="absolute right-3 top-3.5 text-emerald-600/70 hover:text-emerald-600 transition-colors"
+                  onClick={() => setShowPassword((value) => !value)}
+                  aria-label={showPassword ? 'Ocultar contraseña' : 'Mostrar contraseña'}
+                  className="absolute right-3 top-3.5 text-muted-foreground hover:text-foreground transition-colors"
                 >
-                  {verContrasena ? <EyeOff className="h-4.5 w-4.5" /> : <Eye className="h-4.5 w-4.5" />}
+                  {showPassword ? <EyeOff className="h-4.5 w-4.5" /> : <Eye className="h-4.5 w-4.5" />}
                 </button>
               </div>
-              <p className="text-xs text-muted-foreground">
-                Mínimo 8 caracteres, con al menos una letra y un número.
-              </p>
+              <p className="text-xs text-muted-foreground">{PASSWORD_HINT}</p>
             </div>
 
             <div className="flex gap-2">
               <button
                 type="button"
-                onClick={volverAlAcceso}
+                onClick={backToLogin}
                 className="h-12 px-4 rounded-xl border border-border text-xs font-bold text-muted-foreground hover:bg-muted transition-colors"
               >
                 Cancelar
               </button>
               <button
                 type="submit"
-                disabled={enviando}
-                className="flex-1 h-12 rounded-xl bg-emerald-600 text-sm font-bold text-white hover:bg-emerald-700 disabled:opacity-60 transition-colors"
+                disabled={submitting}
+                className="flex-1 h-12 rounded-xl bg-primary text-sm font-bold text-primary-foreground hover:bg-primary/90 disabled:opacity-60 transition-colors"
               >
-                {enviando ? 'Guardando…' : 'Guardar y entrar'}
+                {submitting ? 'Guardando…' : 'Guardar y entrar'}
               </button>
             </div>
           </form>
         )}
 
-        {vista === 'solicitud' && (
-          <SolicitudDeAcceso
-            sede={sede}
-            onCancelar={volverAlAcceso}
-            onEnviada={() => setVista('solicitud-enviada')}
-          />
+        {view === 'request' && (
+          <AccessRequestForm country={country} onCancel={backToLogin} onSubmitted={() => setView('request-sent')} />
         )}
 
-        {vista === 'solicitud-enviada' && (
+        {view === 'request-sent' && (
           <div className="flex flex-col items-center text-center">
             <div className="h-16 w-16 rounded-3xl bg-emerald-500/10 flex items-center justify-center mb-6 ring-1 ring-emerald-500/20">
               <CheckCircle2 className="h-8 w-8 text-emerald-500" />
             </div>
             <p className="text-sm text-muted-foreground leading-relaxed mb-8">
-              Un administrador de la sede de {SEDES[sede].nombre} revisará tu solicitud. Recibirás un correo con tus
-              datos de acceso en cuanto la apruebe.
+              Un administrador de la sede de {COUNTRY_INFO[country].name} revisará tu solicitud. Recibirás un correo con
+              tus datos de acceso en cuanto la apruebe.
             </p>
             <button
               type="button"
-              onClick={volverAlAcceso}
+              onClick={backToLogin}
               className="h-11 w-full rounded-xl border border-border bg-card font-bold text-sm hover:bg-muted transition-colors"
             >
               Volver al acceso
@@ -366,34 +347,32 @@ function ContenidoDeAcceso() {
           </div>
         )}
 
-        {vista === 'aviso' && motivoDeSalida && (
-          <AvisoDeSesion motivo={motivoDeSalida} onContinuar={volverAlAcceso} />
-        )}
+        {view === 'notice' && logoutReason && <SessionAlert reason={logoutReason} onContinue={backToLogin} />}
 
-        {vista === 'acceso' && (
+        {view === 'login' && (
           <div className="mt-8 pt-6 border-t border-border flex flex-col items-center gap-3">
-            <a
-              href="/recuperar-contrasena"
+            <Link
+              href="/forgot-password"
               className="text-xs font-medium text-muted-foreground hover:text-primary transition-colors flex items-center gap-1.5"
             >
               <Lock className="h-3.5 w-3.5" /> ¿Olvidaste tu contraseña?
-            </a>
+            </Link>
             <button
               type="button"
               onClick={() => {
-                setVista('solicitud');
+                setView('request');
                 setError('');
               }}
               className="text-xs font-bold text-primary hover:underline flex items-center gap-2"
             >
               <User className="h-4 w-4" /> Solicitar acceso al campus
             </button>
-            <a
+            <Link
               href="/"
               className="mt-1 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1.5"
             >
               <Home className="h-3.5 w-3.5" /> Volver al inicio
-            </a>
+            </Link>
           </div>
         )}
       </div>
@@ -401,19 +380,18 @@ function ContenidoDeAcceso() {
   );
 }
 
-const TITULOS: Record<Vista, string> = {
-  acceso: 'Acceso al campus',
-  'primera-contrasena': 'Crea tu contraseña',
-  solicitud: 'Solicitar acceso',
-  'solicitud-enviada': 'Solicitud enviada',
-  aviso: 'Tu sesión terminó',
+const TITLES: Record<View, string> = {
+  login: 'Acceso al campus',
+  'first-password': 'Crea tu contraseña',
+  request: 'Solicitar acceso',
+  'request-sent': 'Solicitud enviada',
+  notice: 'Tu sesión terminó',
 };
 
-const DESCRIPCIONES: Record<Vista, string> = {
-  acceso: 'Introduce tus credenciales para entrar.',
-  'primera-contrasena':
-    'Tu cuenta usa todavía la contraseña temporal. Elige una propia para poder continuar.',
-  solicitud: 'El registro no es automático: un administrador revisa cada solicitud.',
-  'solicitud-enviada': 'Ya está en manos de la administración de tu sede.',
-  aviso: 'Esto es lo que ocurrió.',
+const DESCRIPTIONS: Record<View, string> = {
+  login: 'Introduce tus credenciales para entrar.',
+  'first-password': 'Tu cuenta usa todavía la contraseña temporal. Elige una propia para poder continuar.',
+  request: 'El registro no es automático: un administrador revisa cada solicitud.',
+  'request-sent': 'Ya está en manos de la administración de tu sede.',
+  notice: 'Esto es lo que ocurrió.',
 };

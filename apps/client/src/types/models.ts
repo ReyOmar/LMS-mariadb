@@ -5,226 +5,397 @@
  * literal de las tablas: lo que se declara aquí es lo que el navegador recibe realmente.
  * Dos diferencias importantes respecto a la base de datos:
  *
- *  - Los archivos reservados llegan como **URL firmada** (`archivo_url`, `archivo_adjunto_url`),
+ *  - Los archivos reservados llegan como **URL firmada** (`fileUrl`, `attachmentUrl`),
  *    nunca como clave de almacenamiento suelta.
  *  - Los cuestionarios llegan **sin las respuestas correctas** salvo en el editor de cursos.
  */
 
-import type { Pais } from '@/lib/pais';
+import type { Country } from '@/lib/country';
 
 // ── Enumeraciones ──────────────────────────────────────────────────────────
 
-export type RolUsuario = 'ADMINISTRADOR' | 'PROFESOR' | 'ESTUDIANTE';
-export type EstadoCurso = 'BORRADOR' | 'PUBLICADO' | 'ARCHIVADO';
-export type NivelDificultad = 'PRINCIPIANTE' | 'INTERMEDIO' | 'AVANZADO' | 'EXPERTO';
-export type TipoRecurso = 'TEXTO' | 'VIDEO' | 'PDF' | 'ENLACE' | 'TAREA';
-export type EstadoEntrega = 'BORRADOR' | 'ENTREGADA' | 'ENTREGADA_TARDE' | 'CALIFICADA' | 'EN_REVISION';
-export type EstadoSolicitud = 'PENDIENTE' | 'ACEPTADA' | 'RECHAZADA';
+export type UserRole = 'ADMIN' | 'TEACHER' | 'STUDENT';
+export type CourseStatus = 'DRAFT' | 'PUBLISHED' | 'ARCHIVED';
+export type DifficultyLevel = 'BEGINNER' | 'INTERMEDIATE' | 'ADVANCED' | 'EXPERT';
+export type ResourceType = 'TEXT' | 'VIDEO' | 'PDF' | 'LINK' | 'ASSIGNMENT';
+export type SubmissionStatus = 'DRAFT' | 'SUBMITTED' | 'GRADED' | 'IN_REVIEW';
+export type AccessRequestStatus = 'PENDING' | 'ACCEPTED' | 'REJECTED';
+export type NotificationType =
+  | 'NEW_ASSESSMENT'
+  | 'DEADLINE_SOON'
+  | 'DEADLINE_URGENT'
+  | 'ASSIGNMENT_GRADED'
+  | 'COURSE_ANNOUNCEMENT'
+  | 'GLOBAL_ANNOUNCEMENT'
+  | 'COURSE_WELCOME'
+  | 'BADGE_UNLOCKED'
+  | 'MODULE_COMPLETED'
+  | 'MODULE_RESET'
+  | 'SUBMISSION_REVIEW'
+  | 'SUBMISSION_REJECTED'
+  | 'COURSE_REACTIVATED'
+  | 'INACTIVITY_REMINDER'
+  | 'NEW_MESSAGE';
 
 // ── Personas ───────────────────────────────────────────────────────────────
 
-export interface Usuario {
+export interface User {
   guid: string;
   email: string;
-  nombre: string;
-  apellido: string;
-  rol: RolUsuario;
-  pais: Pais;
-  activo: boolean;
-  created_at: string;
-  updated_at?: string;
-  ultimo_acceso?: string | null;
-  usa_clave_defecto?: boolean;
-  foto_url?: string | null;
+  firstName: string;
+  lastName: string;
+  role: UserRole;
+  country: Country;
+  createdAt: string;
+  updatedAt?: string;
+  lastAccessAt?: string | null;
+  usesDefaultPassword?: boolean;
+  photoUrl?: string | null;
   /** Cursos de los que es responsable. Impide borrar la cuenta sin traspasarlos antes. */
-  cursos_impartidos?: number;
-  matriculas?: number;
+  taughtCourses?: number;
+  enrollments?: number;
 }
 
-export interface SolicitudDeAcceso {
+export interface AccessRequest {
   id: number;
   email: string;
-  nombre: string;
-  apellido: string;
-  rol_pedido: RolUsuario;
-  pais: Pais;
-  estado: EstadoSolicitud;
-  motivo?: string | null;
-  created_at: string;
+  firstName: string;
+  lastName: string;
+  requestedRole: UserRole;
+  country: Country;
+  status: AccessRequestStatus;
+  rejectionReason?: string | null;
+  createdAt: string;
 }
 
 // ── Contenido ──────────────────────────────────────────────────────────────
 
-export interface Curso {
+export interface Course {
   guid: string;
-  titulo: string;
-  descripcion?: string | null;
-  descripcion_corta?: string | null;
-  /** Clave de almacenamiento; es material público y se resuelve con `urlDeMarca`. */
-  imagen_portada?: string | null;
-  nivel: NivelDificultad;
-  estado: EstadoCurso;
-  duracion_horas?: number | null;
+  title: string;
+  description?: string | null;
+  shortDescription?: string | null;
+  /** Clave de almacenamiento; es material público y se resuelve con `fileUrlFor`. */
+  coverImage?: string | null;
+  level: DifficultyLevel;
+  status: CourseStatus;
+  durationHours?: number | null;
   /** Nota mínima para aprobar, en la escala 0–100. */
-  nota_aprobacion: number;
-  orden_estricto?: boolean;
-  emite_certificado?: boolean;
-  max_estudiantes?: number | null;
-  profesor_guid: string;
-  profesor?: Pick<Usuario, 'guid' | 'nombre' | 'apellido'>;
-  modulos?: Modulo[];
-  created_at: string;
-  updated_at?: string;
+  passingScore: number;
+  strictOrder?: boolean;
+  issuesCertificate?: boolean;
+  maxStudents?: number | null;
+  teacherGuid: string;
+  teacher?: Pick<User, 'guid' | 'firstName' | 'lastName' | 'role'>;
+  modules?: CourseModule[];
+  createdAt: string;
+  updatedAt?: string;
   /** Sólo en el listado del alumno: cuándo se le asignó. */
-  fecha_asignacion?: string;
+  assignedAt?: string;
 }
 
-export interface Modulo {
+export interface CourseModule {
   guid: string;
-  curso_guid: string;
-  titulo: string;
-  descripcion?: string | null;
-  orden: number;
-  requiere_anterior?: boolean;
-  /** Los recursos cuelgan del módulo: ya no existe la capa intermedia de lecciones. */
-  recursos?: Recurso[];
+  courseGuid: string;
+  title: string;
+  description?: string | null;
+  position: number;
+  requiresPrevious?: boolean;
+  resources?: Resource[];
 }
 
-export interface Recurso {
+export interface Resource {
   guid: string;
-  modulo_guid: string;
-  titulo: string;
-  tipo: TipoRecurso;
-  contenido_html?: string | null;
-  url_referencia?: string | null;
-  orden: number;
-  obligatorio?: boolean;
-  tiempo_lectura?: number | null;
-  archivo_max_size_mb?: number | null;
+  moduleGuid: string;
+  title: string;
+  type: ResourceType;
+  contentHtml?: string | null;
+  referenceUrl?: string | null;
+  position: number;
+  required?: boolean;
+  readingMinutes?: number | null;
+  maxUploadMb?: number | null;
 
   /** Clave de almacenamiento del adjunto. La usa el editor al guardar. */
-  archivo_adjunto?: string | null;
-  archivo_adjunto_nombre?: string | null;
+  attachmentKey?: string | null;
+  attachmentName?: string | null;
   /** URL firmada del adjunto, lista para usar en un enlace. */
-  archivo_adjunto_url?: string | null;
-  url_archivo?: string | null;
-  url_archivo_url?: string | null;
+  attachmentUrl?: string | null;
+  fileUrl?: string | null;
+  fileDownloadUrl?: string | null;
 
   /**
    * Configuración del cuestionario, serializada.
    * Con las respuestas correctas sólo en la vista de gestión; en la del alumno llega sin
    * ellas, y para realizar el intento las preguntas se piden aparte.
    */
-  quiz_config?: string | null;
+  quizConfig?: string | null;
 }
 
 // ── Evaluación ─────────────────────────────────────────────────────────────
 
-export interface Entrega {
+export interface Submission {
   guid: string;
-  estado: EstadoEntrega | 'PENDIENTE';
-  fecha_entrega?: string | null;
-  intento_numero?: number;
+  status: SubmissionStatus | 'PENDING';
+  submittedAt?: string | null;
+  attemptNumber?: number;
   /** Nombre original del archivo que subió el alumno. */
-  archivo_nombre?: string | null;
+  fileName?: string | null;
   /** URL firmada de descarga; `null` si el archivo se purgó tras emitir el certificado. */
-  archivo_url?: string | null;
-  archivo_purgado?: boolean;
+  fileUrl?: string | null;
+  filePurged?: boolean;
   /** Nota en la escala 0–100. `null` mientras no se haya calificado. */
-  calificacion?: number | null;
-  comentario?: string | null;
+  score?: number | null;
+  feedback?: string | null;
 }
 
-export interface EntregaParaCalificar extends Entrega {
-  estudiante: Pick<Usuario, 'guid' | 'nombre' | 'apellido' | 'email'>;
-  tarea_guid: string | null;
-  tarea_titulo: string;
-  modulo_guid?: string | null;
-  modulo_titulo?: string | null;
-  curso_guid: string | null;
-  curso_titulo: string | null;
+export interface SubmissionToGrade extends Submission {
+  student: Pick<User, 'guid' | 'firstName' | 'lastName' | 'email'>;
+  assignmentGuid: string | null;
+  assignmentTitle: string;
+  moduleGuid?: string | null;
+  moduleTitle?: string | null;
+  courseGuid: string | null;
+  courseTitle: string | null;
   /** Umbral del curso al que pertenece la entrega. */
-  nota_aprobacion: number;
+  passingScore: number;
 }
 
-export interface EstadoDelCuestionario {
-  intentos_realizados: number;
-  max_intentos: number;
-  mejor_nota: number | null;
-  nota_aprobacion: number;
-  aprobado: boolean;
-  intento_en_curso: boolean;
-  fecha_inicio: string | null;
-  tiempo_minutos: number;
-  puede_reintentar: boolean;
+/**
+ * Preguntas de un cuestionario, en sus dos formas.
+ *
+ * La diferencia no es cosmética: `OptionWithAnswer` lleva cuál es la correcta y **sólo
+ * puede llegar al editor de cursos**. Lo que recibe el alumno al hacer el examen es la
+ * otra, sin `isCorrect`, y así está escrito también en el servidor
+ * (`apps/api/src/courses/quiz-config.ts`). Tener los dos nombres separados hace que pedir
+ * la forma equivocada en una pantalla de alumno sea un error de compilación.
+ */
+export interface QuizOption {
+  id: string;
+  text: string;
+}
+
+export interface OptionWithAnswer extends QuizOption {
+  isCorrect: boolean;
+}
+
+export interface QuizQuestion {
+  id: string;
+  prompt: string;
+  options: QuizOption[];
+}
+
+export interface QuestionWithAnswers {
+  id: string;
+  prompt: string;
+  options: OptionWithAnswer[];
+}
+
+/** Lo que edita el examinador y se guarda serializado en el recurso. */
+export interface QuizConfig {
+  /** 0 = intentos ilimitados. */
+  allowedAttempts: number;
+  /** 0 = sin límite de tiempo. */
+  timeLimitMinutes: number;
+  questions: QuestionWithAnswers[];
+}
+
+export interface QuizState {
+  attemptsMade: number;
+  maxAttempts: number;
+  bestScore: number | null;
+  passingScore: number;
+  passed: boolean;
+  attemptInProgress: boolean;
+  startedAt: string | null;
+  timeLimitMinutes: number;
+  canRetry: boolean;
   /** Explicación para el alumno cuando no puede empezar. */
-  motivo_bloqueo: string | null;
+  blockedReason: string | null;
 }
 
 // ── Progreso y certificación ───────────────────────────────────────────────
 
-export interface ProgresoDeCurso {
-  completados: string[];
+export interface CourseProgress {
+  completed: string[];
   /** Recursos desbloqueados porque su calificación lleva demasiado tiempo pendiente. */
-  desbloqueados_por_espera: string[];
-  tareas_pendientes: { recurso_guid: string; titulo: string; fecha_entrega: string | null }[];
-  total_recursos: number;
-  porcentaje: number;
-  curso_titulo?: string;
+  unlockedByWait: string[];
+  pendingAssignments: { resourceGuid: string; title: string; submittedAt: string | null }[];
+  totalResources: number;
+  percent: number;
+  courseTitle?: string;
 }
 
-export interface EstadoDeFinalizacion {
-  completo: boolean;
-  puede_certificarse: boolean;
-  completados: number;
+export interface CompletionStatus {
+  complete: boolean;
+  canGetCertificate: boolean;
+  completed: number;
   total: number;
-  porcentaje: number;
-  tareas_pendientes: { recurso_guid: string; titulo: string; estado: string | null }[];
+  percent: number;
+  pendingAssignments: { resourceGuid: string; title: string; status: string | null }[];
   /** Qué falta exactamente para poder certificarse. */
-  motivo: string | null;
+  reason: string | null;
 }
 
-export interface Certificado {
+export interface Certificate {
   guid: string;
-  curso_guid: string;
-  curso_titulo: string;
-  curso_imagen?: string | null;
-  codigo_verificacion: string;
-  fecha_completado: string;
-  horas: number;
-  nota_promedio: number | null;
+  courseGuid: string;
+  courseTitle: string;
+  courseImage?: string | null;
+  /** Vuelta del alumno por el curso: 1 la primera vez, 2 si tuvo que repetirlo… */
+  attempt: number;
+  verificationCode: string;
+  /** Cuándo se matriculó: la «fecha de inscripción» del diploma. */
+  startedAt: string;
+  completedAt: string;
+  /** Hasta cuándo acredita. Nulo cuando la sede no declara vigencia. */
+  validUntil: string | null;
+  /** Si sigue en plazo. Un certificado vencido no deja de ser auténtico. */
+  unexpired: boolean;
+  /** Horas del programa, las que acredita el diploma. */
+  hours: number;
+  /** Lo que el alumno estuvo realmente dentro. No es lo que se acredita. */
+  activeSeconds: number;
+  averageScore: number | null;
+}
+
+// ── Paneles ────────────────────────────────────────────────────────────────
+
+/** Actividad de un día en el panel de administración. */
+export interface DailyActivity {
+  day: string;
+  submissions: number;
+  resources: number;
+}
+
+/** Cuántos alumnos tiene cada curso publicado. */
+export interface CourseBreakdown {
+  guid: string;
+  name: string;
+  enrollments: number;
+}
+
+/** Resumen de la sede que alimenta el panel del administrador. */
+export interface CountrySummary {
+  users: { total: number; students: number; teachers: number; admins: number };
+  courses: { published: number; draft: number; total: number };
+  /** Solicitudes de acceso por revisar. */
+  pendingRequests: number;
+  totalEnrollments: number;
+  /** Media de las notas calificadas, en la escala 0-100. `null` si aun no hay ninguna. */
+  overallAverage: number | null;
+  weeklyActivity: DailyActivity[];
+  courseBreakdown: CourseBreakdown[];
+}
+
+/** Avance de un alumno en un módulo. Se pide al desplegar un curso en el monitoreo. */
+export interface ModuleProgress {
+  guid: string;
+  title: string;
+  total: number;
+  completed: number;
+  percent: number;
+}
+
+/** Avance de un alumno en uno de sus cursos, tal como llega en cada fila del monitoreo. */
+export interface CourseProgressSummary {
+  courseGuid: string;
+  courseTitle: string;
+  percent: number;
+  completed: number;
+  totalResources: number;
+  completedModules: number;
+  totalModules: number;
+}
+
+/** Una fila del monitoreo: un alumno con su avance en los cursos que gestiona quien mira. */
+export interface MonitoredStudent {
+  guid: string;
+  firstName: string;
+  lastName: string;
+  email: string;
+  lastAccessAt: string | null;
+  totalSubmissions: number;
+  /** Media de sus cursos, o el avance en el curso elegido en el filtro. */
+  progress: number;
+  courses: CourseProgressSummary[];
+}
+
+/** Cifras del monitoreo sobre todos los alumnos que casan con el filtro, no sólo una página. */
+export interface MonitoringSummary {
+  courses: { guid: string; title: string }[];
+  students: number;
+  withSubmissions: number;
+  totalSubmissions: number;
+  /** Alumnos por tramo de avance: 0–25, 26–50, 51–75 y 76–100. */
+  ranges: number[];
+  /** Alumnos por día de la semana de su último acceso, de domingo a sábado. */
+  loginsPerDay: number[];
+}
+
+/** Avance acumulado del alumno en todos sus cursos. */
+export interface StudentMetrics {
+  totalCourses: number;
+  completedCourses: number;
+  completedResources: number;
+  totalResources: number;
+  percent: number;
+  totalHoursSpent: number;
+  overallAverage: number | null;
 }
 
 // ── Comunicación ───────────────────────────────────────────────────────────
 
-export interface Notificacion {
+/** Plantilla de un correo del sistema. */
+export interface EmailTemplate {
   id: number;
-  tipo: string;
-  titulo: string;
-  mensaje: string;
-  leida: boolean;
-  url_accion?: string | null;
-  created_at: string;
+  internalName: string;
+  subject: string;
+  bodyHtml: string;
+  active: boolean;
+  /** Las de sistema no se borran: sostienen avisos que la aplicación da por hechos. */
+  isSystem: boolean;
 }
 
-export interface Contacto {
+/** Momento del sistema que dispara un correo, con las plantillas que puede usar. */
+export interface EmailEvent {
+  id: number;
+  key: string;
+  displayName: string;
+  description: string;
+  /** JSON con los nombres de variable admitidos en la plantilla. */
+  variables: string;
+  templates: EmailTemplate[];
+}
+
+export interface Notification {
+  id: number;
+  type: NotificationType;
+  title: string;
+  message: string;
+  read: boolean;
+  actionUrl?: string | null;
+  createdAt: string;
+}
+
+export interface Contact {
   guid: string;
-  nombre: string;
-  apellido: string;
-  rol: RolUsuario;
-  foto_url?: string | null;
-  ultimo_mensaje: string;
-  ultimo_mensaje_fecha: string | null;
-  no_leidos: number;
+  firstName: string;
+  lastName: string;
+  role: UserRole;
+  photoUrl?: string | null;
+  lastMessage: string;
+  lastMessageAt: string | null;
+  unreadCount: number;
 }
 
-export interface Mensaje {
+export interface Message {
   id: number;
-  remitente_guid: string;
-  asunto: string;
-  contenido: string;
-  leido: boolean;
-  created_at: string;
+  senderGuid: string;
+  subject: string;
+  content: string;
+  read: boolean;
+  createdAt: string;
   /** Lo calcula el servidor para no tener que comparar con el usuario en cada render. */
-  es_mio: boolean;
+  isMine: boolean;
 }

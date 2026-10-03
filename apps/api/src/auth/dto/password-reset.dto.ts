@@ -1,10 +1,11 @@
 import { IsEmail, IsNotEmpty, IsString, MaxLength } from 'class-validator';
-import { Transform } from 'class-transformer';
+import { MAX_PASSWORD_LENGTH } from '../../common/domain/password';
+import { NormalizeEmail } from '../../common/validation/transforms';
 
 export class RequestPasswordResetDto {
   @IsEmail({}, { message: 'El correo electrónico no es válido.' })
   @MaxLength(255)
-  @Transform(({ value }) => (typeof value === 'string' ? value.trim().toLowerCase() : value))
+  @NormalizeEmail()
   email: string;
 }
 
@@ -16,6 +17,6 @@ export class ResetPasswordDto {
 
   @IsString()
   @IsNotEmpty({ message: 'La nueva contraseña es obligatoria.' })
-  @MaxLength(128)
-  nuevaContrasena: string;
+  @MaxLength(MAX_PASSWORD_LENGTH)
+  newPassword: string;
 }

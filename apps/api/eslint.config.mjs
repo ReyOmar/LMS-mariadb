@@ -1,31 +1,36 @@
 // @ts-check
-const eslint = require('@eslint/js');
-const tseslint = require('typescript-eslint');
+import eslint from '@eslint/js';
+import tseslint from 'typescript-eslint';
 
-module.exports = tseslint.config(
+/** Reglas de análisis estático de la API. */
+export default tseslint.config(
   eslint.configs.recommended,
   ...tseslint.configs.recommended,
   {
-    files: ['src/**/*.ts'],
+    files: ['src/**/*.ts', 'prisma/**/*.ts'],
     rules: {
-      // ── TypeScript strict rules ──
       '@typescript-eslint/no-unused-vars': ['warn', { argsIgnorePattern: '^_', varsIgnorePattern: '^_' }],
-      '@typescript-eslint/no-explicit-any': 'warn',
-      '@typescript-eslint/explicit-function-return-type': 'off', // NestJS patterns don't always benefit from this
-      '@typescript-eslint/no-require-imports': 'off', // pdfkit uses require()
+      '@typescript-eslint/no-explicit-any': 'error',
+      // Nest declara el tipo de retorno en el decorador; exigirlo aquí no aporta.
+      '@typescript-eslint/explicit-function-return-type': 'off',
+      // Un nombre que tapa a otro del ámbito exterior invita a usar el que no es.
+      '@typescript-eslint/no-shadow': 'error',
 
-      // ── Code quality ──
       'no-console': ['warn', { allow: ['error', 'warn'] }],
       'prefer-const': 'error',
       'no-var': 'error',
-      'eqeqeq': ['error', 'always'],
+      // `x == null` es la forma legible de «nulo o indefinido»; el resto exige estricto.
+      eqeqeq: ['error', 'always', { null: 'ignore' }],
       'no-duplicate-imports': 'error',
+      'no-self-compare': 'error',
     },
   },
   {
-    files: ['**/*.spec.ts'],
+    files: ['**/*.spec.ts', 'src/common/testing/**/*.ts', 'prisma/**/*.ts'],
     rules: {
-      '@typescript-eslint/no-explicit-any': 'off', // Mocks often need any
+      // Los dobles de prueba imitan tipos generados que no conviene reproducir enteros.
+      '@typescript-eslint/no-explicit-any': 'off',
+      // La siembra y las pruebas informan por consola de lo que hacen.
       'no-console': 'off',
     },
   },

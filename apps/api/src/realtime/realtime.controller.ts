@@ -1,10 +1,12 @@
-import { BadRequestException, Body, Controller, Delete, Get, NotFoundException, Param, Post, Req, Res } from '@nestjs/common';
+import { BadRequestException, Controller, Delete, Get, NotFoundException, Param, Post, Req, Res } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { SkipThrottle } from '@nestjs/throttler';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
 import { JwtPayload } from '../common/interfaces/jwt-payload.interface';
 import { PrismaService } from '../prisma/prisma.service';
+import { allowedOrigin } from '../common/cors';
 import { RealtimeService } from './realtime.service';
 
 @Controller('realtime')
@@ -12,7 +14,13 @@ export class RealtimeController {
   constructor(
     private readonly realtime: RealtimeService,
     private readonly prisma: PrismaService,
+    private readonly config: ConfigService,
   ) {}
+
+  /** Origen de la petición, si es uno de los admitidos. */
+  private getAllowedOrigin(req: FastifyRequest): string | null {
+    return allowedOrigin(this.config, req.headers.origin);
+  }
 
   /**
    * Flujo de eventos en tiempo real (Server-Sent Events).
@@ -26,6 +34,11 @@ export class RealtimeController {
   @SkipThrottle()
   @Get('stream')
   stream(@CurrentUser() user: JwtPayload, @Req() req: FastifyRequest, @Res() reply: FastifyReply): void {
+    // La cabecera de CORS se escribe aquí, **antes** de tomar el socket: `hijack()` deja
+    // fuera a Fastify y la que añade el marco nunca llegaría a escribirse. Con la API y el
+    // cliente en dominios distintos, como en cPanel, el navegador rechazaría el flujo.
+    const origin = this.getAllowedOrigin(req);
+
     reply.hijack();
     const res = reply.raw;
 
@@ -36,54 +49,60 @@ export class RealtimeController {
       Connection: 'keep-alive',
       // Desactiva el búfer de nginx; Apache lo respeta a través de mod_proxy.
       'X-Accel-Buffering': 'no',
+      ...(origin && {
+        'Access-Control-Allow-Origin': origin,
+        'Access-Control-Allow-Credentials': 'true',
+        // El origen decide la respuesta, así que las cachés deben separarlas.
+        Vary: 'Origin',
+      }),
     });
     // Intervalo de reconexión sugerido al cliente si el flujo se corta.
     res.write('retry: 3000\n\n');
     res.flushHeaders?.();
 
-    const darDeBaja = this.realtime.registrar(user, res);
-    req.raw.on('close', darDeBaja);
-    req.raw.on('error', darDeBaja);
+    const unsubscribe = this.realtime.register(user, res);
+    req.raw.on('close', unsubscribe);
+    req.raw.on('error', unsubscribe);
   }
 
   /**
-   * Toma el aviso de "curso en edición" para que otro editor no lo abra en paralelo.
-   * Sustituye al mensaje `course:lock` que antes viajaba por WebSocket.
+   * Toma el aviso de "curso en edición" para que otro editor no lo abra en paralelo. Sólo
+   * sobre un curso que quien lo pide puede editar: de su sede y, si es profesor, suyo.
    */
-  @Roles('ADMINISTRADOR', 'PROFESOR')
-  @Post('cursos/:curso_guid/bloqueo')
-  async tomarBloqueo(@CurrentUser() user: JwtPayload, @Param('curso_guid') cursoGuid: string) {
-    const curso = await this.prisma.lms_cursos.findFirst({
-      where: { guid: cursoGuid, pais: user.pais },
+  @Roles('ADMIN', 'TEACHER')
+  @Post('courses/:courseGuid/lock')
+  async acquireLock(@CurrentUser() user: JwtPayload, @Param('courseGuid') courseGuid: string) {
+    const course = await this.prisma.course.findFirst({
+      where: {
+        guid: courseGuid,
+        country: user.country,
+        ...(user.role === 'TEACHER' ? { teacherGuid: user.sub } : {}),
+      },
       select: { guid: true },
     });
-    if (!curso) throw new NotFoundException('Curso no encontrado.');
+    if (!course) throw new NotFoundException('Curso no encontrado.');
 
-    const perfil = await this.prisma.usuarios.findUnique({
+    const profile = await this.prisma.user.findUnique({
       where: { guid: user.sub },
-      select: { nombre: true, apellido: true },
+      select: { firstName: true, lastName: true },
     });
-    if (!perfil) throw new BadRequestException('Sesión no válida.');
+    if (!profile) throw new BadRequestException('Sesión no válida.');
 
-    const editor = this.realtime.tomarEdicionDeCurso(
-      cursoGuid,
-      {
-        guid: user.sub,
-        nombre: `${perfil.nombre} ${perfil.apellido}`,
-        rol: user.role === 'ADMINISTRADOR' ? 'Administrador' : 'Examinador',
-        pais: user.pais,
-      },
-      user.pais,
-    );
+    const editor = this.realtime.acquireCourseEdit(courseGuid, {
+      guid: user.sub,
+      name: `${profile.firstName} ${profile.lastName}`,
+      role: user.role,
+      country: user.country,
+    });
 
-    return { editor, esMio: editor.guid === user.sub };
+    return { editor, isMine: editor.guid === user.sub };
   }
 
   /** Libera el aviso de edición. Sólo surte efecto si lo tenía quien lo pide. */
-  @Roles('ADMINISTRADOR', 'PROFESOR')
-  @Delete('cursos/:curso_guid/bloqueo')
-  liberarBloqueo(@CurrentUser() user: JwtPayload, @Param('curso_guid') cursoGuid: string) {
-    this.realtime.liberarEdicionDeCurso(cursoGuid, user.pais, user.sub);
-    return { liberado: true };
+  @Roles('ADMIN', 'TEACHER')
+  @Delete('courses/:courseGuid/lock')
+  releaseLock(@CurrentUser() user: JwtPayload, @Param('courseGuid') courseGuid: string) {
+    this.realtime.releaseCourseLock(courseGuid, user.sub);
+    return { released: true };
   }
 }

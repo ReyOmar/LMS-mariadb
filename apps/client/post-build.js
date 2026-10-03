@@ -1,41 +1,39 @@
 const fs = require('fs');
 const path = require('path');
 
+/**
+ * Reúne la compilación `standalone` de Next en `prod/`, lista para subir al hosting.
+ *
+ * `standalone` trae el servidor y sus dependencias, pero no los archivos estáticos: la
+ * carpeta `public/` y `.next/static` hay que copiarlos al lado para que se sirvan.
+ * Se usa `prod/` y no `.next/` porque el administrador de archivos de cPanel oculta las
+ * carpetas que empiezan por punto.
+ */
 const clientDir = __dirname;
-const standaloneDir = path.join(clientDir, '.next', 'standalone');
+const buildDir = path.join(clientDir, '.next');
+const standaloneDir = path.join(buildDir, 'standalone');
 const prodDir = path.join(clientDir, 'prod');
+const prodClientDir = path.join(prodDir, 'apps', 'client');
 
-console.log('Running post-build script to copy Next.js standalone and static assets into non-hidden "prod" directory...');
-
-// 1. Clean previous prod folder
-if (fs.existsSync(prodDir)) {
-  fs.rmSync(prodDir, { recursive: true, force: true });
+function copy(from, to) {
+  if (!fs.existsSync(from)) return false;
+  fs.mkdirSync(to, { recursive: true });
+  fs.cpSync(from, to, { recursive: true });
+  return true;
 }
 
-// 2. Copy the entire standalone folder to prod/
-if (fs.existsSync(standaloneDir)) {
-  fs.mkdirSync(prodDir, { recursive: true });
-  fs.cpSync(standaloneDir, prodDir, { recursive: true });
-  console.log('✓ Copied standalone build to prod/');
-} else {
-  console.log('❌ standalone build folder not found!');
+if (!fs.existsSync(standaloneDir)) {
+  console.error('No se encontró .next/standalone: revisa que `output: "standalone"` siga en next.config.mjs.');
   process.exit(1);
 }
 
-// 3. Copy public folder to prod/apps/client/public
-const publicSrc = path.join(clientDir, 'public');
-const publicDest = path.join(prodDir, 'apps', 'client', 'public');
-if (fs.existsSync(publicSrc)) {
-  fs.mkdirSync(publicDest, { recursive: true });
-  fs.cpSync(publicSrc, publicDest, { recursive: true });
-  console.log('✓ Copied public/ assets to prod/apps/client/public');
-}
+fs.rmSync(prodDir, { recursive: true, force: true });
+copy(standaloneDir, prodDir);
+console.log('✓ Servidor standalone copiado a prod/');
 
-// 4. Copy .next/static folder to prod/apps/client/.next/static
-const staticSrc = path.join(clientDir, '.next', 'static');
-const staticDest = path.join(prodDir, 'apps', 'client', '.next', 'static');
-if (fs.existsSync(staticSrc)) {
-  fs.mkdirSync(staticDest, { recursive: true });
-  fs.cpSync(staticSrc, staticDest, { recursive: true });
-  console.log('✓ Copied .next/static/ assets to prod/apps/client/.next/static');
+if (copy(path.join(clientDir, 'public'), path.join(prodClientDir, 'public'))) {
+  console.log('✓ public/ copiado a prod/apps/client/public');
+}
+if (copy(path.join(buildDir, 'static'), path.join(prodClientDir, '.next', 'static'))) {
+  console.log('✓ .next/static copiado a prod/apps/client/.next/static');
 }

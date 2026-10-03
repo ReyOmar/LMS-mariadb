@@ -1,5 +1,7 @@
 import axios, { AxiosError, AxiosInstance } from 'axios';
-import { apiUrl, urlAbsoluta } from './env';
+import { apiUrl, absoluteUrl } from './env';
+import { readLocal, readLocalJson, removeLocal, writeLocal } from './local-storage';
+import { fileSizeWarning, type UploadLimit } from './upload-limits';
 
 /**
  * Cliente HTTP único del campus.
@@ -13,16 +15,19 @@ import { apiUrl, urlAbsoluta } from './env';
  * Sólo las llamadas públicas de la portada la pasan por query, y lo hacen explícitamente.
  */
 
-const CLAVE_TOKEN = 'lms_token';
-const CLAVE_USUARIO = 'lms_user';
+/** Motivos por los que se llega al login sin haber pulsado «cerrar sesión». */
+export type LogoutReason = 'expired' | 'revoked' | 'displaced';
+
+const TOKEN_KEY = 'lms_token';
+const USER_KEY = 'lms_user';
 
 /**
  * Motivos por los que el servidor corta una sesión, deducidos del mensaje que devuelve.
  * El orden importa: se comprueba el más específico primero.
  */
-const MOTIVOS_DE_SALIDA: { motivo: 'desplazada' | 'revocada'; senales: string[] }[] = [
-  { motivo: 'desplazada', senales: ['otro dispositivo'] },
-  { motivo: 'revocada', senales: ['revocada', 'eliminada', 'desactivada', 'ya no existe'] },
+const LOGOUT_REASONS: { reason: LogoutReason; signals: string[] }[] = [
+  { reason: 'displaced', signals: ['otro dispositivo'] },
+  { reason: 'revoked', signals: ['revocada', 'eliminada', 'ya no existe'] },
 ];
 
 const api: AxiosInstance = axios.create({
@@ -35,54 +40,42 @@ api.interceptors.request.use((config) => {
   // La URL base se recalcula por si la página se abrió antes de conocer el host.
   config.baseURL = apiUrl();
 
-  const token = leerToken();
+  const token = readToken();
   if (token) config.headers.Authorization = `Bearer ${token}`;
+
+  // Un POST sin cuerpo no debe anunciarse como JSON: Fastify lo rechaza con un 400
+  // «Body cannot be empty» (empezar un cuestionario, tomar el aviso de edición de un curso).
+  if (config.data === undefined || config.data === null) {
+    delete config.headers['Content-Type'];
+  }
+
   return config;
 });
 
 api.interceptors.response.use(
-  (respuesta) => respuesta,
+  (response) => response,
   (error: AxiosError<{ message?: string }>) => {
-    if (error.response?.status === 401) manejarSesionCaducada(error);
+    if (error.response?.status === 401) handleExpiredSession(error);
     return Promise.reject(error);
   },
 );
 
-function leerToken(): string | null {
-  if (typeof window === 'undefined') return null;
-  try {
-    return window.localStorage.getItem(CLAVE_TOKEN);
-  } catch {
-    return null;
-  }
+export function readToken(): string | null {
+  return readLocal(TOKEN_KEY);
 }
 
-export function guardarSesion(token: string, usuario: unknown): void {
-  try {
-    window.localStorage.setItem(CLAVE_TOKEN, token);
-    window.localStorage.setItem(CLAVE_USUARIO, JSON.stringify(usuario));
-  } catch {
-    // Sin almacenamiento la sesión dura lo que la pestaña; no es motivo para fallar.
-  }
+export function saveSession(token: string, user: unknown): void {
+  writeLocal(TOKEN_KEY, token);
+  writeLocal(USER_KEY, JSON.stringify(user));
 }
 
-export function borrarSesion(): void {
-  try {
-    window.localStorage.removeItem(CLAVE_TOKEN);
-    window.localStorage.removeItem(CLAVE_USUARIO);
-  } catch {
-    /* nada que hacer */
-  }
+export function clearSession(): void {
+  removeLocal(TOKEN_KEY);
+  removeLocal(USER_KEY);
 }
 
-export function leerUsuarioGuardado<T>(): T | null {
-  if (typeof window === 'undefined') return null;
-  try {
-    const crudo = window.localStorage.getItem(CLAVE_USUARIO);
-    return crudo ? (JSON.parse(crudo) as T) : null;
-  } catch {
-    return null;
-  }
+export function readStoredUser<T>(): T | null {
+  return readLocalJson<T>(USER_KEY);
 }
 
 /**
@@ -92,23 +85,50 @@ export function leerUsuarioGuardado<T>(): T | null {
  * distinto: el primero le dice que hable con el administrador y el segundo que vuelva a
  * entrar. Si estaba en una página pública no se le interrumpe.
  */
-function manejarSesionCaducada(error: AxiosError<{ message?: string }>): void {
+function handleExpiredSession(error: AxiosError<{ message?: string }>): void {
   if (typeof window === 'undefined') return;
 
-  const ruta = window.location.pathname;
-  if (ruta.startsWith('/login')) return;
+  const pathname = window.location.pathname;
+  if (pathname.startsWith('/login')) return;
 
-  borrarSesion();
+  clearSession();
 
-  const mensaje = (error.response?.data?.message ?? '').toLowerCase();
-  const coincidencia = MOTIVOS_DE_SALIDA.find((entrada) =>
-    entrada.senales.some((senal) => mensaje.includes(senal)),
-  );
+  const inPrivateArea = pathname.startsWith('/dashboard') || pathname.startsWith('/courses');
+  if (!inPrivateArea) return;
 
-  const enZonaPrivada = ruta.startsWith('/dashboard') || ruta.startsWith('/cursos');
-  if (!enZonaPrivada) return;
+  const message = (error.response?.data?.message ?? '').toLowerCase();
+  const match = LOGOUT_REASONS.find((entry) => entry.signals.some((signal) => message.includes(signal)));
+  redirectToLogin(match?.reason ?? 'expired');
+}
 
-  window.location.href = `/login?motivo=${coincidencia?.motivo ?? 'expirada'}`;
+/** Lleva al login con el motivo, que la pantalla de acceso explica al usuario. */
+export function redirectToLogin(reason: LogoutReason): void {
+  window.location.href = `/login?reason=${reason}`;
+}
+
+/**
+ * Petición autenticada que sale aunque la pestaña se esté cerrando.
+ *
+ * axios no admite `keepalive`, así que se usa `fetch`. No se espera la respuesta ni se
+ * informa de errores: sirve para avisos al servidor (cerrar sesión, soltar el aviso de
+ * edición de un curso) que no pueden retener al usuario.
+ */
+export function sendKeepalive(method: 'POST' | 'DELETE', path: string): void {
+  const token = readToken();
+  void fetch(`${apiUrl()}${path}`, {
+    method,
+    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    keepalive: true,
+  }).catch(() => undefined);
+}
+
+/**
+ * ¿Falló la petición sin que el servidor llegara a responder?
+ *
+ * Sirve para no confundir «sin conexión» con «el servidor rechazó la sesión».
+ */
+export function isNetworkFailure(error: unknown): boolean {
+  return axios.isAxiosError(error) && !error.response;
 }
 
 /**
@@ -118,23 +138,23 @@ function manejarSesionCaducada(error: AxiosError<{ message?: string }>): void {
  * los casos en que no hay respuesta —sin conexión, tiempo agotado, servidor caído— para
  * que ninguna pantalla acabe mostrando «undefined» o un volcado de error.
  */
-export function mensajeDeError(error: unknown, respaldo = 'No se pudo completar la operación.'): string {
+export function errorMessage(error: unknown, fallback = 'No se pudo completar la operación.'): string {
   if (!axios.isAxiosError(error)) {
-    return error instanceof Error && error.message ? error.message : respaldo;
+    return error instanceof Error && error.message ? error.message : fallback;
   }
 
-  const respuesta = error.response;
-  if (!respuesta) {
+  const response = error.response;
+  if (!response) {
     if (error.code === 'ECONNABORTED') {
       return 'La operación tardó demasiado. Revisa tu conexión e inténtalo de nuevo.';
     }
     return 'No hay conexión con el servidor. Comprueba tu red e inténtalo de nuevo.';
   }
 
-  const mensajeServidor = (respuesta.data as { message?: string } | undefined)?.message;
-  if (mensajeServidor) return mensajeServidor;
+  const serverMessage = (response.data as { message?: string } | undefined)?.message;
+  if (serverMessage) return serverMessage;
 
-  switch (respuesta.status) {
+  switch (response.status) {
     case 401:
       return 'Tu sesión ha caducado. Vuelve a iniciar sesión.';
     case 403:
@@ -144,66 +164,105 @@ export function mensajeDeError(error: unknown, respaldo = 'No se pudo completar 
     case 409:
       return 'Ya existe un registro con esos datos.';
     case 413:
-      return 'El archivo es demasiado grande.';
+      // La API siempre dice cuál es el límite; sin mensaje, quien cortó fue el servidor web.
+      return 'El servidor rechazó el archivo por su tamaño antes de procesarlo. Avisa al administrador de la plataforma.';
     case 429:
       return 'Has hecho demasiadas peticiones seguidas. Espera un momento e inténtalo de nuevo.';
+    case 502:
+    case 503:
+    case 504:
+      // Respaldo por si el servidor cayó antes de poder redactar su propio mensaje.
+      return 'El servicio no está disponible en este momento. Inténtalo de nuevo en unos minutos.';
     default:
-      return respaldo;
+      return fallback;
   }
 }
 
-/** Indica si el error corresponde a un límite de peticiones alcanzado. */
-export function esLimiteDePeticiones(error: unknown): boolean {
-  return axios.isAxiosError(error) && error.response?.status === 429;
+/** Sin avance durante este tiempo, la subida se da por perdida. */
+const UPLOAD_STALL_MS = 120_000;
+
+export const UPLOAD_STALLED_MESSAGE =
+  'La subida se detuvo: no se envió nada en los últimos 2 minutos. Revisa tu conexión e inténtalo de nuevo.';
+
+export interface UploadOptions {
+  /**
+   * Límite exacto que aplicará el servidor (ver `uploadLimit` en `upload-limits.ts`).
+   * Lo que lo supere se rechaza aquí, con el mismo mensaje, sin enviar nada.
+   */
+  limit?: UploadLimit | null;
+  /** Porcentaje 0–100 de lo enviado, para mostrar una barra en lugar de un giro indefinido. */
+  onProgress?: (percent: number) => void;
 }
 
 /**
  * Sube un archivo por `multipart/form-data`.
- * @param onProgreso Porcentaje 0–100, para poder mostrar una barra en lugar de un giro
- *        indefinido en subidas grandes.
+ *
+ * No tiene tiempo máximo: un archivo de 1 GB con una conexión lenta tarda lo que tarde.
+ * Lo que se vigila es que avance; si deja de enviarse durante dos minutos, se cancela.
+ * Una vez enviado todo, el servidor todavía lo guarda —con archivos grandes puede tardar—,
+ * y esa espera no se corta.
  */
-export async function subirArchivo<T = { filename: string; url: string }>(
-  ruta: string,
-  archivo: File,
-  onProgreso?: (porcentaje: number) => void,
+export async function uploadFile<T = { filename: string; url: string }>(
+  endpoint: string,
+  file: File,
+  { limit, onProgress }: UploadOptions = {},
 ): Promise<T> {
-  const cuerpo = new FormData();
-  cuerpo.append('file', archivo);
+  const warning = fileSizeWarning(file, limit);
+  if (warning) throw new Error(warning);
 
-  const { data } = await api.post<T>(ruta, cuerpo, {
-    headers: { 'Content-Type': 'multipart/form-data' },
-    timeout: 120_000,
-    onUploadProgress: (evento) => {
-      if (!onProgreso || !evento.total) return;
-      onProgreso(Math.round((evento.loaded / evento.total) * 100));
-    },
-  });
-  return data;
+  const body = new FormData();
+  body.append('file', file);
+
+  const controller = new AbortController();
+  let stalled = false;
+  let watchdog: ReturnType<typeof setTimeout> | undefined;
+  const watch = () => {
+    clearTimeout(watchdog);
+    watchdog = setTimeout(() => {
+      stalled = true;
+      controller.abort();
+    }, UPLOAD_STALL_MS);
+  };
+
+  watch();
+  try {
+    const { data } = await api.post<T>(endpoint, body, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 0,
+      signal: controller.signal,
+      onUploadProgress: (event) => {
+        const total = event.total || file.size;
+        if (event.loaded >= total) clearTimeout(watchdog);
+        else watch();
+        onProgress?.(Math.min(100, Math.round((event.loaded / total) * 100)));
+      },
+    });
+    return data;
+  } catch (error) {
+    if (stalled) throw new Error(UPLOAD_STALLED_MESSAGE);
+    throw error;
+  } finally {
+    clearTimeout(watchdog);
+  }
 }
 
 /**
- * URL absoluta de un archivo.
+ * URL con la que el navegador puede pedir un archivo.
  *
- * La API devuelve rutas ya firmadas para el material reservado (entregas, certificados,
- * firmas y contenido de curso) y rutas simples para la marca. Aquí sólo se completa el
- * origen; no se construye ninguna ruta a mano, porque una ruta sin firma no se sirve.
- */
-export function urlDeArchivo(ruta: string | null | undefined): string | null {
-  if (!ruta) return null;
-  return urlAbsoluta(ruta);
-}
-
-/**
- * URL de un archivo de marca a partir de su clave de almacenamiento.
+ * Acepta las dos formas en que la API se refiere a un archivo, y las distingue sola:
  *
- * Sólo vale para el material público —logotipos, portadas de curso, fondos y fotos de
- * perfil—, que se sirve sin firma. Cualquier otra clave (entregas, certificados, firmas,
- * material de curso) llega desde la API ya firmada y debe pasarse por `urlDeArchivo`.
+ *  - Una **ruta ya servible**, que la API devuelve firmada y caducable para el material
+ *    reservado (entregas, certificados, firmas, contenido de curso). Siempre empieza por
+ *    `/api/…`, así que sólo hay que completarle el origen.
+ *  - Una **clave de almacenamiento** como `avatars/1790-ab.png`, que es lo que guardan las
+ *    columnas de marca (foto de perfil, logotipo, favicon, fondo del acceso, portada de
+ *    curso). Nunca empieza por `/`, y hay que dirigirla a la ruta de descarga.
  */
-export function urlDeMarca(clave: string | null | undefined): string | null {
-  if (!clave) return null;
-  if (clave.startsWith('http://') || clave.startsWith('https://')) return clave;
-  return urlAbsoluta(`/api/storage/download/${clave}`);
+export function fileUrlFor(pathOrKey: string | null | undefined): string | null {
+  if (!pathOrKey) return null;
+  if (pathOrKey.startsWith('http://') || pathOrKey.startsWith('https://')) return pathOrKey;
+  if (pathOrKey.startsWith('/')) return absoluteUrl(pathOrKey);
+  return absoluteUrl(`/api/storage/download/${pathOrKey}`);
 }
 
 export { apiUrl };

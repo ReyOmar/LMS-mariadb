@@ -1,28 +1,23 @@
 import './globals.css';
 import type { Metadata } from 'next';
-import { Inter } from 'next/font/google';
 import Script from 'next/script';
 import { ThemeProvider } from '@/components/ui/ThemeProvider';
-import { SedeProvider } from '@/contexts/SedeContext';
-import { RoleProvider } from '@/contexts/RoleContext';
+import { CountryProvider } from '@/contexts/CountryContext';
+import { SessionProvider } from '@/contexts/SessionContext';
 import { RealtimeProvider } from '@/contexts/RealtimeContext';
 import { ConfigProvider } from '@/contexts/ConfigContext';
 import { AlertProvider } from '@/contexts/AlertContext';
-
-const inter = Inter({
-  subsets: ['latin'],
-  weight: ['400', '500', '600', '700', '800'],
-  display: 'swap',
-  variable: '--font-inter',
-});
+import { fontVariables } from '@/lib/fonts';
+import { DataConsentDialog } from '@/components/legal/DataConsentDialog';
+import { StorageNotice } from '@/components/legal/StorageNotice';
+import { PageLoaderOverlay } from '@/components/ui/PageLoaderOverlay';
 
 /**
  * Metadatos base.
  *
  * El nombre y el icono definitivos dependen de la sede que elija el visitante, y eso sólo
- * se sabe en el navegador, así que aquí se pone un valor genérico y `aplicarTema` lo
- * sustituye en cuanto se conoce la sede. Antes esto hacía una petición a la API en cada
- * render del servidor, que retrasaba la primera carga y devolvía siempre la misma marca.
+ * se sabe en el navegador, así que aquí se pone un valor genérico y `applyTheme` lo
+ * sustituye en cuanto se conoce la sede.
  */
 export const metadata: Metadata = {
   title: 'Campus Virtual PESV',
@@ -43,30 +38,36 @@ export const metadata: Metadata = {
  *  4. Tiempo real, que necesita el token de la sesión.
  *  5. Configuración, que depende de la sede y escucha cambios en tiempo real.
  *  6. Avisos, que cualquier pantalla usa.
+ *
+ * El cierre de las pantallas de carga queda fuera de todos ellos: tiene que seguir montado
+ * aunque la sesión o la sede sustituyan todo lo que hay dentro.
  */
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="es" suppressHydrationWarning className={inter.variable}>
+    <html lang="es" className={fontVariables} suppressHydrationWarning>
       <head>
-        <link rel="preconnect" href="https://fonts.googleapis.com" />
-        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
-        {/* Aplica el tema cacheado antes del primer pintado para evitar el salto de color. */}
+        {/* Aplica el tema de la sede (el de la caché o, sin ella, su marca) antes del primer pintado. */}
         <Script src="/theme-preload.js" strategy="beforeInteractive" />
       </head>
       <body
         suppressHydrationWarning
-        className={`min-h-screen bg-background font-sans antialiased text-foreground transition-colors duration-300 ${inter.className}`}
+        className="min-h-screen bg-background font-sans antialiased text-foreground transition-colors duration-300"
       >
-        <ThemeProvider attribute="class" defaultTheme="light" enableSystem={false}>
-          <SedeProvider>
-            <RoleProvider>
+        <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
+          <CountryProvider>
+            <SessionProvider>
               <RealtimeProvider>
                 <ConfigProvider>
-                  <AlertProvider>{children}</AlertProvider>
+                  <AlertProvider>
+                    {children}
+                    <DataConsentDialog />
+                    <StorageNotice />
+                  </AlertProvider>
                 </ConfigProvider>
               </RealtimeProvider>
-            </RoleProvider>
-          </SedeProvider>
+            </SessionProvider>
+          </CountryProvider>
+          <PageLoaderOverlay />
         </ThemeProvider>
       </body>
     </html>
