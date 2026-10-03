@@ -8,10 +8,13 @@ import type { FastifyReply, FastifyRequest } from 'fastify';
  */
 const TRANSLATIONS: [RegExp, string][] = [
   [/^Cannot [A-Z]+ /, 'La dirección solicitada no existe en la API.'],
+  // `ParseIntPipe` con un identificador que no es un número.
+  [/^Validation failed \(numeric string is expected\)/, 'El identificador de la dirección debe ser un número.'],
   [/request file too large/i, 'El archivo supera el tamaño máximo permitido.'],
   [/body is too large/i, 'Los datos enviados superan el tamaño máximo permitido.'],
   [/multipart/i, 'La petición debe enviarse como multipart/form-data.'],
-  [/too many (files|parts|fields)/i, 'Se ha enviado más de un archivo. Adjunta sólo uno.'],
+  // `@fastify/multipart` al recibir más archivos o campos de los que admite la subida.
+  [/reach (files|parts|fields) limit/i, 'Envía un solo archivo por subida.'],
 ];
 
 /** Une varias frases en una, poniendo el punto que falte entre ellas. */
@@ -53,6 +56,10 @@ export class ExceptionsFilter implements ExceptionFilter {
         exception instanceof Error ? exception.stack : undefined,
       );
     }
+
+    // Rechazada una subida por su tamaño, el resto del cuerpo sobra: cerrar la conexión hace
+    // que el navegador deje de enviarlo en lugar de subirlo entero para nada.
+    if (status === HttpStatus.PAYLOAD_TOO_LARGE) response.header('Connection', 'close');
 
     response.status(status).send({
       statusCode: status,

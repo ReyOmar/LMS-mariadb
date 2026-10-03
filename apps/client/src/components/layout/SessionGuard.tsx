@@ -5,6 +5,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import { Role, useSession } from '@/contexts/SessionContext';
 import { useCountry } from '@/contexts/CountryContext';
 import { isCountry } from '@/lib/country';
+import { loginUrl } from '@/lib/api';
 import { PageLoader } from '@/components/ui/PageLoader';
 import { DashboardShell } from '@/components/layout/DashboardShell';
 
@@ -48,7 +49,8 @@ export function SessionGuard({ children }: { children: ReactNode }) {
     if (!ready) return;
 
     if (!authenticated) {
-      router.replace('/login');
+      // Tras entrar vuelve aquí: es lo que espera quien abre un enlace de un correo sin sesión.
+      router.replace(loginUrl(undefined, `${window.location.pathname}${window.location.search}`));
       return;
     }
     if (!allowed) {

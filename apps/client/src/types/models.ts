@@ -83,15 +83,22 @@ export interface Course {
   /** Nota mínima para aprobar, en la escala 0–100. */
   passingScore: number;
   strictOrder?: boolean;
-  issuesCertificate?: boolean;
   maxStudents?: number | null;
   teacherGuid: string;
   teacher?: Pick<User, 'guid' | 'firstName' | 'lastName' | 'role'>;
   modules?: CourseModule[];
+  /** En los listados, que no traen el contenido: cuántos módulos tiene. */
+  _count?: { modules: number };
   createdAt: string;
   updatedAt?: string;
   /** Sólo en el listado del alumno: cuándo se le asignó. */
   assignedAt?: string;
+  /** Sólo en el listado del alumno: cuándo terminó la vuelta actual; nulo mientras está en curso. */
+  completedAt?: string | null;
+  /** Sólo en el listado del alumno: su avance en la vuelta actual. */
+  completedResources?: number;
+  totalResources?: number;
+  percent?: number;
 }
 
 export interface CourseModule {
@@ -125,11 +132,15 @@ export interface Resource {
   fileDownloadUrl?: string | null;
 
   /**
-   * Configuración del cuestionario, serializada.
-   * Con las respuestas correctas sólo en la vista de gestión; en la del alumno llega sin
-   * ellas, y para realizar el intento las preguntas se piden aparte.
+   * Configuración del cuestionario, serializada y con las respuestas correctas. Sólo en la
+   * vista de gestión; en la del alumno es nula.
    */
   quizConfig?: string | null;
+  /**
+   * Sólo en la vista del alumno: el resumen del cuestionario. Las preguntas se piden al abrir
+   * el intento y las respuestas correctas no salen del servidor.
+   */
+  quiz?: { allowedAttempts: number; timeLimitMinutes: number; questionCount: number } | null;
 }
 
 // ── Evaluación ─────────────────────────────────────────────────────────────
@@ -239,7 +250,8 @@ export interface CompletionStatus {
 
 export interface Certificate {
   guid: string;
-  courseGuid: string;
+  /** Nulo si el curso se eliminó: el certificado sigue acreditando la formación. */
+  courseGuid: string | null;
   courseTitle: string;
   courseImage?: string | null;
   /** Vuelta del alumno por el curso: 1 la primera vez, 2 si tuvo que repetirlo… */
@@ -387,6 +399,8 @@ export interface Contact {
   lastMessage: string;
   lastMessageAt: string | null;
   unreadCount: number;
+  /** Si todavía se le puede escribir; si no, sólo queda el historial. */
+  canWrite: boolean;
 }
 
 export interface Message {

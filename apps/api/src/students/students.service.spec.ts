@@ -47,9 +47,12 @@ function sessionsWith(initial?: StoredSession) {
   return { rows, prisma };
 }
 
-function createService(prisma: unknown, timeZone = 'America/Bogota') {
+function createService(prisma: unknown, timeZone = 'America/Bogota', courseStatus = 'PUBLISHED') {
   // La matrícula se comprueba antes y tiene sus propias pruebas; aquí se da por buena.
-  const access = { ensureEnrollment: async () => undefined };
+  const access = {
+    ensureEnrollment: async () => undefined,
+    courseInCountry: async () => ({ guid: COURSE, status: courseStatus }),
+  };
   const settings = { getSettings: async () => ({ timeZone }) };
   return new StudentsService(prisma as never, access as never, settings as never, { emit: () => true } as never);
 }
@@ -121,6 +124,16 @@ describe('StudentsService · tiempo de estudio', () => {
     expect(rows).toHaveLength(2);
     expect(rows[0].durationSeconds).toBe(600);
     expect(rows[1].durationSeconds).toBe(0);
+  });
+
+  it('con el curso en mantenimiento el latido no suma tiempo', async () => {
+    const { rows, prisma } = sessionsWith({ id: 1, durationSeconds: 600, endedAt: atMinute(10) });
+    withClockAt(atMinute(11));
+
+    const result = await createService(prisma, 'America/Bogota', 'DRAFT').recordHeartbeat(COURSE, STUDENT);
+
+    expect(result).toEqual({ recorded: false });
+    expect(rows).toEqual([{ id: 1, durationSeconds: 600, endedAt: atMinute(10) }]);
   });
 
   it('un reloj que va hacia atrás no resta tiempo', async () => {

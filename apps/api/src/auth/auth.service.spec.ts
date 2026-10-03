@@ -218,3 +218,53 @@ describe('AuthService · aprobar una solicitud de acceso', () => {
     });
   });
 });
+
+describe('AuthService · rechazar una solicitud de acceso', () => {
+  function rejectionService() {
+    const updates: Record<string, unknown>[] = [];
+    const notices: unknown[][] = [];
+    const prisma = {
+      accessRequest: {
+        findFirst: async () => ({
+          id: 9,
+          email: 'rechazada@pesv.test',
+          firstName: 'Rita',
+          country: 'MEXICO',
+          status: 'PENDING',
+        }),
+        update: async ({ data }: { data: Record<string, unknown> }) => updates.push(data),
+      },
+    };
+    const mail = {
+      sendAccessRequestRejected: async (...args: unknown[]) => {
+        notices.push(args);
+        return true;
+      },
+    };
+    const service = new AuthService(
+      prisma as never,
+      {} as never,
+      mail as never,
+      { emitToRole: () => undefined } as never,
+      {} as never,
+    );
+    return { service, updates, notices };
+  }
+
+  it('avisa por correo a quien la envió, con el motivo', async () => {
+    const { service, updates, notices } = rejectionService();
+
+    await service.rejectAccessRequest(9, 'MEXICO', '  No pertenece a la empresa.  ');
+
+    expect(updates[0]).toEqual({ status: 'REJECTED', rejectionReason: 'No pertenece a la empresa.' });
+    expect(notices).toEqual([['rechazada@pesv.test', 'Rita', 'No pertenece a la empresa.', 'MEXICO']]);
+  });
+
+  it('sin motivo, el aviso sale igual', async () => {
+    const { service, notices } = rejectionService();
+
+    await service.rejectAccessRequest(9, 'MEXICO', '   ');
+
+    expect(notices).toEqual([['rechazada@pesv.test', 'Rita', null, 'MEXICO']]);
+  });
+});

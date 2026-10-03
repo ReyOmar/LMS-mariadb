@@ -24,8 +24,8 @@ import {
 } from 'lucide-react';
 import { PageLoader } from '@/components/ui/PageLoader';
 import Link from 'next/link';
-import api, { errorMessage, fileUrlFor } from '@/lib/api';
-import { useRealtimeEvent, useRealtime } from '@/contexts/RealtimeContext';
+import api, { errorMessage, fileUrlFor, loginUrl } from '@/lib/api';
+import { useRealtimeEvent, useRealtime, useRealtimeReconnect } from '@/contexts/RealtimeContext';
 import { useStudyTime } from '@/hooks/useStudyTime';
 import { useAlerts } from '@/contexts/AlertContext';
 import { useSession } from '@/contexts/SessionContext';
@@ -38,14 +38,17 @@ import { isModuleOpen, whereToResume, isResourceOpen, lastResource } from './com
 import { linkTarget, isQuiz, displayTitle, externalUrl } from '@/lib/resources';
 import { ResourceTarget, resourceLabel } from './components/ResourceTarget';
 import { Celebration, CourseUnderMaintenance, CourseAlreadyEnded, UngradedAssignments } from './components/Notices';
-import type { Certificate, Course, CompletionStatus, CourseModule, CourseProgress, Resource } from '@/types/models';
+import type { Certificate, Course, CourseModule, CourseProgress, Resource } from '@/types/models';
 
 /** Recuerda si el temario se dejó abierto. */
 const SIDEBAR_KEY = 'lms_sidebar_open';
 
 const MY_COURSES = '/dashboard/student/courses';
 
-/** El curso ya no es accesible para el alumno: dado de baja (403) o inexistente (404). */
+/**
+ * La API negó el acceso (403) o no encontró lo pedido (404): el alumno fue dado de baja, el
+ * curso pasó a mantenimiento o desapareció el curso o el recurso.
+ */
 function isAccessLost(error: unknown): boolean {
   const status = isAxiosError(error) ? error.response?.status : undefined;
   return status === 403 || status === 404;
@@ -67,7 +70,8 @@ export default function CoursePage() {
     if (!ready || redirected.current) return;
     if (!authenticated) {
       redirected.current = true;
-      router.replace('/login');
+      // Tras entrar vuelve aquí: el enlace del correo de matrícula no se pierde.
+      router.replace(loginUrl(undefined, `/courses/${courseId}`));
     } else if (staff) {
       redirected.current = true;
       notify.info(
@@ -95,16 +99,17 @@ function CourseViewer() {
   const [underMaintenance, setUnderMaintenance] = useState(false);
   const [showCelebration, setShowCelebration] = useState(false);
   const [showCelebrationActions, setShowCelebrationActions] = useState(false);
-  const [celebrationData, setCelebrationData] = useState<{ courseTitle: string } | null>(null);
   const [pendingAssignments, setPendingAssignments] = useState<CourseProgress['pendingAssignments']>([]);
   const [showPendingAlert, setShowPendingAlert] = useState(false);
-  const [courseCompleted, setCourseCompleted] = useState(false);
   const [readOnly, setReadOnly] = useState(false);
   const [showCourseFinished, setShowCourseFinished] = useState(false);
   const [certGuid, setCertGuid] = useState<string | null>(null);
   const [quizInProgress, setQuizInProgress] = useState(false);
-  const [pendingCelebration, setPendingCelebration] = useState<{ courseTitle: string } | null>(null);
+  const [pendingCelebration, setPendingCelebration] = useState(false);
+  /** El fin del curso ya se anunció: con la felicitación o con el aviso de curso terminado. */
   const celebrationShown = useRef(false);
+  /** Ya se comprobó el avance una vez: lo que se termine a partir de ahí, se termina en esta visita. */
+  const progressChecked = useRef(false);
   const [leaving, setLeaving] = useState(false);
   const leftRef = useRef(false);
   const { coursesUnderMaintenance } = useRealtime();
@@ -175,37 +180,57 @@ function CourseViewer() {
     });
   };
 
-  const loadCourse = useCallback(async () => {
+  const loadCourse = useCallback(async (): Promise<Course | null> => {
     try {
       const { data } = await api.get<Course>(`/courses/${courseId}`);
       setCourse(data);
       // Sin publicar, la API sólo manda la cabecera: se muestra el aviso de mantenimiento.
       if (data.status !== 'PUBLISHED') setUnderMaintenance(true);
+      return data;
     } catch (error) {
       if (isAccessLost(error)) leaveCourse('No puedes abrir este curso', errorMessage(error));
       else notify.error('No se pudo cargar el curso', errorMessage(error));
+      return null;
     } finally {
       setLoading(false);
     }
   }, [courseId, notify, leaveCourse]);
 
-  /** Si el curso ya está certificado se abre en modo repaso, no como si quedara trabajo. */
-  const checkCertificate = useCallback(async () => {
+  /**
+   * ¿Terminó ya la vuelta actual? Lo dice su matrícula (`completedAt`): el certificado de una
+   * vuelta anterior no da por terminado el curso que se está repitiendo. Devuelve el
+   * certificado que la cerró, o `null` si sigue en curso.
+   */
+  const finishedRound = useCallback(async (): Promise<{ certificateGuid: string | null } | null> => {
     try {
-      const { data: status } = await api.get<CompletionStatus>(`/certificates/completion/${courseId}`);
-      if (!status.complete) return;
+      const { data: courses } = await api.get<Course[]>('/courses');
+      const enrollment = Array.isArray(courses) ? courses.find((c) => c.guid === courseId) : undefined;
+      if (!enrollment?.completedAt) return null;
 
-      const { data } = await api.get<Certificate[]>('/certificates');
-      const certificate = Array.isArray(data) ? data.find((c) => c.courseGuid === courseId) : undefined;
-      if (!certificate) return;
-
-      setCourseCompleted(true);
-      setCertGuid(certificate.guid);
-      setShowCourseFinished(true);
+      // Llegan del más reciente al más antiguo: el primero de este curso es el de esta vuelta.
+      const { data: certificates } = await api.get<Certificate[]>('/certificates');
+      const certificate = Array.isArray(certificates) ? certificates.find((c) => c.courseGuid === courseId) : undefined;
+      return { certificateGuid: certificate?.guid ?? null };
     } catch {
-      // Sin certificado todavía: el curso se abre con normalidad.
+      // Sin saberlo, el curso se abre con normalidad.
+      return null;
     }
   }, [courseId]);
+
+  /**
+   * El curso está terminado. Si ya lo estaba al abrirlo, se ofrece repasarlo; si se termina
+   * en esta visita, se celebra una sola vez y después queda en modo repaso.
+   */
+  const onRoundFinished = useCallback((certificateGuid: string | null) => {
+    if (certificateGuid) setCertGuid(certificateGuid);
+    if (celebrationShown.current) return;
+    if (progressChecked.current) {
+      setPendingCelebration(true);
+    } else {
+      celebrationShown.current = true;
+      setShowCourseFinished(true);
+    }
+  }, []);
 
   /**
    * Avance del alumno en el curso.
@@ -221,14 +246,35 @@ function CourseViewer() {
       setCompleted([...new Set([...(data.completed ?? []), ...(data.unlockedByWait ?? [])])]);
       setPendingAssignments(data.pendingAssignments ?? []);
 
-      await checkCertificate();
+      const round = await finishedRound();
+      if (round) onRoundFinished(round.certificateGuid);
+      progressChecked.current = true;
     } catch (error) {
       if (isAccessLost(error)) leaveCourse('No puedes abrir este curso', errorMessage(error));
       else showAlert.error('Error', errorMessage(error, 'No se pudo cargar tu avance en el curso.'));
     } finally {
       setProgressLoaded(true);
     }
-  }, [courseId, checkCertificate, showAlert, leaveCourse]);
+  }, [courseId, finishedRound, onRoundFinished, showAlert, leaveCourse]);
+
+  /**
+   * Una acción rechazada por falta de acceso (403/404) puede deberse a una baja, a que el
+   * curso pasó a mantenimiento o a que se retiró el recurso. La ficha del curso lo aclara:
+   * saca al alumno, enseña el aviso de mantenimiento o, si el curso sigue abierto, explica
+   * el error y pone al día el avance. Devuelve si se ha hecho cargo del error.
+   */
+  const handleAccessError = useCallback(
+    (error: unknown, title: string): boolean => {
+      if (!isAccessLost(error)) return false;
+      void loadCourse().then((current) => {
+        if (current?.status !== 'PUBLISHED') return;
+        showAlert.error(title, errorMessage(error));
+        void loadProgress();
+      });
+      return true;
+    },
+    [loadCourse, loadProgress, showAlert],
+  );
 
   useEffect(() => {
     if (courseId) void loadCourse();
@@ -248,32 +294,44 @@ function CourseViewer() {
       'Tu matrícula fue dada de baja. Si crees que es un error, contacta con el administrador.',
     );
   });
+  useRealtimeEvent('course:deleted', (data) => {
+    if ((data as { guid?: string })?.guid !== courseId) return;
+    leaveCourse('Este curso ya no está disponible', 'El curso fue eliminado de la plataforma.');
+  });
   useRealtimeEvent('certificate:new', (data) => {
-    const event = data as { guid?: string; courseGuid?: string; courseTitle?: string };
-    if (event?.courseGuid === courseId && !celebrationShown.current) {
-      if (event.guid) setCertGuid(event.guid);
-      setPendingCelebration({ courseTitle: event.courseTitle ?? '' });
-    }
+    const event = data as { guid?: string; courseGuid?: string };
+    if (event?.courseGuid === courseId) onRoundFinished(event.guid ?? null);
+  });
+  // Lo que pasó mientras se cortó el tiempo real (una baja, una nota) no llegó como aviso.
+  useRealtimeReconnect(() => {
+    void loadCourse();
+    void loadProgress();
   });
 
   useEffect(() => {
     import('@justinribeiro/lite-youtube').catch(console.error);
   }, []);
 
+  // La felicitación espera a que se cierre el resultado del cuestionario que terminó el curso,
+  // y sustituye al aviso de tareas por calificar si estaba abierto: sólo se ve una.
   useEffect(() => {
-    if (pendingCelebration && !quizInProgress) {
-      const timer = setTimeout(() => {
-        if (!celebrationShown.current) {
-          celebrationShown.current = true;
-          setCelebrationData({ courseTitle: pendingCelebration.courseTitle || course?.title || 'el curso' });
-          setShowCelebration(true);
-          setShowCelebrationActions(false);
-        }
-        setPendingCelebration(null);
-      }, 1000);
-      return () => clearTimeout(timer);
-    }
-  }, [pendingCelebration, quizInProgress, course]);
+    if (!pendingCelebration || quizInProgress) return;
+    const timer = setTimeout(() => {
+      if (!celebrationShown.current) {
+        celebrationShown.current = true;
+        setShowPendingAlert(false);
+        setShowCelebration(true);
+      }
+      setPendingCelebration(false);
+    }, 1000);
+    return () => clearTimeout(timer);
+  }, [pendingCelebration, quizInProgress]);
+
+  /** Tras la felicitación el curso queda en modo repaso, como al abrir un curso ya terminado. */
+  const closeCelebration = () => {
+    setShowCelebration(false);
+    setReadOnly(true);
+  };
 
   // Los botones del certificado tardan 2 s en aparecer, para no cortar la felicitación.
   useEffect(() => {
@@ -314,10 +372,11 @@ function CourseViewer() {
         await api.post('/students/complete-resource', { resourceGuid });
         setCompleted((prev) => [...prev, resourceGuid]);
       } catch (error) {
-        showAlert.error('No se pudo marcar como completado', errorMessage(error));
+        const title = 'No se pudo marcar como completado';
+        if (!handleAccessError(error, title)) showAlert.error(title, errorMessage(error));
       }
     },
-    [studentGuid, completed, showAlert],
+    [studentGuid, completed, showAlert, handleAccessError],
   );
 
   const modules = course?.modules || [];
@@ -428,7 +487,7 @@ function CourseViewer() {
   // Lleva directamente a la ficha del certificado de este curso cuando ya se conoce.
   const certificatesUrl = `/dashboard/student/certificates${certGuid ? `?open=${certGuid}` : ''}`;
 
-  if (showCourseFinished && courseCompleted) {
+  if (showCourseFinished) {
     const viewOnly = () => {
       setShowCourseFinished(false);
       setReadOnly(true);
@@ -688,6 +747,7 @@ function CourseViewer() {
                   onFinish={() => {
                     if (!readOnly) void loadProgress();
                   }}
+                  onAccessError={handleAccessError}
                 />
               )}
 
@@ -725,6 +785,7 @@ function CourseViewer() {
                       if (firstResource) setCurrentResource(firstResource);
                     }}
                     onQuizStateChange={setQuizInProgress}
+                    onAccessError={handleAccessError}
                   />
                 ))}
             </div>
@@ -735,11 +796,11 @@ function CourseViewer() {
       {/* ── Ventana de felicitación al terminar el curso ── */}
       {showCelebration && (
         <Celebration
-          title={celebrationData?.courseTitle || course?.title}
+          title={course.title}
           actionsVisible={showCelebrationActions}
-          onKeepGoing={() => setShowCelebration(false)}
+          onKeepGoing={closeCelebration}
           onViewCertificate={() => {
-            setShowCelebration(false);
+            closeCelebration();
             router.push(certificatesUrl);
           }}
         />

@@ -33,6 +33,7 @@ export interface QuizFailed extends BaseEvent {
 
 export interface AttemptEnabled extends BaseEvent {
   resourceGuid: string;
+  courseGuid: string;
   quizTitle: string;
 }
 

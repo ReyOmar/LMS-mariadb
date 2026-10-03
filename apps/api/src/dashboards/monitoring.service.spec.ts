@@ -201,6 +201,24 @@ describe('MonitoringService', () => {
     });
   });
 
+  it('un intento de cuestionario abierto no cuenta como entrega en las cifras ni en las filas', async () => {
+    const { service, prisma } = serviceWith({
+      page: [
+        { guid: 'ana', firstName: 'Ana', lastName: 'Ruiz', email: 'ana@x', lastAccessAt: null, createdAt: new Date() },
+      ],
+      pageEnrollments: [{ userGuid: 'ana', courseGuid: 'c1' }],
+    });
+
+    await service.getSummary(ADMIN, {});
+    await service.getStudents(ADMIN, {});
+
+    const counting = prisma.$queryRaw.mock.calls
+      .map(([parts]) => sqlOf(parts))
+      .filter((sql) => /lms_entregas/.test(sql));
+    expect(counting).toHaveLength(2);
+    for (const sql of counting) expect(sql).toContain("e.estado <> 'BORRADOR'");
+  });
+
   it('el desglose por módulo exige que el alumno esté matriculado y activo', async () => {
     const notEnrolled = serviceWith();
     await expect(notEnrolled.service.getStudentModules('c1', 'ana', ADMIN)).rejects.toBeInstanceOf(NotFoundException);

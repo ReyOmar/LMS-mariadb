@@ -143,8 +143,18 @@ const VARIABLES: Record<string, VariableData> = {
   },
   solicitanteRol: {
     label: 'Rol solicitado',
-    example: 'Capacitante',
+    example: 'Estudiante',
     color: 'bg-amber-500/15 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-500/30',
+  },
+  motivo: {
+    label: 'Motivo',
+    example: 'No consta en la plantilla de la empresa.',
+    color: 'bg-slate-500/15 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-500/30',
+  },
+  sede: {
+    label: 'Sede',
+    example: 'Colombia',
+    color: 'bg-indigo-500/15 text-indigo-700 dark:text-indigo-300 border-indigo-200 dark:border-indigo-500/30',
   },
   comentario: {
     label: 'Comentario',

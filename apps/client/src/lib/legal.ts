@@ -168,7 +168,7 @@ function controllerBlock(controller: DataController, country: Country): string {
 
 const PERSONAL_DATA = lines(
   '- Identificación y contacto: nombre, apellido, correo electrónico y la sede a la que perteneces.',
-  '- Cuenta: tu función en el campus (capacitante, examinador o administrador), tu contraseña —guardada cifrada, ' +
+  '- Cuenta: tu función en el campus (estudiante, examinador o administrador), tu contraseña —guardada cifrada, ' +
     'nadie puede leerla—, las fechas de alta y de último acceso, y la fecha y la versión del texto legal que aceptaste.',
   '- Formación: cursos asignados, avance, tiempo de estudio (sólo cuenta mientras trabajas en el curso), entregas y ' +
     'archivos que subes, respuestas y calificaciones de las evaluaciones, comentarios de los examinadores y certificados.',
@@ -257,9 +257,9 @@ function termsOfUse(platform: string, controller: DataController, country: Count
       'las instrucciones de seguridad de tu empresa. Algunos cursos incluyen vídeos o enlaces de otros sitios, que se ' +
       'rigen por sus propias condiciones.',
     '',
-    '## Disponibilidad, suspensión y baja',
+    '## Disponibilidad y baja',
     'Procuramos que el campus funcione de forma continua, pero puede interrumpirse por mantenimiento o por causas ' +
-      'técnicas. Podemos suspender o cerrar una cuenta que incumpla estos términos. Puedes pedir la baja de la tuya ' +
+      'técnicas. Podemos eliminar una cuenta que incumpla estos términos. Puedes pedir la baja de la tuya ' +
       `por ${contactLine(controller)}; conservaremos sólo lo que la ley exija, como se explica en el apartado de datos ` +
       'personales.',
     '',
@@ -589,3 +589,16 @@ export const PRIVACY_TITLE: Record<Country, string> = {
   COLOMBIA: 'Política de tratamiento de datos personales',
   MEXICO: 'Aviso de privacidad integral',
 };
+
+/**
+ * Páginas públicas en las que no se pide aceptar la política aunque haya sesión: la propia
+ * página legal, que es lo que hay que poder leer antes de aceptar, y la verificación de
+ * certificados, que es de terceros.
+ */
+const PAGES_WITHOUT_CONSENT = ['/legal', '/verify'];
+
+/** ¿Se pide en esta ruta aceptar la política de datos a quien aún no la aceptó? */
+export function asksForConsentOn(pathname: string | null): boolean {
+  if (!pathname) return true;
+  return !PAGES_WITHOUT_CONSENT.some((page) => pathname === page || pathname.startsWith(`${page}/`));
+}

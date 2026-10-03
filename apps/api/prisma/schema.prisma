@@ -531,6 +531,8 @@ model Certificate {
   user             User?     @relation(fields: [userGuid], references: [guid], onDelete: SetNull)
   // Nombre completo del titular tal como se emitió; no cambia si después edita su perfil.
   holderName       String    @map("nombre_titular")
+  // Sede que lo emitió. Se guarda aquí porque la cuenta y el curso pueden borrarse después.
+  country          Country   @map("pais")
   /**
    * El curso del que salió, mientras siga existiendo.
    * Queda en nulo si el curso se elimina: el certificado acredita una formación que

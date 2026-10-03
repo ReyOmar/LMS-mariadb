@@ -1,5 +1,6 @@
 import type { CourseStatus, UserRole, User } from '@/types/models';
 import { USER_ROLE_LABEL } from '@/lib/labels';
+import { plural } from '@/lib/text';
 
 /**
  * Tipos y vocabulario que comparten las piezas de la pantalla de cuentas.
@@ -50,4 +51,29 @@ export const ROLE_DISPLAY: Record<UserRole, { label: string; text: string; backg
 /** Quien crea cursos —examinador y administrador— frente a quien los recibe. */
 export function managesCourses(role: UserRole): boolean {
   return role === 'TEACHER' || role === 'ADMIN';
+}
+
+/** Roles en el orden en que se ofrecen al crear o editar una cuenta. */
+export const ROLE_OPTIONS: UserRole[] = ['STUDENT', 'TEACHER', 'ADMIN'];
+
+/**
+ * Por qué no se puede pasar una cuenta a un rol, o `null` si se puede.
+ *
+ * Son las reglas de la API, repetidas aquí para explicarlas antes de enviar: nadie cambia
+ * su propio rol, y quien es responsable de cursos sólo puede pasar a otro rol que pueda
+ * serlo.
+ */
+export function roleChangeProblem(
+  account: Pick<User, 'role' | 'taughtCourses'>,
+  role: UserRole,
+  isSelf: boolean,
+): string | null {
+  if (role === account.role) return null;
+  if (isSelf) return 'No puedes cambiar tu propio rol: pídeselo a otro administrador.';
+
+  const courses = account.taughtCourses ?? 0;
+  if (courses > 0 && !managesCourses(role)) {
+    return `Es responsable de ${courses} ${plural(courses, 'curso', 'cursos')}: asígnalos a otro examinador o administrador antes de hacerla ${USER_ROLE_LABEL[role].toLowerCase()}.`;
+  }
+  return null;
 }

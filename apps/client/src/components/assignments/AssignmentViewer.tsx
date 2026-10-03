@@ -16,7 +16,9 @@ import api, { errorMessage, uploadFile, fileUrlFor } from '@/lib/api';
 import { fileSizeWarning, formatMb, submissionLimit } from '@/lib/upload-limits';
 import { useConfig } from '@/contexts/ConfigContext';
 import { PageLoader } from '@/components/ui/PageLoader';
-import { isPassing, formatPoints, MAX_SCORE } from '@/lib/grading';
+import { isPassing, toScore, MAX_SCORE } from '@/lib/grading';
+import { formatNumber } from '@/lib/country';
+import { useCountry } from '@/contexts/CountryContext';
 import { useRealtimeEvent } from '@/contexts/RealtimeContext';
 import { sanitizeHTML } from '@/lib/sanitize';
 import { externalUrl } from '@/lib/resources';
@@ -37,6 +39,11 @@ interface AssignmentViewerProps {
   passingScore?: number;
   readOnly?: boolean;
   onFinish: () => void;
+  /**
+   * Recibe los rechazos de la API para que el curso decida si el alumno sigue teniendo
+   * acceso (baja, mantenimiento). Devuelve si se ha hecho cargo; si no, avisa el visor.
+   */
+  onAccessError?: (error: unknown, title: string) => boolean;
 }
 
 /**
@@ -56,6 +63,7 @@ export default function AssignmentViewer({
   passingScore,
   readOnly = false,
   onFinish,
+  onAccessError,
 }: AssignmentViewerProps) {
   // El mismo límite que aplicará el servidor: el de la tarea o, sin él, el general de la sede.
   const { config } = useConfig();
@@ -74,6 +82,15 @@ export default function AssignmentViewer({
   // se repetiría sin fin.
   const onFinishRef = useRef(onFinish);
   onFinishRef.current = onFinish;
+  const onAccessErrorRef = useRef(onAccessError);
+  onAccessErrorRef.current = onAccessError;
+
+  const { country } = useCountry();
+  /** Nota como se escribe en la sede (83,2 en Colombia); «—» si no hay. */
+  const points = (value: unknown) => {
+    const number = toScore(value);
+    return number === null ? '—' : formatNumber(number, country);
+  };
 
   const loadState = useCallback(async () => {
     try {
@@ -83,8 +100,9 @@ export default function AssignmentViewer({
         setUploadStatus('done');
         if (data.status === 'GRADED') onFinishRef.current();
       }
-    } catch {
-      // Sin entrega todavía: se muestra la zona de subida.
+    } catch (error) {
+      // Un rechazo de acceso lo atiende el curso; con cualquier otro queda la zona de subida.
+      onAccessErrorRef.current?.(error, 'No se pudo cargar tu entrega');
     } finally {
       setLoading(false);
     }
@@ -119,9 +137,10 @@ export default function AssignmentViewer({
       setUploadStatus('done');
       onFinish();
     } catch (error) {
-      setUploadError(errorMessage(error, 'No se pudo subir el archivo. Revisa tu conexión e inténtalo de nuevo.'));
       // Si ya había una entrega, sigue siendo la válida: se vuelve a mostrar con el aviso.
       setUploadStatus(submission ? 'done' : 'idle');
+      if (onAccessErrorRef.current?.(error, 'No se pudo subir la entrega')) return;
+      setUploadError(errorMessage(error, 'No se pudo subir el archivo. Revisa tu conexión e inténtalo de nuevo.'));
     }
   };
 
@@ -251,7 +270,7 @@ export default function AssignmentViewer({
                 )}
                 {!isPassed && passingScore !== undefined && (
                   <p className="mt-2 text-sm font-medium text-amber-700 dark:text-amber-400">
-                    Necesitas {formatPoints(passingScore)} puntos para aprobar. Puedes subir una versión corregida.
+                    Necesitas {points(passingScore)} puntos para aprobar. Puedes subir una versión corregida.
                   </p>
                 )}
               </div>
@@ -261,7 +280,7 @@ export default function AssignmentViewer({
                 Calificación obtenida
               </div>
               <div className="text-4xl font-black text-amber-700 dark:text-amber-400">
-                {formatPoints(score)} <span className="text-base text-muted-foreground">/ {MAX_SCORE}</span>
+                {points(score)} <span className="text-base text-muted-foreground">/ {MAX_SCORE}</span>
               </div>
             </div>
           </div>
@@ -312,17 +331,15 @@ export default function AssignmentViewer({
                     {submission.fileName}
                   </p>
                   {submission.filePurged ? (
-                    <span
-                      className="inline-flex items-center gap-1 text-xs font-bold text-amber-700 dark:text-amber-400 bg-amber-500/10 px-2 py-0.5 rounded-md mt-0.5"
-                      title="El archivo fue eliminado automáticamente tras obtener el certificado para optimizar recursos"
-                    >
-                      <CheckCircle2 className="h-3 w-3" /> Archivo liberado
-                    </span>
+                    <p className="text-xs font-medium text-amber-700 dark:text-amber-400 mt-0.5">
+                      El archivo de esta entrega ya no está disponible.
+                    </p>
                   ) : (
                     <p className="text-xs text-muted-foreground mt-0.5">Archivo entregado</p>
                   )}
                 </div>
-                {submission.fileUrl && !submission.filePurged && !readOnly && (
+                {/* También en modo repaso: es su propio documento. */}
+                {submission.fileUrl && !submission.filePurged && (
                   <button
                     onClick={onDownload}
                     className="px-4 py-2 rounded-xl bg-primary hover:bg-primary/90 text-primary-foreground font-bold flex items-center gap-2 transition-transform hover:scale-105"

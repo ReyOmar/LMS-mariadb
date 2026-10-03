@@ -45,7 +45,7 @@ export const CATEGORIES: readonly EmailCategory[] = [
     color: 'text-amber-700 dark:text-amber-400',
     backgroundColor: 'bg-amber-500/10',
     borderColor: 'border-amber-500/20',
-    events: ['NUEVA_SOLICITUD_ACCESO', 'USUARIO_APROBADO'],
+    events: ['NUEVA_SOLICITUD_ACCESO', 'SOLICITUD_RECHAZADA', 'USUARIO_APROBADO'],
   },
   {
     key: 'system',

@@ -4,21 +4,12 @@ import { PrismaService } from '../prisma/prisma.service';
 import { SettingsService } from '../settings/settings.service';
 import { CourseAccessService } from '../courses/course-access.service';
 import { recordCompletion } from '../courses/resource-progress';
+import { waitedTooLong } from '../courses/progression';
 import { averageOfScores } from '../common/domain/grading';
 import { percent } from '../common/domain/progress';
 import { dayInTimeZone, timeZoneOffset } from '../common/domain/time-zone';
 import { JwtPayload } from '../common/interfaces/jwt-payload.interface';
 import { emitEvent } from '../common/domain/domain-events';
-
-/**
- * Horas que una entrega puede llevar esperando calificación antes de que el sistema
- * desbloquee el siguiente recurso por su cuenta.
- *
- * Existe para que un examinador ausente no deje a un alumno bloqueado indefinidamente. El
- * desbloqueo no da la tarea por aprobada: sólo permite seguir estudiando mientras llega la
- * corrección, y el certificado sigue exigiendo que todas las tareas estén calificadas.
- */
-export const AUTO_UNLOCK_HOURS = 48;
 
 /**
  * Hueco a partir del cual se considera que empezó una sesión nueva, y tope de lo que
@@ -94,7 +85,6 @@ export class StudentsService {
     const alreadyCompleted = new Set(completed);
     const titles = new Map(resources.map((resource) => [resource.guid, resource.title]));
 
-    const unlockLimit = Date.now() - AUTO_UNLOCK_HOURS * 60 * 60 * 1000;
     const unlocked: string[] = [];
     const pending: { resourceGuid: string; title: string; submittedAt: string | null }[] = [];
 
@@ -107,8 +97,7 @@ export class StudentsService {
         submittedAt: submission.submittedAt?.toISOString() ?? null,
       });
 
-      const waitingTooLong = submission.submittedAt !== null && submission.submittedAt.getTime() <= unlockLimit;
-      if (waitingTooLong && !alreadyCompleted.has(submission.assignmentGuid)) {
+      if (waitedTooLong(submission.submittedAt) && !alreadyCompleted.has(submission.assignmentGuid)) {
         unlocked.push(submission.assignmentGuid);
       }
     }
@@ -127,10 +116,11 @@ export class StudentsService {
    * Marca un recurso como completado.
    *
    * Sólo aplica a recursos de estudio: las tareas y los cuestionarios se completan al
-   * aprobarlos, no porque el navegador diga que se leyeron.
+   * aprobarlos, no porque el navegador diga que se leyeron. Con orden estricto, el recurso
+   * tiene que estar desbloqueado.
    */
   async markResourceCompleted(resourceGuid: string, user: JwtPayload) {
-    const course = await this.access.ensureResourceAccess(resourceGuid, user);
+    const course = await this.access.unlockedResourceAccess(resourceGuid, user);
 
     const resource = await this.prisma.resource.findUnique({
       where: { guid: resourceGuid },
@@ -263,9 +253,14 @@ export class StudentsService {
    * verdad** desde el latido anterior y no una cantidad fija por latido: así dos pestañas
    * abiertas o una recarga no cuentan de más, y una pestaña olvidada no suma horas porque
    * el cliente deja de latir cuando no está visible.
+   *
+   * Con el curso sin publicar (en mantenimiento) el latido se ignora: no hay contenido que
+   * estudiar, sólo el aviso.
    */
   async recordHeartbeat(courseGuid: string, user: JwtPayload) {
+    const course = await this.access.courseInCountry(courseGuid, user.country);
     await this.access.ensureEnrollment(courseGuid, user.sub);
+    if (course.status !== 'PUBLISHED') return { recorded: false };
 
     const now = new Date();
     const cutoff = new Date(now.getTime() - SESSION_CUTOFF_SECONDS * 1000);

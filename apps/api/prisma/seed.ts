@@ -1,4 +1,4 @@
-import { PrismaClient } from '@prisma/client';
+import { Country, PrismaClient } from '@prisma/client';
 import { PrismaMariaDb } from '@prisma/adapter-mariadb';
 import * as bcrypt from 'bcryptjs';
 import * as crypto from 'crypto';
@@ -9,7 +9,7 @@ import { EMAIL_TEMPLATES } from './email-templates';
  *
  * Crea lo imprescindible para poder entrar y operar:
  *  - Un administrador por sede, con contraseña aleatoria que se imprime una sola vez.
- *  - Las plantillas de correo del sistema.
+ *  - Las plantillas de correo del sistema, una por evento y sede.
  *
  * **Es idempotente y no pisa nada**: un administrador que ya exista no se toca —ni su
  * contraseña ni su rol— y una plantilla ya creada se deja como esté, incluso si se editó
@@ -82,23 +82,35 @@ async function seedAdmins(): Promise<{ email: string; country: string; password:
   return credentials;
 }
 
+/**
+ * Crea los eventos de correo que falten y, en cada sede, la plantilla por defecto de los
+ * eventos que todavía no tengan ninguna: un evento nuevo llega así a las dos sedes.
+ *
+ * Las plantillas que ya existen no se tocan. El nombre, la descripción y las variables del
+ * evento sí se actualizan: no se editan desde el panel y la ayuda del editor debe listar
+ * las variables que el código envía.
+ */
 async function seedEmailTemplates(): Promise<number> {
   let created = 0;
 
-  for (const seed of EMAIL_TEMPLATES) {
-    const existing = await prisma.emailEvent.findUnique({ where: { key: seed.key }, select: { id: true } });
-    if (existing) continue;
-
-    await prisma.emailEvent.create({
-      data: {
-        key: seed.key,
-        displayName: seed.displayName,
-        description: seed.description,
-        variables: seed.variables,
-        templates: { create: { ...seed.template, active: true } },
-      },
+  for (const { key, template, ...details } of EMAIL_TEMPLATES) {
+    const event = await prisma.emailEvent.upsert({
+      where: { key },
+      create: { key, ...details },
+      update: details,
+      select: { id: true },
     });
-    created++;
+
+    for (const country of Object.values(Country)) {
+      const existing = await prisma.emailTemplate.findFirst({
+        where: { eventId: event.id, country },
+        select: { id: true },
+      });
+      if (existing) continue;
+
+      await prisma.emailTemplate.create({ data: { ...template, eventId: event.id, country, active: true } });
+      created++;
+    }
   }
 
   return created;

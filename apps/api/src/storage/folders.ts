@@ -23,12 +23,36 @@ const WEB_IMAGES = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg'] as const;
 const PDF_IMAGES = ['.png', '.jpg', '.jpeg'] as const;
 
 /**
- * Formatos que admite cada carpeta que guarda imágenes; las demás aceptan cualquier formato
- * permitido.
+ * Lo que puede entregar un alumno. Es la misma lista que ofrece el cliente
+ * (`apps/client/src/components/assignments/allowed-files.ts`).
+ */
+const SUBMISSION_FORMATS = [
+  '.pdf',
+  '.doc',
+  '.docx',
+  '.ppt',
+  '.pptx',
+  '.xls',
+  '.xlsx',
+  '.txt',
+  '.zip',
+  '.rar',
+  '.png',
+  '.jpg',
+  '.jpeg',
+  '.gif',
+  '.webp',
+  '.mp4',
+  '.mp3',
+] as const;
+
+/**
+ * Formatos que admite cada carpeta acotada; las demás aceptan cualquier formato permitido.
  *
  * Las carpetas públicas se sirven sin firma desde el dominio del campus: si admitieran un
- * PDF o un vídeo, serían un alojamiento de archivos gratis para cualquiera con sesión. Y una
- * firma que el PDF no sabe leer desaparecería de todos los certificados.
+ * PDF o un vídeo, serían un alojamiento de archivos gratis para cualquiera con sesión. Una
+ * firma que el PDF no sabe leer desaparecería de todos los certificados. Y una entrega en
+ * SVG llevaría código que el examinador abriría desde el campus.
  */
 export const FORMATS_BY_FOLDER: Readonly<Partial<Record<Folder, readonly string[]>>> = {
   logos: WEB_IMAGES,
@@ -36,6 +60,7 @@ export const FORMATS_BY_FOLDER: Readonly<Partial<Record<Folder, readonly string[
   fondos: WEB_IMAGES,
   avatars: WEB_IMAGES,
   firmas: PDF_IMAGES,
+  entregas: SUBMISSION_FORMATS,
 };
 
 /**

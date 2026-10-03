@@ -2,6 +2,8 @@ import { Injectable, Logger, NotFoundException, OnModuleInit } from '@nestjs/com
 import { CountrySettings, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { StorageService } from '../storage/storage.service';
+import { FileOwnershipService } from '../storage/file-ownership.service';
+import { Folder } from '../storage/folders';
 import { uploadCeilingMb } from '../storage/upload-limits';
 import { RealtimeService } from '../realtime/realtime.service';
 import { COUNTRY_METADATA, COUNTRIES, Country } from '../common/domain/country';
@@ -9,8 +11,15 @@ import { UpdateSettingsDto } from './dto/update-settings.dto';
 import { UpdateCertificateSettingsDto } from './dto/update-certificate-settings.dto';
 import { UpdateSignatureDto } from './dto/update-signature.dto';
 
-/** Campos que guardan una clave de archivo y hay que limpiar del almacenamiento al reemplazarse. */
-const FILE_FIELDS = ['logoUrl', 'faviconUrl', 'loginBackgroundUrl'] as const;
+/**
+ * Campos que guardan una clave de archivo, con la carpeta de la que tiene que venir. Hay que
+ * limpiarlos del almacenamiento al reemplazarse.
+ */
+const FILE_FIELDS = [
+  ['logoUrl', 'logos'],
+  ['faviconUrl', 'logos'],
+  ['loginBackgroundUrl', 'fondos'],
+] as const satisfies readonly (readonly [keyof UpdateSettingsDto & keyof CountrySettings, Folder])[];
 
 /**
  * Lo único que sale sin haber iniciado sesión.
@@ -30,6 +39,8 @@ const PUBLIC_FIELDS = [
   'borderRadius',
   'welcomeMessage',
   'maxFileMb',
+  // Las fechas y horas del campus se leen en la hora de la sede, no en la del navegador.
+  'timeZone',
   'landingHeroTitle1',
   'landingHeroTitle2',
   'landingHeroSubtitle',
@@ -109,6 +120,7 @@ export class SettingsService implements OnModuleInit {
     private readonly prisma: PrismaService,
     private readonly storage: StorageService,
     private readonly realtime: RealtimeService,
+    private readonly files: FileOwnershipService,
   ) {}
 
   /**
@@ -151,6 +163,7 @@ export class SettingsService implements OnModuleInit {
         country,
         platformName: 'PESV Education',
         timeZone: meta.timeZone,
+        primaryColor: meta.primaryColor,
         welcomeMessage: `Bienvenido a PESV Education ${meta.name}`,
         landingHeroSubtitle:
           'Plataforma integral para la gestión del Plan Estratégico de Seguridad Vial. Capacitación, ' +
@@ -286,6 +299,12 @@ export class SettingsService implements OnModuleInit {
   async updateSettings(country: Country, dto: UpdateSettingsDto): Promise<CountrySettings> {
     const current = await this.loadSettings(country);
 
+    // La identidad visual es de la sede: vale un archivo que haya subido cualquiera de sus
+    // administradores, pero no uno de la otra sede.
+    for (const [field, folder] of FILE_FIELDS) {
+      await this.files.assertCanUse(dto[field], current[field], folder, { country });
+    }
+
     const legalChanged = LEGAL_FIELDS.some((field) => dto[field] !== undefined && dto[field] !== current[field]);
 
     // Configuración y registro de la versión legal van juntos: una versión publicada sin
@@ -342,13 +361,13 @@ export class SettingsService implements OnModuleInit {
    * el registro del servidor.
    */
   private async deleteReplacedFiles(current: CountrySettings, dto: UpdateSettingsDto): Promise<void> {
-    const replaced = FILE_FIELDS.map((field) => {
+    const replaced = FILE_FIELDS.map(([field]) => {
       const previous = current[field];
       const newValue = dto[field];
       return newValue !== undefined && previous && previous !== newValue ? previous : null;
     });
 
-    await this.storage.deleteFiles(replaced);
+    await this.files.deleteUnreferenced(replaced);
   }
 
   private invalidateCache(country: Country): void {
@@ -383,6 +402,7 @@ export class SettingsService implements OnModuleInit {
       select: { signatureUrl: true },
     });
     if (!current) throw new NotFoundException('Usuario no encontrado.');
+    await this.files.assertCanUse(dto.signatureUrl, current.signatureUrl, 'firmas', { uploader: userGuid });
 
     const updated = await this.prisma.user.update({
       where: { guid: userGuid },
@@ -390,10 +410,8 @@ export class SettingsService implements OnModuleInit {
       select: { signatureUrl: true, signatureName: true, signatureTitle: true, firstName: true, lastName: true },
     });
 
-    if (dto.signatureUrl !== undefined && current.signatureUrl && current.signatureUrl !== dto.signatureUrl) {
-      await this.storage
-        .deleteFile(current.signatureUrl)
-        .catch((error) => this.logger.warn(`No se pudo borrar la firma anterior ${current.signatureUrl}`, error));
+    if (dto.signatureUrl !== undefined && current.signatureUrl !== dto.signatureUrl) {
+      await this.files.deleteUnreferenced([current.signatureUrl]);
     }
 
     return {

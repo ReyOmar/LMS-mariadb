@@ -26,7 +26,7 @@ const STEPS: { id: Step; label: string }[] = [
 ];
 
 const ROLES: { value: UserRole; label: string }[] = [
-  { value: 'STUDENT', label: 'Capacitante (recibo formación)' },
+  { value: 'STUDENT', label: 'Estudiante (recibo formación)' },
   { value: 'TEACHER', label: 'Examinador (imparto y califico)' },
 ];
 
@@ -34,10 +34,13 @@ const RESEND_SECONDS = 60;
 
 export function AccessRequestForm({
   country,
+  onEmailVerified,
   onCancel,
   onSubmitted,
 }: {
   country: Country;
+  /** El correo quedó verificado: desde aquí la solicitud es para la sede en que se empezó. */
+  onEmailVerified: () => void;
   onCancel: () => void;
   onSubmitted: () => void;
 }) {
@@ -84,6 +87,7 @@ export function AccessRequestForm({
     try {
       await api.post('/auth/confirm-email', { email, code });
       setStep('details');
+      onEmailVerified();
     } catch (failure) {
       setError(errorMessage(failure, 'El código no es correcto.'));
     } finally {

@@ -1,4 +1,4 @@
-import { NotFoundException } from '@nestjs/common';
+import { ForbiddenException, NotFoundException } from '@nestjs/common';
 import { BASE_LEGAL_VERSION, SettingsService } from './settings.service';
 import { uploadCeilingMb } from '../storage/upload-limits';
 
@@ -37,9 +37,9 @@ describe('SettingsService — qué se publica sin sesión', () => {
     legalTerms: 'Términos',
     legalPrivacy: 'Privacidad',
     legalData: 'Datos',
+    timeZone: 'America/Bogota',
 
     // Nada de lo siguiente puede salir sin sesión.
-    timeZone: 'America/Bogota',
     certCustomTitle: 'Certificado',
     certSubtitle: 'de aprovechamiento',
     certLegalText: 'Legal',
@@ -55,7 +55,7 @@ describe('SettingsService — qué se publica sin sesión', () => {
 
   function service() {
     const prisma = { countrySettings: { findUnique: async () => row } };
-    return new SettingsService(prisma as never, {} as never, {} as never);
+    return new SettingsService(prisma as never, {} as never, {} as never, {} as never);
   }
 
   it('devuelve lo que la portada necesita', async () => {
@@ -77,9 +77,15 @@ describe('SettingsService — qué se publica sin sesión', () => {
     expect(publicSettings.uploadCeilingMb).toBe(uploadCeilingMb());
   });
 
+  it('publica la zona horaria de la sede, con la que se escriben las fechas', async () => {
+    const publicSettings = await service().getPublicSettings('COLOMBIA');
+
+    expect(publicSettings.timeZone).toBe('America/Bogota');
+  });
+
   // Cada campo tiene que existir en la fila de prueba: si no, la prueba pasaría sin
   // comprobar nada.
-  it.each(['timeZone', 'certCustomTitle', 'certShowScore', 'certValidityMonths', 'futureNewColumn'])(
+  it.each(['certCustomTitle', 'certShowScore', 'certValidityMonths', 'futureNewColumn'])(
     'no publica %s',
     async (field) => {
       expect(row).toHaveProperty(field);
@@ -171,9 +177,9 @@ describe('SettingsService — versiones de los textos legales', () => {
       $transaction: async <T>(work: (tx: unknown) => Promise<T>) => work(prisma),
     };
 
-    const storage = { deleteFiles: async () => undefined };
     const realtime = { emitToCountry: () => undefined };
-    const service = new SettingsService(prisma as never, storage as never, realtime as never);
+    const files = { assertCanUse: jest.fn(async () => undefined), deleteUnreferenced: jest.fn(async () => undefined) };
+    const service = new SettingsService(prisma as never, {} as never, realtime as never, files as never);
     return { service, versions };
   }
 
@@ -258,5 +264,83 @@ describe('SettingsService — versiones de los textos legales', () => {
 
     await expect(service.getLegalVersion(colombianId, 'MEXICO')).rejects.toThrow(NotFoundException);
     await expect(service.getLegalVersion(colombianId, 'COLOMBIA')).resolves.toMatchObject({ country: 'COLOMBIA' });
+  });
+});
+
+/**
+ * Archivos de la configuración: un logotipo o un fondo nuevo tiene que venir de la misma sede,
+ * y la firma, de quien la guarda.
+ */
+describe('SettingsService · archivos', () => {
+  function serviceFor(current: Record<string, unknown>) {
+    const prisma = {
+      countrySettings: {
+        findUnique: async () => ({ country: 'MEXICO', ...current }),
+        update: async ({ data }: { data: Record<string, unknown> }) => ({ country: 'MEXICO', ...current, ...data }),
+      },
+      user: {
+        findUnique: async () => ({ signatureUrl: 'firmas/vieja.png' }),
+        update: async ({ data }: { data: Record<string, unknown> }) => data,
+      },
+      $transaction: async <T>(work: (tx: unknown) => Promise<T>) => work(prisma),
+    };
+    const storage = { downloadUrl: (key: string) => `/firmada/${key}` };
+    const realtime = { emitToCountry: () => undefined };
+    const files = { assertCanUse: jest.fn(async () => undefined), deleteUnreferenced: jest.fn(async () => undefined) };
+    const service = new SettingsService(prisma as never, storage as never, realtime as never, files as never);
+    return { service, files };
+  }
+
+  it('cada campo de imagen se valida contra su carpeta y la sede, y lo sustituido se retira', async () => {
+    const { service, files } = serviceFor({ logoUrl: 'logos/viejo.png', faviconUrl: null, loginBackgroundUrl: null });
+
+    await service.updateSettings('MEXICO', { logoUrl: 'logos/nuevo.png', loginBackgroundUrl: 'fondos/campo.jpg' });
+
+    expect(files.assertCanUse).toHaveBeenCalledWith('logos/nuevo.png', 'logos/viejo.png', 'logos', {
+      country: 'MEXICO',
+    });
+    expect(files.assertCanUse).toHaveBeenCalledWith('fondos/campo.jpg', null, 'fondos', { country: 'MEXICO' });
+    expect(files.deleteUnreferenced).toHaveBeenCalledWith(['logos/viejo.png', null, null]);
+  });
+
+  it('un logotipo de la otra sede no se guarda', async () => {
+    const { service, files } = serviceFor({ logoUrl: null });
+    files.assertCanUse.mockRejectedValueOnce(new ForbiddenException('otra sede'));
+
+    await expect(service.updateSettings('MEXICO', { logoUrl: 'logos/de-colombia.png' })).rejects.toThrow(
+      ForbiddenException,
+    );
+    expect(files.deleteUnreferenced).not.toHaveBeenCalled();
+  });
+
+  it('la firma nueva tiene que haberla subido quien la guarda', async () => {
+    const { service, files } = serviceFor({});
+
+    await service.updateSignature('profe-1', { signatureUrl: 'firmas/nueva.png' });
+
+    expect(files.assertCanUse).toHaveBeenCalledWith('firmas/nueva.png', 'firmas/vieja.png', 'firmas', {
+      uploader: 'profe-1',
+    });
+    expect(files.deleteUnreferenced).toHaveBeenCalledWith(['firmas/vieja.png']);
+  });
+});
+
+describe('SettingsService — configuración inicial de cada sede', () => {
+  it('crea cada sede con su propio color de marca', async () => {
+    const created: { country: string; primaryColor: string }[] = [];
+    const prisma = {
+      countrySettings: {
+        findUnique: async () => null,
+        create: async ({ data }: { data: { country: string; primaryColor: string } }) => created.push(data),
+      },
+    };
+    const service = new SettingsService(prisma as never, {} as never, {} as never, {} as never);
+
+    await service.onModuleInit();
+
+    expect(created.map(({ country, primaryColor }) => ({ country, primaryColor }))).toEqual([
+      { country: 'COLOMBIA', primaryColor: '#0F766E' },
+      { country: 'MEXICO', primaryColor: '#1f2937' },
+    ]);
   });
 });

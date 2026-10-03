@@ -3,6 +3,8 @@ import {
   Controller,
   ForbiddenException,
   Get,
+  HttpException,
+  HttpStatus,
   NotFoundException,
   Post,
   Query,
@@ -14,6 +16,7 @@ import type { FastifyReply, FastifyRequest } from 'fastify';
 import * as path from 'path';
 import { StorageService, ACTIVE_CONTENT_FORMATS } from './storage.service';
 import { contentDisposition } from './content-disposition';
+import { ByteRange, parseByteRange } from './byte-range';
 import { receiveFile } from './multipart';
 import { Folder, isFolder, isPublicKey, isStorageKey } from './folders';
 import { uploadLimit } from './upload-limits';
@@ -55,9 +58,9 @@ export class StorageController {
     const limit = uploadLimit(folder, siteMb);
 
     const file = await receiveFile(req, limit);
-    const key = await this.storage.uploadFromDisk(file.filePath, file.name, folder, limit.bytes);
+    const key = await this.storage.uploadFromDisk(file.filePath, file.name, folder, user, limit.bytes);
 
-    return { filename: key, url: this.storage.downloadUrl(key) };
+    return { filename: key, url: this.storage.downloadUrl(key, file.name) };
   }
 
   /**
@@ -100,17 +103,55 @@ export class StorageController {
     }
 
     // Se envía como flujo: el archivo no llega a materializarse en la memoria del servidor.
-    const file = await this.storage.openStream(key);
+    const partial = await this.requestedRange(key, req, reply);
+    const file = await this.storage.openStream(key, partial?.range);
     if (!file) throw new NotFoundException('Archivo no encontrado.');
 
     const downloadName = this.buildDownloadName(key, originalName);
     for (const [header, value] of Object.entries(this.securityHeaders(key, file.contentType, downloadName))) {
       reply.header(header, value);
     }
+    reply.header('Accept-Ranges', 'bytes');
+    if (partial) {
+      const { range, size } = partial;
+      reply.code(HttpStatus.PARTIAL_CONTENT).header('Content-Range', `bytes ${range.start}-${range.end}/${size}`);
+    }
     // Con el tamaño declarado, el navegador puede enseñar el progreso de la descarga.
     if (file.size !== null) reply.header('Content-Length', String(file.size));
 
     return reply.send(file.stream);
+  }
+
+  /**
+   * Fragmento pedido con `Range`: lo usan los reproductores para saltar dentro de un vídeo y
+   * los navegadores para reanudar una descarga.
+   *
+   * Con `If-Range` se envía el archivo entero: las respuestas no llevan validadores (ETag,
+   * Last-Modified), así que no hay forma de saber si el fragmento es del mismo archivo.
+   *
+   * @returns `null` para enviar el archivo entero.
+   * @throws HttpException 416 si el fragmento queda fuera del archivo.
+   */
+  private async requestedRange(
+    key: string,
+    req: FastifyRequest,
+    reply: FastifyReply,
+  ): Promise<{ range: ByteRange; size: number } | null> {
+    const header = req.headers.range;
+    if (!header || req.headers['if-range']) return null;
+
+    const size = await this.storage.fileSize(key);
+    if (size === null) return null;
+
+    const range = parseByteRange(header, size);
+    if (range === 'unsatisfiable') {
+      reply.header('Content-Range', `bytes */${size}`);
+      throw new HttpException(
+        'El fragmento pedido queda fuera del archivo.',
+        HttpStatus.REQUESTED_RANGE_NOT_SATISFIABLE,
+      );
+    }
+    return range && { range, size };
   }
 
   /** La limpieza del nombre la hace `contentDisposition`, que es quien escribe la cabecera. */

@@ -76,9 +76,10 @@ describe('búsqueda de candidatos', () => {
 });
 
 describe('restartWarning', () => {
-  it('nombra a la persona y advierte del borrado cuando es una sola', () => {
+  it('nombra a la persona y advierte de que empieza de cero cuando es una sola', () => {
     const text = restartWarning(['Ana Ruiz']);
     expect(text).toMatch(/^Ana Ruiz ya tiene el certificado/);
+    expect(text).toContain('sus entregas anteriores se archivan');
     expect(text).toContain('El certificado emitido se conserva.');
   });
 

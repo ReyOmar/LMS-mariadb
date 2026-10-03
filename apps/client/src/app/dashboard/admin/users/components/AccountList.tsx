@@ -1,6 +1,6 @@
 'use client';
 
-import { GraduationCap, Key, Mail, Plus, Presentation, Search, Shield } from 'lucide-react';
+import { GraduationCap, Key, Mail, Presentation, Search, Shield, UserPlus } from 'lucide-react';
 import type { UserRole, User } from '@/types/models';
 import { AccountAvatar } from './AccountAvatar';
 import { LastAccess } from '@/components/ui/LastAccess';
@@ -24,7 +24,7 @@ interface Props {
   onTabChange: (tab: Tab) => void;
   onSearch: (text: string) => void;
   onOpenDetails: (user: User) => void;
-  onNewAdmin: () => void;
+  onNewAccount: () => void;
 }
 
 /** Cada pestaña con su icono; en pantallas estrechas sólo se ven el icono y la cifra. */
@@ -51,9 +51,8 @@ export function AccountList({
   onTabChange,
   onSearch,
   onOpenDetails,
-  onNewAdmin,
+  onNewAccount,
 }: Props) {
-  const isAdminsTab = tab === 'ADMIN';
   const { country } = useCountry();
 
   return (
@@ -91,17 +90,15 @@ export function AccountList({
         </div>
       </div>
 
-      {isAdminsTab && (
-        <div className="mb-4 animate-in fade-in duration-300">
-          <button
-            type="button"
-            onClick={onNewAdmin}
-            className="flex items-center gap-2 px-4 py-2.5 bg-red-500/10 text-red-600 dark:text-red-400 font-bold text-sm rounded-xl hover:bg-red-500/20 transition-all border border-red-500/20 active:scale-95"
-          >
-            <Plus className="h-4 w-4" /> Registrar nuevo administrador
-          </button>
-        </div>
-      )}
+      <div className="mb-4 animate-in fade-in duration-300">
+        <button
+          type="button"
+          onClick={onNewAccount}
+          className="flex items-center gap-2 px-4 py-2.5 bg-primary/10 text-primary font-bold text-sm rounded-xl hover:bg-primary/20 transition-all border border-primary/20 active:scale-95"
+        >
+          <UserPlus className="h-4 w-4" /> Nuevo usuario
+        </button>
+      </div>
 
       <div className="bg-card/70 backdrop-blur-md border border-border/50 rounded-2xl shadow-sm overflow-hidden animate-in slide-in-from-bottom-6 duration-500">
         {/* Tabla de escritorio — oculta en móvil */}
@@ -144,7 +141,7 @@ export function AccountList({
                   <td className="px-5 py-3.5">
                     <div className="flex items-center gap-3">
                       <span className="text-sm font-bold text-muted-foreground">{shortDate(user.createdAt)}</span>
-                      {user.usesDefaultPassword && <NoPassword />}
+                      {user.usesDefaultPassword && <TemporaryPassword />}
                     </div>
                   </td>
                   <td className="px-5 py-3.5 text-sm">
@@ -175,7 +172,7 @@ export function AccountList({
                   <p className="text-xs text-muted-foreground truncate">{user.email}</p>
                   <div className="flex items-center gap-2 mt-1 flex-wrap">
                     <span className="text-[11px] font-bold text-muted-foreground">{shortDate(user.createdAt)}</span>
-                    {user.usesDefaultPassword && <NoPassword compact />}
+                    {user.usesDefaultPassword && <TemporaryPassword compact />}
                   </div>
                 </div>
                 <div className="shrink-0 text-right">
@@ -203,13 +200,13 @@ export function AccountList({
 }
 
 /** Cuenta que sigue con la contraseña temporal con la que se creó. */
-function NoPassword({ compact = false }: { compact?: boolean }) {
+function TemporaryPassword({ compact = false }: { compact?: boolean }) {
   return (
     <span
       className={`flex items-center gap-1 text-amber-700 dark:text-amber-400 ${compact ? 'text-[10px]' : 'text-xs'} font-bold`}
-      title="No ha configurado su contraseña"
+      title="Aún no ha sustituido la contraseña temporal por una propia"
     >
-      <Key className={compact ? 'h-2.5 w-2.5' : 'h-3 w-3'} /> Sin clave
+      <Key className={compact ? 'h-2.5 w-2.5' : 'h-3 w-3'} /> Clave temporal
     </span>
   );
 }

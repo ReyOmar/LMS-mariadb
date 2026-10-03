@@ -317,4 +317,88 @@ describe('CourseAccessService', () => {
       expect(resources.map((r) => r.guid)).not.toContain('recurso-mx');
     });
   });
+
+  describe('trabajo del alumno', () => {
+    const student = sessionFor('STUDENT', 'COLOMBIA', 'alumno-co');
+    const hoursAgo = (hours: number) => new Date(Date.now() - hours * 60 * 60 * 1000);
+
+    /** El curso de Colombia con el orden, el avance y las entregas pendientes indicados. */
+    function serviceWithPath(
+      options: {
+        strictOrder?: boolean;
+        completed?: string[];
+        pending?: { assignmentGuid: string; submittedAt: Date }[];
+      } = {},
+    ) {
+      const campus = fullCampus().prisma as unknown as Record<string, Record<string, unknown>>;
+      const prisma = {
+        ...campus,
+        course: {
+          ...campus.course,
+          findUnique: async () => ({
+            strictOrder: options.strictOrder ?? true,
+            modules: [
+              { resources: [{ guid: 'recurso-co-a' }, { guid: 'recurso-co-b' }] },
+              { resources: [{ guid: 'tarea-co' }] },
+            ],
+          }),
+        },
+        resourceProgress: {
+          findMany: async () => (options.completed ?? []).map((resourceGuid) => ({ resourceGuid })),
+        },
+        submission: { ...campus.submission, findMany: async () => options.pending ?? [] },
+      };
+      return new CourseAccessService(prisma as never);
+    }
+
+    it('sólo un estudiante presenta un cuestionario o entrega una tarea', async () => {
+      const teacher = sessionFor('TEACHER', 'COLOMBIA', 'profesor-co');
+      const admin = sessionFor('ADMIN', 'COLOMBIA');
+
+      await expect(createService().studentResourceAccess('tarea-co', teacher)).rejects.toThrow(ForbiddenException);
+      await expect(createService().studentResourceAccess('tarea-co', admin)).rejects.toThrow(/Sólo los estudiantes/);
+      await expect(createService().studentResourceAccess('tarea-co', student)).resolves.toMatchObject({
+        guid: 'curso-co',
+      });
+    });
+
+    it('con orden estricto rechaza un recurso cuyos anteriores no están completados', async () => {
+      const service = serviceWithPath({ completed: ['recurso-co-a'] });
+
+      await expect(service.unlockedResourceAccess('tarea-co', student)).rejects.toThrow(/bloqueado/);
+    });
+
+    it('deja pasar cuando los anteriores están completados', async () => {
+      const service = serviceWithPath({ completed: ['recurso-co-a', 'recurso-co-b'] });
+
+      await expect(service.unlockedResourceAccess('tarea-co', student)).resolves.toMatchObject({ guid: 'curso-co' });
+    });
+
+    it('una entrega que lleva demasiado esperando nota cuenta como hecha, igual que en el visor', async () => {
+      const waiting = (hours: number) =>
+        serviceWithPath({
+          completed: ['recurso-co-a'],
+          pending: [{ assignmentGuid: 'recurso-co-b', submittedAt: hoursAgo(hours) }],
+        });
+
+      await expect(waiting(49).unlockedResourceAccess('tarea-co', student)).resolves.toMatchObject({
+        guid: 'curso-co',
+      });
+      await expect(waiting(1).unlockedResourceAccess('tarea-co', student)).rejects.toThrow(/bloqueado/);
+    });
+
+    it('sin orden estricto no se exige el recorrido', async () => {
+      const service = serviceWithPath({ strictOrder: false });
+
+      await expect(service.unlockedResourceAccess('tarea-co', student)).resolves.toMatchObject({ guid: 'curso-co' });
+    });
+
+    it('el personal no llega a la comprobación del recorrido', async () => {
+      const teacher = sessionFor('TEACHER', 'COLOMBIA', 'profesor-co');
+
+      await expect(serviceWithPath().unlockedResourceAccess('recurso-co-a', teacher)).rejects.toThrow(
+        ForbiddenException,
+      );
+    });
+  });
 });

@@ -5,9 +5,9 @@ import { BookOpen, ArrowRight, AlertTriangle, CheckCircle2, TrendingUp } from 'l
 import { PageLoader } from '@/components/ui/PageLoader';
 import { useRouter } from 'next/navigation';
 import { useSession } from '@/contexts/SessionContext';
-import { useRealtimeEvent, useRealtime } from '@/contexts/RealtimeContext';
+import { useRealtimeEvent, useRealtime, useRealtimeReconnect } from '@/contexts/RealtimeContext';
 import api, { errorMessage, fileUrlFor } from '@/lib/api';
-import type { Course, CourseProgress } from '@/types/models';
+import type { Course } from '@/types/models';
 import { useAlerts } from '@/contexts/AlertContext';
 import { clickable } from '@/lib/clickable';
 
@@ -20,28 +20,14 @@ export default function StudentCoursesPage() {
   const { user } = useSession();
   const router = useRouter();
   const [courses, setCourses] = useState<Course[]>([]);
-  /** Porcentaje de avance de cada curso publicado, por su guid. */
-  const [progress, setProgress] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(true);
   const { coursesUnderMaintenance } = useRealtime();
 
   const loadCourses = useCallback(async () => {
     try {
+      // Cada curso trae ya el avance y la finalización de la vuelta actual.
       const { data } = await api.get<Course[]>('/courses');
-      const list = Array.isArray(data) ? data : [];
-      // Si falla el avance de un curso, su tarjeta se queda sin cifra, pero la lista se enseña.
-      const entries = await Promise.all(
-        list
-          .filter((course) => course.status === 'PUBLISHED')
-          .map((course) =>
-            api
-              .get<CourseProgress>(`/students/progress/${course.guid}`)
-              .then(({ data: courseProgress }) => [course.guid, courseProgress.percent] as const)
-              .catch(() => null),
-          ),
-      );
-      setCourses(list);
-      setProgress(Object.fromEntries(entries.filter((entry) => entry !== null)));
+      setCourses(Array.isArray(data) ? data : []);
     } catch (error) {
       notify.error('No se pudieron cargar tus cursos', errorMessage(error));
     } finally {
@@ -54,9 +40,15 @@ export default function StudentCoursesPage() {
   }, [user?.guid, loadCourses]);
 
   useRealtimeEvent('course:updated', loadCourses);
+  useRealtimeEvent('course:deleted', loadCourses);
   useRealtimeEvent('course:maintenance', loadCourses);
   useRealtimeEvent('enrollment:changed', loadCourses);
   useRealtimeEvent('submission:graded', loadCourses);
+  useRealtimeEvent('certificate:new', loadCourses);
+  useRealtimeReconnect(loadCourses);
+
+  // Mientras llega la primera carga sólo se pinta el indicador, en el mismo sitio que el del panel.
+  if (loading) return <PageLoader message="Cargando tus cursos..." />;
 
   return (
     <div className="animate-in slide-in-from-bottom-4 duration-700">
@@ -70,9 +62,7 @@ export default function StudentCoursesPage() {
         </p>
       </header>
 
-      {loading ? (
-        <PageLoader message="Cargando tus cursos..." />
-      ) : courses.length === 0 ? (
+      {courses.length === 0 ? (
         <div className="bg-card border border-border/50 rounded-2xl p-12 text-center shadow-sm">
           <BookOpen className="h-12 w-12 text-muted-foreground/30 mx-auto mb-4" />
           <h3 className="text-xl font-bold">Sin cursos asignados</h3>
@@ -84,7 +74,7 @@ export default function StudentCoursesPage() {
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {courses.map((course) => {
             const underMaintenance = !!coursesUnderMaintenance[course.guid] || course.status === 'DRAFT';
-            const percent = progress[course.guid];
+            const percent = course.percent;
             return (
               <div
                 key={course.guid}
@@ -135,7 +125,7 @@ export default function StudentCoursesPage() {
                       >
                         <AlertTriangle className="h-3 w-3" /> Mantenimiento
                       </span>
-                    ) : percent === 100 ? (
+                    ) : course.completedAt ? (
                       <span
                         className={`${BADGE} bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-500/20`}
                       >

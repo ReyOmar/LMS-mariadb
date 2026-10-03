@@ -2,6 +2,7 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { StorageService } from '../storage/storage.service';
+import { FileOwnershipService } from '../storage/file-ownership.service';
 import { CourseAccessService } from './course-access.service';
 import { serializeQuizConfig, validateQuizConfig } from './quiz-config';
 import { toClientResource } from './resource-view';
@@ -21,6 +22,7 @@ export class CourseContentService {
     private readonly prisma: PrismaService,
     private readonly access: CourseAccessService,
     private readonly storage: StorageService,
+    private readonly files: FileOwnershipService,
   ) {}
 
   // ── Módulos ──────────────────────────────────────────────────────────────
@@ -57,7 +59,7 @@ export class CourseContentService {
     });
 
     await this.prisma.courseModule.delete({ where: { guid: moduleGuid } });
-    void this.storage.deleteFiles(files.flatMap((resource) => [resource.attachmentKey, resource.fileUrl]));
+    void this.files.deleteUnreferenced(files.flatMap((resource) => [resource.attachmentKey, resource.fileUrl]));
 
     return { message: 'Módulo eliminado.' };
   }
@@ -77,6 +79,7 @@ export class CourseContentService {
 
   async createResource(moduleGuid: string, dto: CreateResourceDto, user: JwtPayload) {
     await this.access.editableCourseOfModule(moduleGuid, user);
+    await this.files.assertCanUse(dto.fileUrl, null, 'recursos', { uploader: user.sub });
 
     const position = await this.prisma.resource.count({ where: { moduleGuid } });
     return this.prisma.resource.create({
@@ -116,6 +119,9 @@ export class CourseContentService {
       where: { guid: resourceGuid },
       select: { attachmentKey: true, fileUrl: true },
     });
+    const owner = { uploader: user.sub };
+    await this.files.assertCanUse(dto.attachmentKey, previous?.attachmentKey, 'recursos', owner);
+    await this.files.assertCanUse(dto.fileUrl, previous?.fileUrl, 'recursos', owner);
 
     const updated = await this.prisma.resource.update({
       where: { guid: resourceGuid },
@@ -132,9 +138,9 @@ export class CourseContentService {
       },
     });
 
-    // Los archivos sustituidos se borran después de guardar: si el borrado falla, el
-    // recurso ya está bien y sólo queda un archivo sin uso en el almacenamiento.
-    void this.storage.deleteFiles([
+    // Los archivos sustituidos se borran después de guardar, y sólo si nadie más los usa: si
+    // el borrado falla, el recurso ya está bien y sólo queda un archivo sin uso.
+    void this.files.deleteUnreferenced([
       replacedKey(previous?.attachmentKey, dto.attachmentKey),
       replacedKey(previous?.fileUrl, dto.fileUrl),
     ]);
@@ -151,7 +157,7 @@ export class CourseContentService {
     });
 
     await this.prisma.resource.delete({ where: { guid: resourceGuid } });
-    void this.storage.deleteFiles([resource?.attachmentKey, resource?.fileUrl]);
+    void this.files.deleteUnreferenced([resource?.attachmentKey, resource?.fileUrl]);
 
     return { message: 'Bloque eliminado.' };
   }

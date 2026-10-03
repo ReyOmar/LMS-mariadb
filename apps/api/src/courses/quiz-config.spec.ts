@@ -4,6 +4,7 @@ import {
   parseQuizConfig,
   correctAnswers,
   withoutAnswers,
+  quizOverview,
   validateQuizConfig,
   serializeQuizConfig,
   quizConfigForEditor,
@@ -67,6 +68,15 @@ describe('configuración de cuestionarios', () => {
       expect(studentView.timeLimitMinutes).toBe(15);
       expect(studentView.questions).toHaveLength(2);
       expect(studentView.questions[0].options.map((o) => o.text)).toEqual(['30 km/h', '60 km/h']);
+    });
+  });
+
+  describe('quizOverview', () => {
+    it('resume el cuestionario sin preguntas ni respuestas', () => {
+      const overview = quizOverview(VALID_CONFIG);
+
+      expect(overview).toEqual({ allowedAttempts: 2, timeLimitMinutes: 15, questionCount: 2 });
+      expect(JSON.stringify(overview)).not.toContain('Velocidad');
     });
   });
 
@@ -175,6 +185,51 @@ describe('configuración de cuestionarios', () => {
 
       expect(validated.allowedAttempts).toBe(0);
       expect(validated.timeLimitMinutes).toBe(0);
+    });
+
+    it('rechaza un número de intentos inválido en lugar de dejarlo ilimitado', () => {
+      for (const allowedAttempts of [-3, 1.5, '2', true, 101]) {
+        const config = { ...VALID_CONFIG, allowedAttempts };
+        expect(() => validateQuizConfig(JSON.stringify(config))).toThrow(/número de intentos/);
+      }
+    });
+
+    it('rechaza un límite de tiempo inválido en lugar de dejarlo sin límite', () => {
+      for (const timeLimitMinutes of ['diez', -5, 0.5, 601]) {
+        const config = { ...VALID_CONFIG, timeLimitMinutes };
+        expect(() => validateQuizConfig(JSON.stringify(config))).toThrow(/límite de tiempo/);
+      }
+    });
+
+    it('rechaza dos preguntas con el mismo identificador', () => {
+      const config = {
+        ...VALID_CONFIG,
+        questions: [VALID_CONFIG.questions[0], { ...VALID_CONFIG.questions[1], id: 'p1' }],
+      };
+
+      expect(() => validateQuizConfig(JSON.stringify(config))).toThrow(/dos preguntas con el mismo identificador/);
+    });
+
+    it('rechaza dos opciones con el mismo identificador en una pregunta', () => {
+      const config = {
+        questions: [
+          {
+            id: 'p1',
+            prompt: 'x',
+            options: [
+              { id: 'a', text: 'sí', isCorrect: true },
+              { id: 'a', text: 'no', isCorrect: false },
+            ],
+          },
+        ],
+      };
+
+      expect(() => validateQuizConfig(JSON.stringify(config))).toThrow(/dos opciones con el mismo identificador/);
+    });
+
+    it('admite el mismo identificador de opción en preguntas distintas', () => {
+      // Es lo habitual («a», «b»…): la respuesta se busca dentro de su pregunta.
+      expect(validateQuizConfig(JSON.stringify(VALID_CONFIG))).toEqual(VALID_CONFIG);
     });
   });
 });

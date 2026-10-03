@@ -1,6 +1,7 @@
 import { BadRequestException, PayloadTooLargeException } from '@nestjs/common';
 import * as fs from 'fs';
 import { UploadLimit, uploadLimit } from './upload-limits';
+import { shortenFileName } from './file-name';
 
 /**
  * Archivo recibido por `multipart/form-data`, ya escrito en un fichero temporal.
@@ -101,9 +102,10 @@ export async function receiveFile(request: unknown, limit: UploadLimit = uploadL
   }
 
   // El tipo que declara el navegador no se devuelve: no es de fiar, y el almacenamiento
-  // decide el formato por la extensión y por los primeros bytes del archivo.
+  // decide el formato por la extensión y por los primeros bytes del archivo. El nombre se
+  // recorta a lo que cabe en la base de datos, conservando la extensión.
   return {
-    name: part.filename?.trim() || 'archivo.bin',
+    name: shortenFileName(part.filename?.trim() || 'archivo.bin'),
     filePath: part.filepath,
   };
 }

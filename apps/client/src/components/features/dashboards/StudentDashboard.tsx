@@ -4,13 +4,14 @@ import { useCallback, useEffect, useState } from 'react';
 import { Play, BookOpen, Clock, GraduationCap, ChevronLeft, ChevronRight, AlertTriangle } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useSession } from '@/contexts/SessionContext';
-import { useRealtime, useRealtimeEvent } from '@/contexts/RealtimeContext';
+import { useRealtime, useRealtimeEvent, useRealtimeReconnect } from '@/contexts/RealtimeContext';
 import { HighlightedStat } from '@/components/ui/HighlightedStat';
 import { PageLoader } from '@/components/ui/PageLoader';
 import api, { errorMessage } from '@/lib/api';
-import type { Certificate, Course, CourseProgress, StudentMetrics } from '@/types/models';
+import type { Course, StudentMetrics } from '@/types/models';
 import { useAlerts } from '@/contexts/AlertContext';
 import { plural } from '@/lib/text';
+import { calendarDay } from '@/lib/dates';
 
 const MONTH_NAMES = [
   'Enero',
@@ -37,36 +38,23 @@ export function StudentDashboard() {
   const [courses, setCourses] = useState<Course[]>([]);
   const [metrics, setMetrics] = useState<StudentMetrics | null>(null);
   const [loading, setLoading] = useState(true);
-  const [progress, setProgress] = useState<{ completed: number; total: number }>({ completed: 0, total: 0 });
-  const [completedCourseGuids, setCompletedCourseGuids] = useState<Set<string>>(new Set());
 
-  // Mes que se está mirando en el calendario de actividad.
-  const [calendarDate, setCalendarDate] = useState(new Date());
+  // Mes que se está mirando en el calendario de actividad; al abrir, el de hoy en la sede.
+  const [calendarDate, setCalendarDate] = useState(() => {
+    const { year, month } = calendarDay();
+    return new Date(year, month, 1);
+  });
   const [activeDays, setActiveDays] = useState<number[]>([]);
 
   const loadData = useCallback(async () => {
     try {
-      const [coursesRes, metricsRes, certificatesRes] = await Promise.all([
+      // Cada curso trae ya su avance: no hace falta pedirlo curso a curso.
+      const [coursesRes, metricsRes] = await Promise.all([
         api.get<Course[]>('/courses'),
         api.get<StudentMetrics>('/students/metrics'),
-        api.get<Certificate[]>('/certificates'),
       ]);
-
-      const courseList = Array.isArray(coursesRes.data) ? coursesRes.data : [];
-      const certificates = Array.isArray(certificatesRes.data) ? certificatesRes.data : [];
-      const certifiedGuids = new Set(certificates.map((certificate) => certificate.courseGuid));
-
-      setCourses(courseList);
+      setCourses(Array.isArray(coursesRes.data) ? coursesRes.data : []);
       setMetrics(metricsRes.data);
-      setCompletedCourseGuids(certifiedGuids);
-
-      // Progreso del primer curso publicado que todavía no esté certificado: es el que se
-      // ofrece para continuar.
-      const next = courseList.find((course) => course.status === 'PUBLISHED' && !certifiedGuids.has(course.guid));
-      if (next) {
-        const { data } = await api.get<CourseProgress>(`/students/progress/${next.guid}`);
-        setProgress({ completed: data.completed?.length ?? 0, total: data.totalResources ?? 0 });
-      }
     } catch (error) {
       notify.error('No se pudo cargar tu tablero', errorMessage(error));
     } finally {
@@ -82,27 +70,34 @@ export function StudentDashboard() {
   useRealtimeEvent('submission:graded', loadData);
   useRealtimeEvent('enrollment:changed', loadData);
   useRealtimeEvent('course:updated', loadData);
+  useRealtimeEvent('course:deleted', loadData);
   useRealtimeEvent('course:maintenance', loadData);
   useRealtimeEvent('certificate:new', loadData);
+  useRealtimeReconnect(loadData);
 
-  // Cursos que se pueden hacer ahora: publicados, sin mantenimiento y sin certificar.
-  const activeCourses = courses.filter(
-    (c) => c.status === 'PUBLISHED' && !maintenance[c.guid] && !completedCourseGuids.has(c.guid),
-  );
+  // Un curso está terminado cuando lo está su vuelta actual: el certificado de una vuelta
+  // anterior no cuenta para quien lo está repitiendo.
+  const finished = (course: Course) => Boolean(course.completedAt);
+
+  // Cursos que se pueden hacer ahora: publicados, sin mantenimiento y sin terminar.
+  const activeCourses = courses.filter((c) => c.status === 'PUBLISHED' && !maintenance[c.guid] && !finished(c));
 
   // Cursos asignados que ahora mismo están en mantenimiento y aún sin completar.
-  const coursesUnderMaintenance = courses.filter(
-    (c) => (c.status === 'DRAFT' || maintenance[c.guid]) && !completedCourseGuids.has(c.guid),
-  );
+  const coursesUnderMaintenance = courses.filter((c) => (c.status === 'DRAFT' || maintenance[c.guid]) && !finished(c));
 
   // Todo lo que al alumno le queda por terminar, esté el curso como esté.
-  const incompleteCourses = courses.filter((c) => !completedCourseGuids.has(c.guid));
+  const incompleteCourses = courses.filter((c) => !finished(c));
 
   const lastCourse = activeCourses.length > 0 ? activeCourses[0] : null;
   const hasMaintenance = coursesUnderMaintenance.length > 0;
   const allCoursesCompleted = courses.length > 0 && incompleteCourses.length === 0;
   const totalCourses = metrics?.totalCourses ?? courses.length;
-  const moduleCount = lastCourse?.modules?.length ?? 0;
+  const moduleCount = lastCourse?._count?.modules ?? 0;
+  const progress = {
+    completed: lastCourse?.completedResources ?? 0,
+    total: lastCourse?.totalResources ?? 0,
+    percent: lastCourse?.percent ?? 0,
+  };
 
   // Lo que explica la cifra de cursos activos cuando es cero o hay alguno parado.
   const activeDetail = hasMaintenance
@@ -118,7 +113,7 @@ export function StudentDashboard() {
   const calendarMonth = calendarDate.getMonth();
   const daysInMonth = new Date(calendarYear, calendarMonth + 1, 0).getDate();
   const firstDayOfWeek = new Date(calendarYear, calendarMonth, 1).getDay(); // 0 = domingo
-  const today = new Date();
+  const today = calendarDay();
 
   const previousMonth = () => setCalendarDate(new Date(calendarYear, calendarMonth - 1, 1));
   const nextMonth = () => setCalendarDate(new Date(calendarYear, calendarMonth + 1, 1));
@@ -224,15 +219,13 @@ export function StudentDashboard() {
                   strokeWidth="8"
                   fill="none"
                   strokeDasharray="251.2"
-                  strokeDashoffset={251.2 * (1 - (progress.total > 0 ? progress.completed / progress.total : 0))}
+                  strokeDashoffset={251.2 * (1 - progress.percent / 100)}
                   strokeLinecap="round"
                   style={{ transition: 'stroke-dashoffset 0.8s ease' }}
                 />
               </svg>
               <div className="absolute flex flex-col items-center justify-center text-white">
-                <span className="text-xl font-bold">
-                  {progress.total > 0 ? Math.round((progress.completed / progress.total) * 100) : 0}%
-                </span>
+                <span className="text-xl font-bold">{progress.percent}%</span>
               </div>
             </div>
           )}
@@ -272,8 +265,7 @@ export function StudentDashboard() {
             ))}
             {Array.from({ length: daysInMonth }).map((_, i) => {
               const day = i + 1;
-              const isToday =
-                calendarYear === today.getFullYear() && calendarMonth === today.getMonth() && day === today.getDate();
+              const isToday = calendarYear === today.year && calendarMonth === today.month && day === today.day;
               const isActive = activeDays.includes(day);
               return (
                 <div

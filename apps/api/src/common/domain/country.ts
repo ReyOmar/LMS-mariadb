@@ -29,6 +29,11 @@ interface CountryMetadata {
   readonly iso: string;
   /** Zona horaria por defecto de la sede. */
   readonly timeZone: string;
+  /**
+   * Color principal con que nace la sede, hasta que lo cambie en «Tema y apariencia».
+   * `apps/client/public/theme-preload.js` repite estos valores para la primera visita.
+   */
+  readonly primaryColor: string;
 }
 
 export const COUNTRY_METADATA: Readonly<Record<Country, CountryMetadata>> = {
@@ -36,11 +41,13 @@ export const COUNTRY_METADATA: Readonly<Record<Country, CountryMetadata>> = {
     name: 'Colombia',
     iso: 'CO',
     timeZone: 'America/Bogota',
+    primaryColor: '#0F766E',
   },
   MEXICO: {
     name: 'México',
     iso: 'MX',
     timeZone: 'America/Mexico_City',
+    primaryColor: '#1f2937',
   },
 };
 

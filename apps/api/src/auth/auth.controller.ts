@@ -9,6 +9,7 @@ import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { ListAccountsDto } from './dto/list-accounts.dto';
 import { JwtPayload } from '../common/interfaces/jwt-payload.interface';
 import { receiveFile } from '../storage/multipart';
+import { uploadLimit } from '../storage/upload-limits';
 import { LoginDto } from './dto/login.dto';
 import { RequestAccessDto } from './dto/request-access.dto';
 import { UpdateProfileDto } from './dto/update-profile.dto';
@@ -16,6 +17,7 @@ import { SetPasswordDto } from './dto/set-password.dto';
 import { RequestPasswordResetDto, ResetPasswordDto } from './dto/password-reset.dto';
 import { ConfirmCodeDto, RequestCodeDto } from './dto/email-verification.dto';
 import { CreateUserDto } from './dto/create-user.dto';
+import { UpdateUserDto } from './dto/update-user.dto';
 import { RejectAccessRequestDto } from './dto/reject-access-request.dto';
 
 /** Límite estricto para los flujos que pueden usarse para adivinar credenciales. */
@@ -115,7 +117,8 @@ export class AuthController {
   @Post('me/photo')
   @Throttle({ default: { ttl: 60_000, limit: 10 } })
   async uploadMyPhoto(@CurrentUser() user: JwtPayload, @Req() req: FastifyRequest) {
-    const file = await receiveFile(req);
+    // El límite de las fotos se aplica al recibir: lo que lo supere no llega a escribirse.
+    const file = await receiveFile(req, uploadLimit('avatars'));
     return this.users.uploadProfilePhoto(user.sub, file.filePath, file.name);
   }
 
@@ -138,6 +141,12 @@ export class AuthController {
     return this.users.createUser(dto, user.country);
   }
 
+  @Roles('ADMIN')
+  @Patch('users/:guid')
+  updateUser(@CurrentUser() user: JwtPayload, @Param('guid') guid: string, @Body() dto: UpdateUserDto) {
+    return this.users.updateUser(guid, user.country, user.sub, dto);
+  }
+
   /** Cuentas que pueden heredar los cursos de otra antes de eliminarla. */
   @Roles('ADMIN')
   @Get('users/:guid/course-targets')
@@ -157,7 +166,6 @@ export class AuthController {
 
   // ── Solicitudes de acceso ────────────────────────────────────────────────
 
-  @Roles('ADMIN')
   /** Solicitudes por revisar, para el aviso del menú lateral. */
   @Roles('ADMIN')
   @Get('access-requests/pending-count')

@@ -2,7 +2,8 @@ import { BadRequestException } from '@nestjs/common';
 
 /**
  * Configuración de un cuestionario. Contiene las respuestas correctas, así que hacia un
- * alumno sólo sale la versión de `withoutAnswers`.
+ * alumno sólo salen el resumen de `quizOverview`, con la ficha del curso, y las preguntas de
+ * `withoutAnswers`, al abrir el intento.
  *
  * En la base (`lms_recursos.quiz_config`) se guarda con las claves en español que ya tienen
  * los cuestionarios existentes; en la API viaja con claves en inglés. La conversión se hace
@@ -35,9 +36,23 @@ export type StudentQuizConfig = Omit<QuizConfig, 'questions'> & {
   questions: StudentQuestion[];
 };
 
-/** Máximos que evitan que un cuestionario mal construido degrade el servicio. */
+/** Lo que el alumno sabe de un cuestionario antes de abrir el intento. */
+export interface QuizOverview {
+  allowedAttempts: number;
+  timeLimitMinutes: number;
+  questionCount: number;
+}
+
+/**
+ * Máximos que evitan que un cuestionario mal construido degrade el servicio. El tamaño total
+ * lo acota el límite del cuerpo JSON de la API (2 MB, `main.ts`), muy por debajo de lo que
+ * admite la columna (MEDIUMTEXT, 16 MB): todo cuestionario que pase la validación cabe.
+ */
 const MAX_QUESTIONS = 200;
 const MAX_OPTIONS = 10;
+const MAX_ATTEMPTS = 100;
+/** Diez horas, como el tiempo de lectura de un recurso. */
+const MAX_TIME_LIMIT_MINUTES = 600;
 
 /** Configuración guardada en la base → formato de la API. */
 export function parseQuizConfig(stored: string | null): QuizConfig {
@@ -87,7 +102,16 @@ export function quizConfigForEditor(stored: string | null): string | null {
   }
 }
 
-/** Versión que puede viajar al navegador de un alumno. */
+/** Resumen que acompaña a la ficha del curso del alumno: sin preguntas ni respuestas. */
+export function quizOverview(config: QuizConfig): QuizOverview {
+  return {
+    allowedAttempts: config.allowedAttempts,
+    timeLimitMinutes: config.timeLimitMinutes,
+    questionCount: config.questions.length,
+  };
+}
+
+/** Preguntas de un intento abierto, tal y como pueden viajar al navegador de un alumno. */
 export function withoutAnswers(config: QuizConfig): StudentQuizConfig {
   return {
     allowedAttempts: config.allowedAttempts,
@@ -154,10 +178,24 @@ function validateConfig(data: unknown): QuizConfig {
     throw new BadRequestException(`Un cuestionario no puede superar las ${MAX_QUESTIONS} preguntas.`);
   }
 
+  const questions = rawQuestions.map((question, index) => validateQuestion(question, index));
+  const repeated = firstRepeated(questions.map((question) => question.id));
+  if (repeated !== null) {
+    throw new BadRequestException(`Hay dos preguntas con el mismo identificador («${repeated}»).`);
+  }
+
   return {
-    allowedAttempts: nonNegativeInteger(data.allowedAttempts),
-    timeLimitMinutes: nonNegativeInteger(data.timeLimitMinutes),
-    questions: rawQuestions.map((question, index) => validateQuestion(question, index)),
+    allowedAttempts: integerSetting(
+      data.allowedAttempts,
+      MAX_ATTEMPTS,
+      `El número de intentos debe ser un número entero entre 0 (ilimitados) y ${MAX_ATTEMPTS}.`,
+    ),
+    timeLimitMinutes: integerSetting(
+      data.timeLimitMinutes,
+      MAX_TIME_LIMIT_MINUTES,
+      `El límite de tiempo debe ser un número entero de minutos entre 0 (sin límite) y ${MAX_TIME_LIMIT_MINUTES}.`,
+    ),
+    questions,
   };
 }
 
@@ -188,6 +226,11 @@ function validateQuestion(question: unknown, index: number): QuizQuestion {
     return { id: option.id, text: option.text, isCorrect: option.isCorrect === true };
   });
 
+  // La respuesta del alumno es el identificador de la opción: repetido, no se sabría cuál eligió.
+  if (firstRepeated(options.map((option) => option.id)) !== null) {
+    throw new BadRequestException(`La pregunta ${questionNumber} tiene dos opciones con el mismo identificador.`);
+  }
+
   const correctCount = options.filter((option) => option.isCorrect).length;
   if (correctCount !== 1) {
     throw new BadRequestException(
@@ -202,7 +245,20 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function nonNegativeInteger(value: unknown): number {
-  const num = Number(value);
-  return Number.isInteger(num) && num >= 0 ? num : 0;
+/** Ajuste numérico del intento. Sin indicar vale 0 (sin límite); cualquier otra cosa tiene que ser válida. */
+function integerSetting(value: unknown, max: number, errorMessage: string): number {
+  if (value === undefined || value === null) return 0;
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0 || value > max) {
+    throw new BadRequestException(errorMessage);
+  }
+  return value;
+}
+
+function firstRepeated(values: string[]): string | null {
+  const seen = new Set<string>();
+  for (const value of values) {
+    if (seen.has(value)) return value;
+    seen.add(value);
+  }
+  return null;
 }

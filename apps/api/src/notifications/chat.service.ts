@@ -2,9 +2,10 @@ import { BadRequestException, ForbiddenException, Injectable, NotFoundException 
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { NotificationsService } from './notifications.service';
-import { JwtPayload } from '../common/interfaces/jwt-payload.interface';
+import { JwtPayload, UserRole } from '../common/interfaces/jwt-payload.interface';
 import { SendMessageDto } from './dto/messages.dto';
 import { MIN_SEARCH_LENGTH, searchTerm } from '../common/domain/search';
+import { plural } from '../common/domain/text';
 
 /** Mensajes que devuelve una conversación. Basta para el historial visible. */
 const CONVERSATION_LIMIT = 200;
@@ -12,15 +13,31 @@ const CONVERSATION_LIMIT = 200;
 /** Candidatos que devuelve la búsqueda de contactos. */
 const CANDIDATES_LIMIT = 50;
 
+/** Avisos de la campana que corresponden a un mensaje; su referencia es quien lo envió. */
+const MESSAGE_REF = 'mensaje';
+
 const NO_SHARED_COURSE = 'Sólo puedes contactar con personas de un curso que compartan.';
 
+const CANNOT_WRITE =
+  'No puedes escribir a esta persona: necesitan compartir un curso activo y haber aceptado la solicitud de contacto.';
+
+/** Lo que hace falta de alguien para decidir si se le puede escribir. */
+interface Person {
+  guid: string;
+  role: UserRole;
+}
+
 /**
- * Mensajería entre usuarios, con aprobación previa.
+ * Mensajería entre usuarios de una misma sede.
  *
- * Sólo se puede pedir contacto a alguien de un curso compartido, y sólo se puede escribir
- * tras aceptar la solicitud (`ensureAcceptedContact`). Las dos reglas se comprueban en el
- * servidor: conocer el identificador de una persona no basta para escribirle, y menos aún
- * a alguien de la otra sede.
+ * Quién puede escribir a quién lo decide `writableAmong`, y se comprueba en el servidor:
+ * conocer el identificador de una persona no basta para escribirle, y menos aún a alguien
+ * de la otra sede.
+ *  - Con un administrador la conversación está abierta en los dos sentidos: atiende a
+ *    toda su sede y puede escribir a cualquiera sin solicitud.
+ *  - El examinador de un curso y sus alumnos activos se escriben sin solicitud.
+ *  - Entre los demás hace falta una solicitud aceptada **y** seguir compartiendo un curso
+ *    activo: quien se da de baja deja de recibir mensajes, aunque conserva el historial.
  */
 @Injectable()
 export class ChatService {
@@ -32,18 +49,21 @@ export class ChatService {
 
   // ── Mensajes ─────────────────────────────────────────────────────────────
 
-  /** Envía un mensaje a un contacto aceptado. */
+  /** Envía un mensaje a alguien a quien el usuario puede escribir. */
   async sendMessage(dto: SendMessageDto, user: JwtPayload) {
     if (dto.recipientGuid === user.sub) {
       throw new BadRequestException('No puedes enviarte mensajes a ti mismo.');
     }
 
-    const recipient = await this.ensureAcceptedContact(user, dto.recipientGuid);
+    const recipient = await this.sameCountryUser(user, dto.recipientGuid);
+    if (!(await this.writableAmong(user, [recipient])).has(recipient.guid)) {
+      throw new ForbiddenException(CANNOT_WRITE);
+    }
 
     const message = await this.prisma.message.create({
       data: {
         senderGuid: user.sub,
-        recipientGuid: dto.recipientGuid,
+        recipientGuid: recipient.guid,
         subject: dto.subject,
         content: dto.content,
         refType: dto.refType,
@@ -53,15 +73,16 @@ export class ChatService {
 
     const senderName = await this.displayName(user.sub);
 
+    // La referencia es quien escribe: al leer la conversación se marcan sus avisos.
     await this.notifications.create({
-      userGuid: dto.recipientGuid,
-      country: recipient.country,
+      userGuid: recipient.guid,
+      country: user.country,
       type: 'NEW_MESSAGE',
       title: `Mensaje de ${senderName}`,
       message: dto.subject,
       actionUrl: '/dashboard/messages',
-      refType: 'mensaje',
-      refGuid: String(message.id),
+      refType: MESSAGE_REF,
+      refGuid: user.sub,
     });
 
     this.realtime.emitToUsers(
@@ -74,16 +95,16 @@ export class ChatService {
         content: message.content,
         createdAt: message.createdAt,
       },
-      recipient.country,
-      [dto.recipientGuid],
+      user.country,
+      [recipient.guid],
     );
 
     return message;
   }
 
-  /** Historial con un contacto. */
+  /** Historial con otra persona de la sede. Sólo contiene mensajes del propio usuario. */
   async getConversation(contactGuid: string, user: JwtPayload) {
-    await this.ensureAcceptedContact(user, contactGuid);
+    await this.sameCountryUser(user, contactGuid);
 
     // Quien vació la conversación no vuelve a ver lo anterior a ese momento; la otra
     // parte sí, porque su copia no se tocó.
@@ -114,12 +135,20 @@ export class ChatService {
     return messages.reverse().map((message) => ({ ...message, isMine: message.senderGuid === user.sub }));
   }
 
+  /** Marca como leídos los mensajes recibidos de un contacto y sus avisos en la campana. */
   async markConversationRead(contactGuid: string, user: JwtPayload) {
-    const { count } = await this.prisma.message.updateMany({
-      where: { senderGuid: contactGuid, recipientGuid: user.sub, read: false },
-      data: { read: true },
-    });
-    return { message: `${count} mensaje(s) marcados como leídos.` };
+    const [messages, notifications] = await this.prisma.$transaction([
+      this.prisma.message.updateMany({
+        where: { senderGuid: contactGuid, recipientGuid: user.sub, read: false },
+        data: { read: true },
+      }),
+      this.markMessageNotificationsRead(contactGuid, user),
+    ]);
+    this.announceRead(contactGuid, user, messages.count + notifications.count);
+
+    return {
+      message: `${messages.count} ${plural(messages.count, 'mensaje marcado como leído', 'mensajes marcados como leídos')}.`,
+    };
   }
 
   /**
@@ -134,9 +163,14 @@ export class ChatService {
    * borra de verdad: ya no hay nadie a quien enseñárselos.
    */
   async deleteConversation(contactGuid: string, user: JwtPayload) {
+    await this.sameCountryUser(user, contactGuid);
+    if (!(await this.hasConversation(user.sub, contactGuid))) {
+      throw new NotFoundException('No tienes ninguna conversación con esta persona.');
+    }
+
     const now = new Date();
 
-    await this.prisma.$transaction([
+    const [, messages, notifications] = await this.prisma.$transaction([
       this.prisma.hiddenConversation.upsert({
         where: { userGuid_contactGuid: { userGuid: user.sub, contactGuid } },
         create: { userGuid: user.sub, contactGuid, hiddenUntil: now },
@@ -148,7 +182,9 @@ export class ChatService {
         where: { senderGuid: contactGuid, recipientGuid: user.sub, read: false },
         data: { read: true },
       }),
+      this.markMessageNotificationsRead(contactGuid, user),
     ]);
+    this.announceRead(contactGuid, user, messages.count + notifications.count);
 
     return { message: 'Conversación eliminada de tu bandeja. La otra persona conserva la suya.' };
   }
@@ -165,22 +201,38 @@ export class ChatService {
     return new Map(cutoffs.map((cutoff) => [cutoff.contactGuid, cutoff.hiddenUntil]));
   }
 
+  private markMessageNotificationsRead(contactGuid: string, user: JwtPayload) {
+    return this.prisma.notification.updateMany({
+      where: { userGuid: user.sub, refType: MESSAGE_REF, refGuid: contactGuid, read: false },
+      data: { read: true },
+    });
+  }
+
+  /**
+   * Avisa a las sesiones abiertas del usuario de que tiene menos pendientes de leer, para
+   * que el contador del menú y la campana se pongan al día.
+   */
+  private announceRead(contactGuid: string, user: JwtPayload, changes: number) {
+    if (changes > 0) this.realtime.emitToUsers('message:read', { contactGuid }, user.country, [user.sub]);
+  }
+
   // ── Contactos ────────────────────────────────────────────────────────────
 
   /**
-   * Personas con las que el usuario comparte curso y con las que, por tanto, puede abrir
-   * una conversación. La consulta ya está acotada a la sede porque un curso pertenece a
-   * una sola sede y sólo se mira entre los cursos del propio usuario.
+   * Personas con las que el usuario puede abrir una conversación: las de sus cursos o,
+   * para un administrador, cualquiera de su sede. `canWrite` dice si se le puede escribir
+   * ya o hace falta pedir contacto antes.
    */
   async searchContactCandidates(search: string, user: JwtPayload) {
-    // Sin texto se listan los primeros de sus cursos; con una sola letra no se busca: casa
-    // con casi todos y, para un examinador con muchos cursos, cuesta lo mismo que la lista
-    // entera (unos 400 ms con cinco años de alumnos).
+    // Sin texto se listan los primeros; con una sola letra no se busca: casa con casi
+    // todos y, para un examinador con muchos cursos, cuesta lo mismo que la lista entera
+    // (unos 400 ms con cinco años de alumnos).
     const typed = search.trim();
     if (typed.length > 0 && typed.length < MIN_SEARCH_LENGTH) return [];
 
-    const courseGuids = await this.userCourses(user);
-    if (courseGuids.length === 0) return [];
+    const isAdmin = user.role === 'ADMIN';
+    const courseGuids = isAdmin ? [] : await this.userCourses(user);
+    if (!isAdmin && courseGuids.length === 0) return [];
 
     const term = searchTerm(typed);
 
@@ -188,16 +240,20 @@ export class ChatService {
       where: {
         country: user.country,
         guid: { not: user.sub },
-        // Las dos condiciones van dentro de `AND` a propósito: como dos claves `OR` en el
-        // mismo objeto, la segunda pisaría a la primera y la búsqueda dejaría de exigir
-        // curso compartido, con lo que se listaría el directorio entero de la sede.
+        // Las condiciones van dentro de `AND` a propósito: como dos claves `OR` en el mismo
+        // objeto, la segunda pisaría a la primera y la búsqueda dejaría de exigir curso
+        // compartido, con lo que se listaría el directorio entero de la sede.
         AND: [
-          {
-            OR: [
-              { enrollments: { some: { courseGuid: { in: courseGuids }, active: true } } },
-              { taughtCourses: { some: { guid: { in: courseGuids } } } },
-            ],
-          },
+          ...(isAdmin
+            ? []
+            : [
+                {
+                  OR: [
+                    { enrollments: { some: { courseGuid: { in: courseGuids }, active: true } } },
+                    { taughtCourses: { some: { guid: { in: courseGuids } } } },
+                  ],
+                },
+              ]),
           ...(term
             ? [
                 {
@@ -218,15 +274,18 @@ export class ChatService {
     if (candidates.length === 0) return [];
 
     const candidateGuids = candidates.map((candidate) => candidate.guid);
-    const relations = await this.prisma.chatContact.findMany({
-      where: {
-        OR: [
-          { requesterGuid: user.sub, receiverGuid: { in: candidateGuids } },
-          { requesterGuid: { in: candidateGuids }, receiverGuid: user.sub },
-        ],
-      },
-      select: { requesterGuid: true, receiverGuid: true, status: true },
-    });
+    const [relations, writable] = await Promise.all([
+      this.prisma.chatContact.findMany({
+        where: {
+          OR: [
+            { requesterGuid: user.sub, receiverGuid: { in: candidateGuids } },
+            { requesterGuid: { in: candidateGuids }, receiverGuid: user.sub },
+          ],
+        },
+        select: { requesterGuid: true, receiverGuid: true, status: true },
+      }),
+      this.writableAmong(user, candidates),
+    ]);
 
     const statusByContact = new Map(
       relations.map((relation) => [
@@ -238,24 +297,25 @@ export class ChatService {
     return candidates.map((candidate) => ({
       ...candidate,
       contactStatus: statusByContact.get(candidate.guid) ?? null,
-      isExaminer: candidate.role !== 'STUDENT',
+      canWrite: writable.has(candidate.guid),
     }));
   }
 
   /**
-   * Pide contacto con alguien de un curso compartido.
-   * Escribir a un examinador del curso no necesita aprobación: es la vía por la que un
-   * alumno pide ayuda y exigir que el profesor la acepte primero la bloquearía.
+   * Pide contacto con alguien de un curso compartido. Sólo hace falta entre quienes no
+   * pueden escribirse directamente (dos alumnos, por ejemplo).
    */
   async requestContact(receiverGuid: string, courseGuid: string | undefined, user: JwtPayload) {
     if (receiverGuid === user.sub) {
       throw new BadRequestException('No puedes añadirte a ti mismo como contacto.');
     }
 
-    const course = await this.sharedCourse(user, receiverGuid, courseGuid);
+    const receiver = await this.sameCountryUser(user, receiverGuid);
+    if ((await this.writableAmong(user, [receiver])).has(receiver.guid)) {
+      throw new BadRequestException('Ya puedes escribir a esta persona; no hace falta enviar una solicitud.');
+    }
 
-    const isExaminer = course.teacherGuid === receiverGuid;
-    const initialStatus = isExaminer ? 'ACCEPTED' : 'PENDING';
+    const course = await this.sharedCourse(user, receiverGuid, courseGuid);
 
     const existing = await this.prisma.chatContact.findFirst({
       where: {
@@ -266,33 +326,30 @@ export class ChatService {
         ],
       },
     });
-
-    if (existing) {
-      if (existing.status === 'ACCEPTED') return existing;
-      if (existing.status === 'PENDING') {
-        throw new BadRequestException('Ya hay una solicitud pendiente con esta persona.');
-      }
-      // Una solicitud rechazada puede reintentarse; se reinicia la dirección.
-      return this.prisma.chatContact.update({
-        where: { id: existing.id },
-        data: { requesterGuid: user.sub, receiverGuid, status: initialStatus },
-      });
+    if (existing?.status === 'ACCEPTED') return existing;
+    if (existing?.status === 'PENDING') {
+      throw new BadRequestException('Ya hay una solicitud pendiente con esta persona.');
     }
 
-    const contact = await this.prisma.chatContact.create({
-      data: { requesterGuid: user.sub, receiverGuid, courseGuid: course.guid, status: initialStatus },
+    // Una solicitud rechazada puede reintentarse; se reinicia la dirección.
+    const contact = existing
+      ? await this.prisma.chatContact.update({
+          where: { id: existing.id },
+          data: { requesterGuid: user.sub, receiverGuid, status: 'PENDING' },
+        })
+      : await this.prisma.chatContact.create({
+          data: { requesterGuid: user.sub, receiverGuid, courseGuid: course.guid, status: 'PENDING' },
+        });
+
+    await this.notifications.create({
+      userGuid: receiverGuid,
+      country: user.country,
+      type: 'NEW_MESSAGE',
+      title: 'Solicitud de conversación',
+      message: `${await this.displayName(user.sub)} quiere iniciar una conversación contigo.`,
+      actionUrl: '/dashboard/messages',
     });
-
-    if (!isExaminer) {
-      await this.notifications.create({
-        userGuid: receiverGuid,
-        country: user.country,
-        type: 'NEW_MESSAGE',
-        title: 'Solicitud de conversación',
-        message: `${await this.displayName(user.sub)} quiere iniciar una conversación contigo.`,
-        actionUrl: '/dashboard/messages',
-      });
-    }
+    this.realtime.emitToUsers('contact:updated', {}, user.country, [receiverGuid]);
 
     return contact;
   }
@@ -318,6 +375,8 @@ export class ChatService {
         message: `${await this.displayName(user.sub)} aceptó tu solicitud. Ya pueden conversar.`,
         actionUrl: '/dashboard/messages',
       });
+      // Quien pidió el contacto ve la conversación en su bandeja sin recargar.
+      this.realtime.emitToUsers('contact:updated', {}, user.country, [contact.requesterGuid]);
     }
 
     return updated;
@@ -345,53 +404,48 @@ export class ChatService {
     }));
   }
 
-  /** Contactos aceptados con su último mensaje y los pendientes de leer. */
+  /**
+   * Conversaciones del usuario: sus contactos aceptados y cualquiera con quien haya
+   * intercambiado mensajes (un administrador o un examinador escriben sin solicitud). Cada
+   * una con su último mensaje, los pendientes de leer y si todavía puede escribir.
+   */
   async getContacts(user: JwtPayload) {
-    const relations = await this.prisma.chatContact.findMany({
-      where: { status: 'ACCEPTED', OR: [{ requesterGuid: user.sub }, { receiverGuid: user.sub }] },
-      select: { requesterGuid: true, receiverGuid: true },
-    });
-
-    const guids = [
-      ...new Set(
-        relations.map((relation) =>
-          relation.requesterGuid === user.sub ? relation.receiverGuid : relation.requesterGuid,
-        ),
-      ),
-    ];
-    if (guids.length === 0) return [];
-
-    const betweenBoth = {
-      OR: [
-        { senderGuid: user.sub, recipientGuid: { in: guids } },
-        { senderGuid: { in: guids }, recipientGuid: user.sub },
-      ],
-    };
-
     // Para la vista previa sólo hace falta el último mensaje de cada conversación: se agrupa
-    // por pareja —como mucho dos filas por contacto, una por sentido— y se pide el
+    // por pareja —como mucho dos filas por persona, una por sentido— y se pide el
     // identificador más alto, que por ser autoincremental es el mensaje más reciente.
-    const [users, latest, unreadCounts] = await Promise.all([
-      this.prisma.user.findMany({
-        where: { guid: { in: guids }, country: user.country },
-        select: { guid: true, firstName: true, lastName: true, role: true, photoUrl: true },
+    const [relations, latest] = await Promise.all([
+      this.prisma.chatContact.findMany({
+        where: { status: 'ACCEPTED', OR: [{ requesterGuid: user.sub }, { receiverGuid: user.sub }] },
+        select: { requesterGuid: true, receiverGuid: true },
       }),
       this.prisma.message.groupBy({
         by: ['senderGuid', 'recipientGuid'],
-        where: betweenBoth,
+        where: { OR: [{ senderGuid: user.sub }, { recipientGuid: user.sub }] },
         _max: { id: true },
+      }),
+    ]);
+
+    const guids = [
+      ...new Set([
+        ...relations.map((relation) =>
+          relation.requesterGuid === user.sub ? relation.receiverGuid : relation.requesterGuid,
+        ),
+        ...latest.map((row) => (row.senderGuid === user.sub ? row.recipientGuid : row.senderGuid)),
+      ]),
+    ];
+    if (guids.length === 0) return [];
+
+    const recentIds = latest.map((row) => row._max.id).filter((id): id is number => id !== null);
+    const [users, unreadCounts, messages, cutoffs] = await Promise.all([
+      this.prisma.user.findMany({
+        where: { guid: { in: guids }, country: user.country },
+        select: { guid: true, firstName: true, lastName: true, role: true, photoUrl: true },
       }),
       this.prisma.message.groupBy({
         by: ['senderGuid'],
         where: { senderGuid: { in: guids }, recipientGuid: user.sub, read: false },
         _count: { id: true },
       }),
-    ]);
-
-    const unreadByContact = new Map(unreadCounts.map((row) => [row.senderGuid, row._count.id]));
-
-    const recentIds = latest.map((row) => row._max.id).filter((id): id is number => id !== null);
-    const [messages, cutoffs] = await Promise.all([
       recentIds.length
         ? this.prisma.message.findMany({
             where: { id: { in: recentIds } },
@@ -401,6 +455,9 @@ export class ChatService {
         : Promise.resolve([]),
       this.cutoffByContact(user.sub, guids),
     ]);
+    const writable = await this.writableAmong(user, users);
+
+    const unreadByContact = new Map(unreadCounts.map((row) => [row.senderGuid, row._count.id]));
 
     // Ordenados de más reciente a más antiguo, el primero de cada contacto es el suyo.
     // Si el último mensaje queda por detrás del corte, es que vació la conversación: el
@@ -426,39 +483,108 @@ export class ChatService {
         lastMessage: lastByContact.get(contact.guid)?.content ?? '',
         lastMessageAt: lastByContact.get(contact.guid)?.createdAt ?? null,
         unreadCount: unreadByContact.get(contact.guid) ?? 0,
+        canWrite: writable.has(contact.guid),
       }))
       .sort((a, b) => (b.lastMessageAt?.getTime() ?? 0) - (a.lastMessageAt?.getTime() ?? 0));
   }
 
   // ── Comprobaciones ───────────────────────────────────────────────────────
 
-  /**
-   * Exige que exista un contacto aceptado entre ambos.
-   * De paso devuelve la sede del destinatario, necesaria para dirigirle los avisos en
-   * tiempo real.
-   */
-  private async ensureAcceptedContact(user: JwtPayload, otherGuid: string) {
-    const recipient = await this.prisma.user.findFirst({
-      where: { guid: otherGuid, country: user.country },
-      select: { guid: true, country: true },
+  /** La otra persona, siempre de la sede del usuario: la de otra sede no existe para él. */
+  private async sameCountryUser(user: JwtPayload, guid: string): Promise<Person> {
+    const person = await this.prisma.user.findFirst({
+      where: { guid, country: user.country },
+      select: { guid: true, role: true },
     });
-    if (!recipient) throw new NotFoundException('Usuario no encontrado.');
+    if (!person) throw new NotFoundException('Usuario no encontrado.');
+    return person;
+  }
 
-    const contact = await this.prisma.chatContact.findFirst({
-      where: {
-        status: 'ACCEPTED',
-        OR: [
-          { requesterGuid: user.sub, receiverGuid: otherGuid },
-          { requesterGuid: otherGuid, receiverGuid: user.sub },
-        ],
-      },
-      select: { id: true },
-    });
-    if (!contact) {
-      throw new ForbiddenException('Deben aceptar la solicitud de contacto antes de poder escribirse.');
+  /**
+   * De las personas indicadas —todas de la sede del usuario—, a cuáles puede escribir
+   * (las reglas, en la documentación de la clase).
+   */
+  private async writableAmong(user: JwtPayload, people: Person[]): Promise<Set<string>> {
+    if (user.role === 'ADMIN') return new Set(people.map((person) => person.guid));
+
+    const writable = new Set(people.filter((person) => person.role === 'ADMIN').map((person) => person.guid));
+    const others = people.filter((person) => person.role !== 'ADMIN').map((person) => person.guid);
+    if (others.length === 0) return writable;
+
+    const [courses, accepted] = await Promise.all([
+      // Cursos del usuario en los que participa alguno de los demás.
+      this.prisma.course.findMany({
+        where: {
+          country: user.country,
+          AND: [
+            { OR: [{ teacherGuid: user.sub }, { enrollments: { some: { userGuid: user.sub, active: true } } }] },
+            {
+              OR: [
+                { teacherGuid: { in: others } },
+                { enrollments: { some: { userGuid: { in: others }, active: true } } },
+              ],
+            },
+          ],
+        },
+        select: {
+          teacherGuid: true,
+          enrollments: { where: { userGuid: { in: others }, active: true }, select: { userGuid: true } },
+        },
+      }),
+      this.prisma.chatContact.findMany({
+        where: {
+          status: 'ACCEPTED',
+          OR: [
+            { requesterGuid: user.sub, receiverGuid: { in: others } },
+            { requesterGuid: { in: others }, receiverGuid: user.sub },
+          ],
+        },
+        select: { requesterGuid: true, receiverGuid: true },
+      }),
+    ]);
+
+    const acceptedGuids = new Set(
+      accepted.map((relation) =>
+        relation.requesterGuid === user.sub ? relation.receiverGuid : relation.requesterGuid,
+      ),
+    );
+
+    for (const course of courses) {
+      const teaches = course.teacherGuid === user.sub;
+      // Si el examinador es otro, el usuario es alumno de este curso: es su examinador.
+      if (!teaches && others.includes(course.teacherGuid)) writable.add(course.teacherGuid);
+      for (const { userGuid } of course.enrollments) {
+        if (teaches || acceptedGuids.has(userGuid)) writable.add(userGuid);
+      }
     }
 
-    return recipient;
+    return writable;
+  }
+
+  /** Si hay algo que vaciar: un contacto aceptado o algún mensaje entre los dos. */
+  private async hasConversation(userGuid: string, contactGuid: string): Promise<boolean> {
+    const [contact, message] = await Promise.all([
+      this.prisma.chatContact.findFirst({
+        where: {
+          status: 'ACCEPTED',
+          OR: [
+            { requesterGuid: userGuid, receiverGuid: contactGuid },
+            { requesterGuid: contactGuid, receiverGuid: userGuid },
+          ],
+        },
+        select: { id: true },
+      }),
+      this.prisma.message.findFirst({
+        where: {
+          OR: [
+            { senderGuid: userGuid, recipientGuid: contactGuid },
+            { senderGuid: contactGuid, recipientGuid: userGuid },
+          ],
+        },
+        select: { id: true },
+      }),
+    ]);
+    return Boolean(contact ?? message);
   }
 
   /** Nombre con el que se presenta a alguien en un aviso. */
@@ -498,7 +624,7 @@ export class ChatService {
     if (courseGuid) {
       const course = await this.prisma.course.findFirst({
         where: { guid: courseGuid, country: user.country },
-        select: { guid: true, teacherGuid: true },
+        select: { guid: true },
       });
       if (!course) throw new NotFoundException('Curso no encontrado.');
 
@@ -515,7 +641,7 @@ export class ChatService {
         country: user.country,
         OR: [{ teacherGuid: receiverGuid }, { enrollments: { some: { userGuid: receiverGuid, active: true } } }],
       },
-      select: { guid: true, teacherGuid: true },
+      select: { guid: true },
     });
     if (!shared) throw new ForbiddenException(NO_SHARED_COURSE);
     return shared;

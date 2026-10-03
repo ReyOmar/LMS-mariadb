@@ -1,14 +1,20 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { NotificationType, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { StorageService } from '../storage/storage.service';
+import { FileOwnershipService } from '../storage/file-ownership.service';
 import { MAIL_CONCURRENCY, MailService } from '../mail/mail.service';
 import { RealtimeService } from '../realtime/realtime.service';
+import { EventName } from '../realtime/events';
+import { NotificationsService } from '../notifications/notifications.service';
 import { CourseAccessService, CourseAccessInfo } from './course-access.service';
-import { parseQuizConfig, withoutAnswers } from './quiz-config';
+import { QuizOverview, parseQuizConfig, quizOverview } from './quiz-config';
+import { isAttemptLive } from './quiz.service';
 import { toClientResource } from './resource-view';
 import { Country } from '../common/domain/country';
 import { countRejected, settleWithConcurrency } from '../common/domain/concurrency';
+import { percent } from '../common/domain/progress';
+import { plural } from '../common/domain/text';
 import { JwtPayload } from '../common/interfaces/jwt-payload.interface';
 import { CourseStatus, CreateCourseDto, UpdateCourseDto } from './dto/courses.dto';
 
@@ -22,12 +28,43 @@ const COURSE_SUMMARY = {
   status: true,
   durationHours: true,
   passingScore: true,
-  issuesCertificate: true,
   teacherGuid: true,
   teacher: { select: { guid: true, firstName: true, lastName: true, role: true } },
+  _count: { select: { modules: true } },
   createdAt: true,
   updatedAt: true,
 } satisfies Prisma.CourseSelect;
+
+/** Cambios de estado de los que se avisa a los matriculados. */
+type StatusChange = 'maintenance' | 'reopening' | 'firstRelease';
+
+/** Aviso en la campana de cada cambio de estado. */
+const STATUS_NOTICES = {
+  maintenance: (title: string) => ({
+    type: 'COURSE_ANNOUNCEMENT' as const,
+    title: 'Curso en mantenimiento',
+    message: `El curso "${title}" está en mantenimiento. Te avisaremos cuando puedas continuar.`,
+  }),
+  reopening: (title: string) => ({
+    type: 'COURSE_REACTIVATED' as const,
+    title: 'Curso disponible de nuevo',
+    message: `El curso "${title}" terminó su mantenimiento. Puedes continuar donde lo dejaste.`,
+  }),
+  firstRelease: (title: string) => ({
+    type: 'COURSE_WELCOME' as const,
+    title: 'Tu curso ya está disponible',
+    message: `"${title}" ya está publicado. Puedes empezar cuando quieras.`,
+  }),
+} satisfies Record<StatusChange, (title: string) => { type: NotificationType; title: string; message: string }>;
+
+/** Límite de tiempo de un cuestionario guardado; uno dañado se trata como sin límite. */
+function timeLimitOf(stored: string | null): number {
+  try {
+    return parseQuizConfig(stored).timeLimitMinutes;
+  } catch {
+    return 0;
+  }
+}
 
 /**
  * Gestión de cursos: listados, ficha y ciclo de vida (borrador ↔ publicado).
@@ -44,6 +81,8 @@ export class CoursesService {
     private readonly storage: StorageService,
     private readonly mail: MailService,
     private readonly realtime: RealtimeService,
+    private readonly notifications: NotificationsService,
+    private readonly files: FileOwnershipService,
   ) {}
 
   // ── Listados ─────────────────────────────────────────────────────────────
@@ -69,13 +108,35 @@ export class CoursesService {
     }
   }
 
+  /**
+   * Cursos del alumno con el avance de la vuelta actual, para pintar las tarjetas sin pedir
+   * el progreso curso a curso. `completedAt` es nulo mientras la vuelta está en curso: un
+   * certificado de una vuelta anterior no da el curso por terminado.
+   */
   private async getStudentCourses(userGuid: string) {
     const enrollments = await this.prisma.enrollment.findMany({
       where: { userGuid, active: true },
-      select: { enrolledAt: true, course: { select: COURSE_SUMMARY } },
+      select: {
+        enrolledAt: true,
+        completedAt: true,
+        completedResources: true,
+        course: { select: { ...COURSE_SUMMARY, modules: { select: { _count: { select: { resources: true } } } } } },
+      },
       orderBy: { enrolledAt: 'desc' },
     });
-    return enrollments.map(({ course, enrolledAt }) => ({ ...course, assignedAt: enrolledAt }));
+    return enrollments.map(({ course: { modules, ...course }, enrolledAt, completedAt, completedResources }) => {
+      const totalResources = modules.reduce((sum, module) => sum + module._count.resources, 0);
+      // Hasta la reconciliación nocturna, retirar un recurso puede dejar el recuento por encima.
+      const completed = Math.min(completedResources, totalResources);
+      return {
+        ...course,
+        assignedAt: enrolledAt,
+        completedAt,
+        completedResources: completed,
+        totalResources,
+        percent: percent(completed, totalResources),
+      };
+    });
   }
 
   private getTeacherCourses(teacherGuid: string, country: Country) {
@@ -119,7 +180,10 @@ export class CoursesService {
     };
   }
 
-  /** Ficha para un alumno matriculado: los cuestionarios salen sin las respuestas correctas. */
+  /**
+   * Ficha para un alumno matriculado. De cada cuestionario sólo sale su resumen (`quiz`):
+   * las preguntas llegan al abrir el intento y las respuestas correctas nunca.
+   */
   async getCourseForStudent(courseGuid: string, user: JwtPayload) {
     const course = await this.access.courseInCountry(courseGuid, user.country);
     await this.access.ensureEnrollment(courseGuid, user.sub);
@@ -135,21 +199,22 @@ export class CoursesService {
       ...fullCourse,
       modules: fullCourse.modules.map((module) => ({
         ...module,
-        resources: module.resources.map((resource) =>
-          toClientResource(resource, this.storage, (stored) => this.quizConfigForStudent(stored, resource.guid)),
-        ),
+        resources: module.resources.map((resource) => ({
+          ...toClientResource(resource, this.storage, () => null),
+          quiz: this.quizOverviewForStudent(resource.quizConfig, resource.guid),
+        })),
       })),
     };
   }
 
   /**
-   * Serializa el cuestionario sin respuestas. Si la configuración está dañada devuelve
-   * `null` y lo registra, en vez de romper la carga entera del curso por un recurso.
+   * Resumen del cuestionario. Si la configuración está dañada devuelve `null` y lo registra,
+   * en vez de romper la carga entera del curso por un recurso.
    */
-  private quizConfigForStudent(stored: string | null, resourceGuid: string): string | null {
+  private quizOverviewForStudent(stored: string | null, resourceGuid: string): QuizOverview | null {
     if (!stored) return null;
     try {
-      return JSON.stringify(withoutAnswers(parseQuizConfig(stored)));
+      return quizOverview(parseQuizConfig(stored));
     } catch (error) {
       this.logger.error(`Cuestionario con configuración inválida en el recurso ${resourceGuid}`, error);
       return null;
@@ -183,7 +248,13 @@ export class CoursesService {
       select: COURSE_SUMMARY,
     });
 
-    this.realtime.emitToCountry('course:created', { guid: course.guid, title: course.title }, user.country);
+    // Un borrador sólo le concierne a quien lo gestiona: los alumnos no saben de él hasta que se publica.
+    this.realtime.emitToCourseStaff(
+      'course:created',
+      { guid: course.guid, title: course.title },
+      user.country,
+      teacherGuid,
+    );
     return course;
   }
 
@@ -199,6 +270,7 @@ export class CoursesService {
       dto.coverImage !== undefined
         ? await this.prisma.course.findUnique({ where: { guid: courseGuid }, select: { coverImage: true } })
         : null;
+    await this.files.assertCanUse(dto.coverImage, previous?.coverImage, 'portadas', { uploader: user.sub });
 
     const updated = await this.prisma.course.update({
       where: { guid: courseGuid },
@@ -212,7 +284,6 @@ export class CoursesService {
         ...(dto.durationHours !== undefined && { durationHours: dto.durationHours }),
         ...(dto.passingScore !== undefined && { passingScore: dto.passingScore }),
         ...(dto.strictOrder !== undefined && { strictOrder: dto.strictOrder }),
-        ...(dto.issuesCertificate !== undefined && { issuesCertificate: dto.issuesCertificate }),
         ...(dto.maxStudents !== undefined && { maxStudents: dto.maxStudents }),
         ...(dto.accessCode !== undefined && { accessCode: dto.accessCode || null }),
         ...(dto.startDate !== undefined && { startDate: dto.startDate ? new Date(dto.startDate) : null }),
@@ -221,15 +292,30 @@ export class CoursesService {
       select: COURSE_SUMMARY,
     });
 
-    // La portada sustituida no la referencia nadie más.
+    // La portada sustituida se retira si ya no la usa ningún otro curso.
     if (previous?.coverImage && previous.coverImage !== updated.coverImage) {
-      void this.storage.deleteFiles([previous.coverImage]);
+      void this.files.deleteUnreferenced([previous.coverImage]);
     }
+    const students = await this.enrolledStudents(courseGuid);
+    if (updated.status === 'DRAFT' && course.status !== 'DRAFT') {
+      this.realtime.emitToUsers(
+        'course:maintenance',
+        { courseGuid, guid: courseGuid, title: updated.title, status: updated.status },
+        user.country,
+        students,
+      );
+    }
+    this.emitToCourseAudience(
+      'course:updated',
+      { guid: courseGuid, status: updated.status },
+      user.country,
+      updated.teacherGuid,
+      students,
+    );
+
     if (updated.status !== course.status) {
       await this.announceStatusChange(updated.guid, updated.title, updated.status, user.country);
     }
-
-    this.realtime.emitToCountry('course:updated', { guid: courseGuid, status: updated.status }, user.country);
     return updated;
   }
 
@@ -240,18 +326,47 @@ export class CoursesService {
   private async validateStatusChange(course: CourseAccessInfo, newStatus: CourseStatus): Promise<void> {
     if (course.status !== 'PUBLISHED' || newStatus === 'PUBLISHED') return;
 
-    const quizzesInProgress = await this.prisma.submission.count({
-      where: { status: 'DRAFT', assignment: { module: { courseGuid: course.guid } } },
-    });
-
-    if (quizzesInProgress > 0) {
+    const examinees = await this.studentsTakingQuizzes(course.guid);
+    if (examinees > 0) {
+      const who = examinees === 1 ? 'un estudiante está' : `${examinees} estudiantes están`;
       throw new BadRequestException(
-        `No se puede pasar a Borrador: ${quizzesInProgress} estudiante(s) están realizando un cuestionario ahora mismo. Espera a que terminen.`,
+        `No se puede pasar a Borrador: ${who} realizando un cuestionario ahora mismo. Espera a que terminen.`,
       );
     }
   }
 
-  /** Avisa a los matriculados cuando el curso entra en mantenimiento o vuelve a publicarse. */
+  /**
+   * Alumnos con un intento en marcha (ver `isAttemptLive`) y matrícula activa. Un intento
+   * abandonado, o de alguien dado de baja, no puede bloquear el curso indefinidamente.
+   */
+  private async studentsTakingQuizzes(courseGuid: string): Promise<number> {
+    const open = await this.prisma.submission.findMany({
+      where: {
+        status: 'DRAFT',
+        assignment: { module: { courseGuid } },
+        user: { enrollments: { some: { courseGuid, active: true } } },
+      },
+      select: { userGuid: true, assignmentGuid: true, startedAt: true },
+    });
+    if (open.length === 0) return 0;
+
+    const quizzes = await this.prisma.resource.findMany({
+      where: { guid: { in: [...new Set(open.flatMap((attempt) => attempt.assignmentGuid ?? []))] } },
+      select: { guid: true, quizConfig: true },
+    });
+    const timeLimits = new Map(quizzes.map((quiz) => [quiz.guid, timeLimitOf(quiz.quizConfig)]));
+
+    const live = open.filter((attempt) =>
+      isAttemptLive(attempt.startedAt, timeLimits.get(attempt.assignmentGuid ?? '') ?? 0),
+    );
+    return new Set(live.map((attempt) => attempt.userGuid)).size;
+  }
+
+  /**
+   * Avisa por correo y en la campana a quien tiene el curso en marcha cuando entra en
+   * mantenimiento, cuando vuelve a publicarse y cuando se publica por primera vez (a quien se
+   * matriculó en el borrador). Quien ya lo terminó no tiene nada que retomar.
+   */
   private async announceStatusChange(
     courseGuid: string,
     title: string,
@@ -261,37 +376,98 @@ export class CoursesService {
     if (status === 'ARCHIVED') return;
 
     const enrolledStudents = await this.prisma.enrollment.findMany({
-      where: { courseGuid, active: true },
+      where: { courseGuid, active: true, completedAt: null },
       select: { user: { select: { guid: true, email: true, firstName: true } } },
     });
     if (enrolledStudents.length === 0) return;
 
-    const underMaintenance = status === 'DRAFT';
+    const change =
+      status === 'DRAFT' ? 'maintenance' : (await this.hasStudentActivity(courseGuid)) ? 'reopening' : 'firstRelease';
+    const notice = STATUS_NOTICES[change](title);
 
-    this.realtime.emitToUsers(
-      underMaintenance ? 'course:maintenance' : 'course:updated',
-      { courseGuid, guid: courseGuid, title, status },
-      country,
-      enrolledStudents.map(({ user }) => user.guid),
-    );
-
-    // Los correos no bloquean la respuesta: publicar un curso no puede depender del
-    // servidor de correo. Salen de pocos en pocos: un curso puede tener miles de matriculados.
+    // Los avisos no bloquean la respuesta: publicar un curso no puede depender del servidor
+    // de correo. Salen de pocos en pocos: un curso puede tener miles de matriculados.
     void settleWithConcurrency(enrolledStudents, MAIL_CONCURRENCY, ({ user }) =>
-      underMaintenance
-        ? this.mail.sendCourseUnderMaintenance(user.email, user.firstName, title, country)
-        : this.mail.sendCourseReactivated(user.email, user.firstName, title, country),
+      Promise.all([
+        this.notifications.create({
+          ...notice,
+          userGuid: user.guid,
+          country,
+          actionUrl: `/courses/${courseGuid}`,
+          refType: 'curso',
+          refGuid: courseGuid,
+        }),
+        this.sendStatusMail(change, user, title, courseGuid, country),
+      ]),
     ).then((results) => {
       const failed = countRejected(results);
       if (failed > 0) {
-        this.logger.error(`Fallo al avisar a ${failed} matriculado(s) del cambio de estado de ${courseGuid}`);
+        this.logger.error(
+          `Fallo al avisar a ${failed} ${plural(failed, 'matriculado', 'matriculados')} del cambio de estado de ${courseGuid}`,
+        );
       }
     });
   }
 
+  /**
+   * Si algún alumno ha trabajado ya en el curso. Avance y entregas sólo existen con el curso
+   * publicado, así que con ellos el curso se publicó antes: el que se publica ahora vuelve de
+   * un mantenimiento y no sale por primera vez.
+   */
+  private async hasStudentActivity(courseGuid: string): Promise<boolean> {
+    const inCourse = { module: { courseGuid } };
+    const [progress, submission] = await Promise.all([
+      this.prisma.resourceProgress.findFirst({ where: { resource: inCourse }, select: { id: true } }),
+      this.prisma.submission.findFirst({ where: { assignment: inCourse }, select: { guid: true } }),
+    ]);
+    return Boolean(progress ?? submission);
+  }
+
+  private sendStatusMail(
+    change: StatusChange,
+    user: { email: string; firstName: string },
+    title: string,
+    courseGuid: string,
+    country: Country,
+  ) {
+    switch (change) {
+      case 'maintenance':
+        return this.mail.sendCourseUnderMaintenance(user.email, user.firstName, title, country);
+      case 'reopening':
+        return this.mail.sendCourseReactivated(user.email, user.firstName, title, country);
+      case 'firstRelease':
+        // Es el correo de matrícula, que se reservó hasta que el curso estuviera publicado.
+        return this.mail.sendEnrollment(user.email, user.firstName, title, courseGuid, country);
+    }
+  }
+
+  /** Alumnos con matrícula activa, terminada o no: todos tienen el curso en su lista. */
+  private async enrolledStudents(courseGuid: string): Promise<string[]> {
+    const enrollments = await this.prisma.enrollment.findMany({
+      where: { courseGuid, active: true },
+      select: { userGuid: true },
+    });
+    return enrollments.map((enrollment) => enrollment.userGuid);
+  }
+
+  /**
+   * Avisa de un cambio del curso a quien lo tiene delante: los administradores de la sede, su
+   * responsable y los alumnos matriculados. Al resto de la sede no le concierne.
+   */
+  private emitToCourseAudience(
+    event: EventName,
+    data: unknown,
+    country: Country,
+    teacherGuid: string,
+    studentGuids: string[],
+  ): void {
+    this.realtime.emitToCourseStaff(event, data, country, teacherGuid);
+    this.realtime.emitToUsers(event, data, country, studentGuids);
+  }
+
   /** Reasigna el responsable del curso. */
   async assignTeacher(courseGuid: string, teacherGuid: string, user: JwtPayload) {
-    await this.access.courseInCountry(courseGuid, user.country);
+    const course = await this.access.courseInCountry(courseGuid, user.country);
     await this.ensureEligibleTeacher(teacherGuid, user.country);
 
     const updated = await this.prisma.course.update({
@@ -300,7 +476,12 @@ export class CoursesService {
       select: COURSE_SUMMARY,
     });
 
-    this.realtime.emitToCountry('course:updated', { guid: courseGuid }, user.country);
+    const students = await this.enrolledStudents(courseGuid);
+    this.emitToCourseAudience('course:updated', { guid: courseGuid }, user.country, teacherGuid, students);
+    // Quien deja de ser el responsable tiene que ver cómo sale de su lista.
+    if (course.teacherGuid !== teacherGuid) {
+      this.realtime.emitToUsers('course:updated', { guid: courseGuid }, user.country, [course.teacherGuid]);
+    }
     return updated;
   }
 
@@ -317,7 +498,8 @@ export class CoursesService {
 
   /**
    * Elimina un curso en borrador con todo lo que cuelga de él: módulos, recursos,
-   * matrículas, avance, entregas, sesiones de estudio y sus archivos.
+   * matrículas, avance, entregas —también las archivadas de vueltas anteriores—, sesiones
+   * de estudio y sus archivos.
    *
    * Los certificados **no**: acreditan una formación que ocurrió, llevan un código de
    * verificación público que puede estar impreso en un documento ya entregado, y no pueden
@@ -330,18 +512,24 @@ export class CoursesService {
       throw new BadRequestException('Sólo se pueden eliminar cursos en estado Borrador.');
     }
 
-    const files = await this.courseFiles(courseGuid);
-    await this.prisma.course.delete({ where: { guid: courseGuid } });
+    const [files, students] = await Promise.all([this.courseFiles(courseGuid), this.enrolledStudents(courseGuid)]);
+    // Las entregas cuelgan de su tarea, que al borrarse sólo las suelta: sin borrarlas aquí
+    // quedarían filas sin curso que apuntan a archivos ya retirados. El resto, archivadas
+    // incluidas, cae en cascada con el curso.
+    await this.prisma.$transaction([
+      this.prisma.submission.deleteMany({ where: { assignment: { module: { courseGuid } } } }),
+      this.prisma.course.delete({ where: { guid: courseGuid } }),
+    ]);
 
-    void this.storage.deleteFiles(files);
-    this.realtime.emitToCountry('course:deleted', { guid: courseGuid }, user.country);
+    void this.files.deleteUnreferenced(files);
+    this.emitToCourseAudience('course:deleted', { guid: courseGuid }, user.country, course.teacherGuid, students);
 
     return { message: 'Curso eliminado. Los certificados ya emitidos se conservan.' };
   }
 
   /** Reúne las claves de almacenamiento que dejarán de usarse al borrar el curso. */
   private async courseFiles(courseGuid: string): Promise<(string | null)[]> {
-    const [course, resources, submissions] = await Promise.all([
+    const [course, resources, submissions, archived] = await Promise.all([
       this.prisma.course.findUnique({ where: { guid: courseGuid }, select: { coverImage: true } }),
       this.prisma.resource.findMany({
         where: { module: { courseGuid }, OR: [{ attachmentKey: { not: null } }, { fileUrl: { not: null } }] },
@@ -351,12 +539,16 @@ export class CoursesService {
         where: { assignment: { module: { courseGuid } }, attachmentKey: { not: null } },
         select: { attachmentKey: true },
       }),
+      this.prisma.archivedSubmission.findMany({
+        where: { courseGuid, attachmentKey: { not: null } },
+        select: { attachmentKey: true },
+      }),
     ]);
 
     return [
       course?.coverImage ?? null,
       ...resources.flatMap((resource) => [resource.attachmentKey, resource.fileUrl]),
-      ...submissions.map((submission) => submission.attachmentKey),
+      ...[...submissions, ...archived].map((submission) => submission.attachmentKey),
     ];
   }
 }

@@ -1,8 +1,8 @@
 /**
  * Plantillas de correo iniciales.
  *
- * Se cargan una sola vez con la semilla; a partir de ahí se editan desde el panel de
- * administración y la semilla no las sobrescribe. Los marcadores `{{variable}}` los
+ * La semilla las crea una sola vez en cada sede; a partir de ahí cada sede edita las suyas
+ * desde el panel de administración y la semilla no las sobrescribe. Los marcadores `{{variable}}` los
  * sustituye `MailService` al enviar.
  *
  * Las notas se insertan ya formateadas ("85 / 100"), de modo que cambiar la escala del
@@ -47,7 +47,15 @@ export const EMAIL_TEMPLATES: SeedTemplate[] = [
     key: 'CALIFICACION_RECIBIDA',
     displayName: 'Calificación Recibida',
     description: 'Se envía al estudiante cuando se califica una de sus entregas.',
-    variables: JSON.stringify(['nombre', 'tarea', 'calificacion', 'emoji', 'mensaje_aprobacion', 'url_campus']),
+    variables: JSON.stringify([
+      'nombre',
+      'tarea',
+      'calificacion',
+      'emoji',
+      'mensaje_aprobacion',
+      'comentario',
+      'url_campus',
+    ]),
     template: {
       internalName: 'Plantilla por defecto - Calificación',
       subject: 'Calificación: {{tarea}} — {{calificacion}}',
@@ -58,6 +66,7 @@ export const EMAIL_TEMPLATES: SeedTemplate[] = [
 <span style="font-size:18px;color:#94a3b8"> puntos</span>
 </div>
 {{mensaje_aprobacion}}
+{{comentario}}
 <div style="text-align:center;margin:24px 0">
 <a href="{{url_campus}}" style="display:inline-block;background:#4f46e5;color:#fff;font-weight:700;padding:12px 32px;border-radius:12px;text-decoration:none;font-size:14px">Ir al Campus</a>
 </div>`,
@@ -127,6 +136,21 @@ export const EMAIL_TEMPLATES: SeedTemplate[] = [
     },
   },
   {
+    key: 'SOLICITUD_RECHAZADA',
+    displayName: 'Solicitud de Acceso Rechazada',
+    description: 'Se envía a quien pidió acceso cuando un administrador rechaza su solicitud, con el motivo si lo dio.',
+    variables: JSON.stringify(['nombre', 'sede', 'motivo']),
+    template: {
+      internalName: 'Plantilla por defecto - Solicitud Rechazada',
+      subject: 'Tu solicitud de acceso al campus de {{sede}}',
+      bodyHtml: `<h2 style="color:#1e293b;margin:0 0 16px">Solicitud de Acceso no Aprobada</h2>
+<p style="color:#64748b;font-size:15px;line-height:1.6">Hola <strong>{{nombre}}</strong>, la administración del campus de <strong>{{sede}}</strong> revisó tu solicitud de acceso y no la aprobó.</p>
+{{motivo}}
+<p style="color:#64748b;font-size:14px;line-height:1.6">Si crees que es un error, ponte en contacto con la administración de tu sede.</p>`,
+      isSystem: true,
+    },
+  },
+  {
     key: 'NUEVA_ENTREGA',
     displayName: 'Nueva Entrega Recibida',
     description: 'Aviso al examinador cuando un estudiante entrega una tarea.',
@@ -174,16 +198,18 @@ export const EMAIL_TEMPLATES: SeedTemplate[] = [
   {
     key: 'USUARIO_APROBADO',
     displayName: 'Usuario Aprobado (Bienvenida)',
-    description: 'Se envía al usuario cuando su solicitud de acceso es aprobada, con sus credenciales temporales.',
-    variables: JSON.stringify(['nombre', 'email', 'tempPassword', 'url_campus']),
+    description:
+      'Se envía al usuario cuando se aprueba su solicitud de acceso o un administrador le crea la cuenta, con su contraseña temporal.',
+    variables: JSON.stringify(['nombre', 'email', 'tempPassword', 'sede', 'url_campus']),
     template: {
       internalName: 'Plantilla por defecto - Bienvenida',
       subject: '🎓 ¡Bienvenido al Campus Virtual!',
       bodyHtml: `<h2 style="color:#1e293b;margin:0 0 16px">¡Hola {{nombre}}! 👋</h2>
-<p style="color:#64748b;font-size:15px;line-height:1.6">Tu solicitud de acceso ha sido <strong style="color:#10b981">aprobada</strong>. Ya puedes iniciar sesión en el Campus Virtual.</p>
+<p style="color:#64748b;font-size:15px;line-height:1.6">Tu cuenta en el Campus Virtual de <strong>{{sede}}</strong> está <strong style="color:#10b981">lista</strong>. Ya puedes iniciar sesión.</p>
 <div style="background:#f0f9ff;border:1px solid #bae6fd;border-radius:12px;padding:20px;margin:20px 0">
 <table style="width:100%;border-collapse:collapse;font-size:14px">
-  <tr><td style="padding:6px 0;color:#94a3b8;width:120px">📧 Email:</td><td style="padding:6px 0;color:#1e293b;font-weight:600">{{email}}</td></tr>
+  <tr><td style="padding:6px 0;color:#94a3b8;width:120px">📍 Sede:</td><td style="padding:6px 0;color:#1e293b;font-weight:600">{{sede}}</td></tr>
+  <tr><td style="padding:6px 0;color:#94a3b8">📧 Email:</td><td style="padding:6px 0;color:#1e293b;font-weight:600">{{email}}</td></tr>
   <tr><td style="padding:6px 0;color:#94a3b8">🔑 Contraseña:</td><td style="padding:6px 0;color:#1e293b;font-weight:600"><code style="background:#e2e8f0;padding:2px 8px;border-radius:4px">{{tempPassword}}</code></td></tr>
 </table>
 </div>

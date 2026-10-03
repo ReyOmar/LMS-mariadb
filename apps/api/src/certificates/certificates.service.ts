@@ -5,13 +5,21 @@ import { PrismaService } from '../prisma/prisma.service';
 import { StorageService } from '../storage/storage.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { MailService } from '../mail/mail.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { CourseAccessService } from '../courses/course-access.service';
 import { percent } from '../common/domain/progress';
 import { Country } from '../common/domain/country';
+import { plural } from '../common/domain/text';
 import { JwtPayload } from '../common/interfaces/jwt-payload.interface';
 import { composeCertificate } from './certificate-pdf';
 import { CertificateDataService, IssuanceData } from './certificate-data.service';
 import { isValid } from './validity';
+
+/**
+ * Tope de la transacción de emisión. Dentro se guarda el PDF, que con R2 es una subida por
+ * red: el tope por defecto de Prisma (5 s) la cortaría a medias en una conexión lenta.
+ */
+const ISSUANCE_TIMEOUT_MS = 30_000;
 
 /** Resultado de comprobar si un alumno ya puede recibir su certificado. */
 export interface CompletionStatus {
@@ -44,6 +52,7 @@ export class CertificatesService {
     private readonly mail: MailService,
     /** Arma lo que dice el diploma; aquí sólo se decide a quién y cuándo se le emite. */
     private readonly data: CertificateDataService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   // ── Comprobación de finalización ─────────────────────────────────────────
@@ -189,11 +198,14 @@ export class CertificatesService {
 
   private getBlockedReason(complete: boolean, missing: number, pending: { title: string }[]): string | null {
     if (!complete) {
-      return `Te faltan ${missing} recurso(s) por completar antes de poder obtener el certificado.`;
+      return (
+        `${plural(missing, 'Te falta', 'Te faltan')} ${missing} ${plural(missing, 'recurso', 'recursos')} ` +
+        'por completar antes de poder obtener el certificado.'
+      );
     }
     if (pending.length > 0) {
       const names = pending.map((assignment) => `"${assignment.title}"`).join(', ');
-      return `Tu examinador todavía debe calificar ${pending.length} tarea(s): ${names}.`;
+      return `Tu examinador todavía debe calificar ${pending.length} ${plural(pending.length, 'tarea', 'tareas')}: ${names}.`;
     }
     return null;
   }
@@ -211,8 +223,9 @@ export class CertificatesService {
     const status = await this.checkCompletion(courseGuid, userGuid);
     if (!status.canGetCertificate) return;
 
-    await this.issue(courseGuid, userGuid, country);
-    this.logger.log(`Certificado emitido automáticamente: alumno ${userGuid}, curso ${courseGuid}`);
+    if (await this.issue(courseGuid, userGuid, country)) {
+      this.logger.log(`Certificado emitido automáticamente: alumno ${userGuid}, curso ${courseGuid}`);
+    }
   }
 
   /**
@@ -239,56 +252,66 @@ export class CertificatesService {
     });
   }
 
-  /** Compone el PDF, lo guarda y lo registra. Quien llama ya comprobó que procede. */
-  private async issue(courseGuid: string, userGuid: string, country: Country): Promise<void> {
+  /**
+   * Compone el PDF, lo guarda y lo registra. Quien llama ya comprobó que procede.
+   *
+   * El último avance y la última calificación pueden llegar casi a la vez y lanzar dos
+   * emisiones. Se ponen en fila sobre la matrícula: la segunda espera a que la primera
+   * confirme, encuentra la vuelta cerrada y no hace nada. El PDF se compone antes, en
+   * memoria, y sólo se guarda cuando ya es seguro que se registra, así que la emisión que
+   * llega tarde no deja ningún archivo.
+   *
+   * @returns si se emitió.
+   */
+  private async issue(courseGuid: string, userGuid: string, country: Country): Promise<boolean> {
     const data = await this.data.gather(courseGuid, userGuid, country);
     const pdf = await composeCertificate(data.certificate);
 
-    const key = `certificados/${crypto.randomUUID()}.pdf`;
-    await this.storage.saveWithKey(key, pdf, 'application/pdf');
+    const certificate = await this.prisma.$transaction(
+      async (tx) => {
+        if (!(await this.lockOpenRound(tx, courseGuid, userGuid))) return null;
 
-    // Cuántas vueltas lleva el alumno por este curso. La primera es la 1.
-    const attempt = (await this.prisma.certificate.count({ where: { userGuid, courseGuid } })) + 1;
+        // Cuántas vueltas lleva el alumno por este curso. La primera es la 1.
+        const attempt = (await tx.certificate.count({ where: { userGuid, courseGuid } })) + 1;
 
-    let certificate: { guid: string };
-    try {
-      // El certificado cierra la vuelta: la matrícula queda terminada en la misma
-      // transacción, para que no haya certificado sin matrícula terminada ni al revés.
-      [certificate] = await this.prisma.$transaction([
-        this.prisma.certificate.create({
-          data: {
-            userGuid,
-            courseGuid,
-            courseTitle: data.certificate.courseTitle,
-            attempt,
-            verificationCode: data.certificate.verificationCode,
-            pdfKey: key,
-            startedAt: data.certificate.startedAt,
-            completedAt: data.certificate.completedAt,
-            validUntil: data.certificate.validUntil,
-            totalHours: data.certificate.totalHours,
-            activeSeconds: data.activeSeconds,
-            averageScore: data.certificate.averageScore,
-          },
-          select: { guid: true },
-        }),
-        this.prisma.enrollment.updateMany({
-          where: { userGuid, courseGuid },
-          data: { completedAt: data.certificate.completedAt },
-        }),
-      ]);
-    } catch (error) {
-      // Dos eventos casi a la vez —el último avance y la última calificación— pueden
-      // intentar emitirlo dos veces. La restricción única lo impide, y la respuesta
-      // correcta es quedarse con el que ya existe, no un error.
-      if (!(await this.wasCollision(error, courseGuid, userGuid))) throw error;
-
-      // La restricción única asegura que la fila no se escribió: este PDF, recién compuesto
-      // y con una clave que acaba de inventarse, no lo referencia nadie. Con cualquier otro
-      // error no hay esa certeza —la escritura pudo llegar a confirmarse— y no se toca.
-      await this.storage.deleteFile(key).catch(() => undefined);
-      return;
-    }
+        const key = `certificados/${crypto.randomUUID()}.pdf`;
+        await this.storage.saveWithKey(key, pdf, 'application/pdf');
+        try {
+          const created = await tx.certificate.create({
+            data: {
+              userGuid,
+              holderName: data.certificate.studentName,
+              country,
+              courseGuid,
+              courseTitle: data.certificate.courseTitle,
+              attempt,
+              verificationCode: data.certificate.verificationCode,
+              pdfKey: key,
+              startedAt: data.certificate.startedAt,
+              completedAt: data.certificate.completedAt,
+              validUntil: data.certificate.validUntil,
+              totalHours: data.certificate.totalHours,
+              activeSeconds: data.activeSeconds,
+              averageScore: data.certificate.averageScore,
+            },
+            select: { guid: true },
+          });
+          // El certificado cierra la vuelta: la matrícula queda terminada en la misma
+          // transacción, para que no haya certificado sin matrícula terminada ni al revés.
+          await tx.enrollment.updateMany({
+            where: { userGuid, courseGuid },
+            data: { completedAt: data.certificate.completedAt },
+          });
+          return created;
+        } catch (error) {
+          // La transacción se deshace: ninguna fila llega a referenciar el PDF recién guardado.
+          await this.storage.deleteFile(key).catch(() => undefined);
+          throw error;
+        }
+      },
+      { timeout: ISSUANCE_TIMEOUT_MS },
+    );
+    if (!certificate) return false;
 
     this.realtime.emitToUsers(
       'certificate:new',
@@ -297,21 +320,44 @@ export class CertificatesService {
       [userGuid],
     );
 
-    void this.notifyIssuance(certificate.guid, data, country);
+    void this.notifyIssuance(certificate.guid, userGuid, data, country);
+    return true;
   }
 
   /**
-   * Indica si el error es el choque con la restricción única porque otra emisión ganó la
-   * carrera. Cualquier otro error se deja pasar tal cual: no conviene disfrazarlo de éxito.
+   * Bloquea la matrícula hasta el final de la transacción y dice si su vuelta sigue abierta.
+   *
+   * La emisión escribe `completedAt` en la misma transacción que el certificado, así que
+   * quien esperaba el bloqueo lee lo que dejó la anterior: si ya cerró la vuelta, no hay
+   * nada que emitir. Sin matrícula, tampoco.
    */
-  private async wasCollision(error: unknown, courseGuid: string, userGuid: string): Promise<boolean> {
-    const isCollision = error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002';
-    return isCollision && (await this.currentRoundCertificate(courseGuid, userGuid)) !== null;
+  private async lockOpenRound(tx: Prisma.TransactionClient, courseGuid: string, userGuid: string) {
+    const [enrollment] = await tx.$queryRaw<{ completedAt: Date | null }[]>`
+      SELECT fecha_finalizacion AS completedAt FROM lms_matriculas
+      WHERE usuario_guid = ${userGuid} AND curso_guid = ${courseGuid}
+      FOR UPDATE`;
+    return enrollment !== undefined && !enrollment.completedAt;
   }
 
-  private async notifyIssuance(certificateGuid: string, data: IssuanceData, country: Country): Promise<void> {
+  /** Avisa al alumno, en la campana y por correo, y a su examinador. */
+  private async notifyIssuance(
+    certificateGuid: string,
+    userGuid: string,
+    data: IssuanceData,
+    country: Country,
+  ): Promise<void> {
     try {
       await Promise.all([
+        this.notifications.create({
+          userGuid,
+          country,
+          type: 'BADGE_UNLOCKED',
+          title: 'Certificado disponible',
+          message: `Terminaste "${data.certificate.courseTitle}". Tu certificado ya está listo para descargar.`,
+          actionUrl: '/dashboard/student/certificates',
+          refType: 'certificado',
+          refGuid: certificateGuid,
+        }),
         this.mail.sendCertificateIssued(
           data.studentEmail,
           data.studentName,
@@ -351,12 +397,17 @@ export class CertificatesService {
   async getPdf(guid: string, user: JwtPayload): Promise<{ content: Buffer; fileName: string }> {
     const certificate = await this.prisma.certificate.findUnique({
       where: { guid },
-      select: { userGuid: true, pdfKey: true, courseTitle: true, user: { select: { country: true } } },
+      select: {
+        userGuid: true,
+        pdfKey: true,
+        courseTitle: true,
+        country: true,
+      },
     });
     if (!certificate) throw new NotFoundException('Certificado no encontrado.');
 
     const isOwn = certificate.userGuid === user.sub;
-    const isCountryAdmin = user.role === 'ADMIN' && certificate.user.country === user.country;
+    const isCountryAdmin = user.role === 'ADMIN' && certificate.country === user.country;
     if (!isOwn && !isCountryAdmin) {
       throw new ForbiddenException('No tienes permiso para consultar este certificado.');
     }
@@ -375,19 +426,24 @@ export class CertificatesService {
   /**
    * Verificación pública por código.
    * Devuelve sólo lo imprescindible para comprobar la autenticidad de un documento: quién,
-   * qué curso y cuándo. Ni correo, ni identificadores internos, ni enlace al PDF.
+   * qué curso, cuándo y qué sede lo emitió. Ni correo, ni identificadores internos, ni
+   * enlace al PDF.
+   *
+   * Un código de la otra sede también se verifica —quien lo consulta no tiene por qué saber
+   * de cuál es—, pero la respuesta dice cuál lo emitió.
    */
   async verifyByCode(code: string) {
     const certificate = await this.prisma.certificate.findUnique({
       where: { verificationCode: code.trim().toUpperCase() },
       select: {
         verificationCode: true,
+        holderName: true,
         completedAt: true,
         validUntil: true,
         averageScore: true,
         totalHours: true,
         courseTitle: true,
-        user: { select: { firstName: true, lastName: true } },
+        country: true,
       },
     });
 
@@ -402,7 +458,9 @@ export class CertificatesService {
     return {
       valid: true as const,
       certificate: {
-        studentName: `${certificate.user.firstName} ${certificate.user.lastName}`,
+        // El nombre con que se emitió: sigue ahí aunque el titular cambie su perfil o se
+        // borre su cuenta.
+        studentName: certificate.holderName,
         course: certificate.courseTitle,
         issuedAt: certificate.completedAt,
         validUntil: certificate.validUntil,
@@ -410,12 +468,14 @@ export class CertificatesService {
         hours: Number(certificate.totalHours),
         averageScore: certificate.averageScore === null ? null : Number(certificate.averageScore),
         verificationCode: certificate.verificationCode,
+        issuer: await this.data.issuer(certificate.country),
       },
     };
   }
 
   private forStudent(certificate: {
     guid: string;
+    holderName: string;
     courseGuid: string | null;
     courseTitle: string;
     attempt: number;
@@ -430,6 +490,8 @@ export class CertificatesService {
   }) {
     return {
       guid: certificate.guid,
+      /** Nombre con que se emitió, el que figura en el diploma. */
+      holderName: certificate.holderName,
       courseGuid: certificate.courseGuid,
       courseTitle: certificate.courseTitle,
       courseImage: certificate.course?.coverImage ?? null,

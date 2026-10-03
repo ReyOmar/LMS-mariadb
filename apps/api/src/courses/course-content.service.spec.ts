@@ -1,3 +1,4 @@
+import { ForbiddenException } from '@nestjs/common';
 import { CourseContentService } from './course-content.service';
 import { sessionFor } from '../common/testing/test-campus';
 
@@ -14,19 +15,20 @@ const EDITABLE = { guid: 'curso-1', country: 'COLOMBIA', title: 'Curso', status:
 
 function serviceWith(prisma: Record<string, unknown>) {
   const deletedFiles: (string | null | undefined)[] = [];
-  const storage = {
-    deleteFiles: async (keys: (string | null | undefined)[]) => {
+  const storage = { downloadUrl: (key: string) => `https://archivos/${key}` };
+  const files = {
+    assertCanUse: jest.fn(async () => undefined),
+    deleteUnreferenced: async (keys: (string | null | undefined)[]) => {
       deletedFiles.push(...keys);
     },
-    downloadUrl: (key: string) => `https://archivos/${key}`,
   };
   const access = {
     editableCourse: async () => EDITABLE,
     editableCourseOfModule: async () => EDITABLE,
     editableCourseOfResource: async () => EDITABLE,
   };
-  const service = new CourseContentService(prisma as never, access as never, storage as never);
-  return { service, deletedFiles: () => deletedFiles.filter(Boolean) };
+  const service = new CourseContentService(prisma as never, access as never, storage as never, files as never);
+  return { service, files, deletedFiles: () => deletedFiles.filter(Boolean) };
 }
 
 describe('CourseContentService', () => {
@@ -63,17 +65,52 @@ describe('CourseContentService', () => {
     expect(saved.quizConfig).toBeNull();
   });
 
-  it('sustituir el adjunto borra el anterior', async () => {
-    const { service, deletedFiles } = serviceWith({
+  it('sustituir el adjunto comprueba quién subió el nuevo y borra el anterior', async () => {
+    const { service, files, deletedFiles } = serviceWith({
       resource: {
-        findUnique: async () => ({ attachmentKey: 'recursos/viejo.pdf', fileUrl: null }),
-        update: async () => ({ guid: 'r1', attachmentKey: 'recursos/nuevo.pdf', fileUrl: null, quizConfig: null }),
+        findUnique: async () => ({ attachmentKey: 'recursos/viejo.pdf', fileUrl: 'recursos/video.mp4' }),
+        update: async () => ({
+          guid: 'r1',
+          attachmentKey: 'recursos/nuevo.pdf',
+          fileUrl: 'recursos/video.mp4',
+          quizConfig: null,
+        }),
       },
     });
 
     await service.updateResource('r1', { attachmentKey: 'recursos/nuevo.pdf' }, ADMIN);
 
+    expect(files.assertCanUse).toHaveBeenCalledWith('recursos/nuevo.pdf', 'recursos/viejo.pdf', 'recursos', {
+      uploader: 'admin',
+    });
+    expect(files.assertCanUse).toHaveBeenCalledWith(undefined, 'recursos/video.mp4', 'recursos', {
+      uploader: 'admin',
+    });
     expect(deletedFiles()).toEqual(['recursos/viejo.pdf']);
+  });
+
+  it('un archivo ajeno no se guarda en el recurso ni se borra el anterior', async () => {
+    const update = jest.fn();
+    const { service, files, deletedFiles } = serviceWith({
+      resource: { findUnique: async () => ({ attachmentKey: 'recursos/viejo.pdf', fileUrl: null }), update },
+    });
+    files.assertCanUse.mockRejectedValueOnce(new ForbiddenException('ajeno'));
+
+    await expect(service.updateResource('r1', { attachmentKey: 'recursos/ajeno.pdf' }, ADMIN)).rejects.toThrow(
+      ForbiddenException,
+    );
+    expect(update).not.toHaveBeenCalled();
+    expect(deletedFiles()).toEqual([]);
+  });
+
+  it('crear un recurso con archivo exige que lo haya subido quien lo crea', async () => {
+    const create = jest.fn(async () => ({ guid: 'r1' }));
+    const { service, files } = serviceWith({ resource: { count: async () => 0, create } });
+
+    await service.createResource('modulo-1', { type: 'PDF', fileUrl: 'recursos/manual.pdf' }, ADMIN);
+
+    expect(files.assertCanUse).toHaveBeenCalledWith('recursos/manual.pdf', null, 'recursos', { uploader: 'admin' });
+    expect(create).toHaveBeenCalled();
   });
 
   it('reordenar ignora identificadores ajenos y repetidos', async () => {

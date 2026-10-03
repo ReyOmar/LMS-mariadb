@@ -24,6 +24,7 @@ import { useConfig } from '@/contexts/ConfigContext';
 import { useCourseLock } from '@/hooks/useCourseLock';
 import type { Course, CourseStatus, QuizConfig, Resource } from '@/types/models';
 import { displayTitle, isQuiz, quizTitleOf } from '@/lib/resources';
+import { COURSE_STATUS_LABEL } from '@/lib/labels';
 import { formatMb, parseLimitMb, uploadLimit } from '@/lib/upload-limits';
 import { CourseInUseAlert } from '@/app/dashboard/course-builder/components/Notices';
 import { QuizEditor } from '@/app/dashboard/course-builder/components/QuizEditor';
@@ -110,7 +111,9 @@ export default function ResourceEditor({
   // Avisa a los demás de que este curso se está editando y lo libera al salir.
   const otherEditor = useCourseLock(courseId);
 
-  const readOnly = courseStatus === 'PUBLISHED';
+  // El servidor sólo admite cambios de contenido con el curso en borrador.
+  const readOnly = courseStatus !== 'DRAFT';
+  const statusLabel = courseStatus ? COURSE_STATUS_LABEL[courseStatus].toLowerCase() : '';
 
   const siteLimitMb = config?.maxFileMb;
   const ceilingMb = config?.uploadCeilingMb;
@@ -123,7 +126,7 @@ export default function ResourceEditor({
   const onSave = async () => {
     if (!resource) return;
     if (readOnly) {
-      showAlert.warning('Curso publicado', 'El curso debe estar en estado Borrador para realizar cambios.');
+      showAlert.warning(`Curso ${statusLabel}`, 'El curso debe estar en estado Borrador para realizar cambios.');
       return;
     }
     const quiz = isQuiz(resource);
@@ -242,7 +245,7 @@ export default function ResourceEditor({
           <div className="bg-amber-500/10 border-b border-amber-500/30 px-6 py-3 flex items-center gap-3">
             <Lock className="h-4 w-4 text-amber-500 flex-shrink-0" />
             <p className="text-sm font-bold text-amber-700 dark:text-amber-400">
-              Este curso está publicado. Cambia a estado Borrador desde el constructor para editar.
+              Este curso está {statusLabel}. Cambia a estado Borrador desde el constructor para editar.
             </p>
           </div>
         )}

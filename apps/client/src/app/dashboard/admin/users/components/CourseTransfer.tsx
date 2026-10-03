@@ -37,8 +37,8 @@ export function CourseTransfer({ transfer, onPickTarget, onCancel, onConfirm }: 
           <p className="text-sm text-muted-foreground">Buscando destinos disponibles…</p>
         ) : targets.length === 0 ? (
           <p className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-700 dark:text-amber-400">
-            No hay ninguna otra cuenta activa de examinador o administrador en esta sede a la que traspasar los cursos.
-            Crea una antes de eliminar esta.
+            No hay ninguna otra cuenta de examinador o administrador en esta sede a la que traspasar los cursos. Crea
+            una antes de eliminar esta.
           </p>
         ) : (
           <label className="block">
@@ -48,6 +48,9 @@ export function CourseTransfer({ transfer, onPickTarget, onCancel, onConfirm }: 
               onChange={(event) => onPickTarget(event.target.value)}
               className="mt-2 h-11 w-full rounded-xl border border-border bg-background px-3 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
             >
+              <option value="" disabled>
+                Elige quién se hará cargo…
+              </option>
               {targets.map((target) => (
                 <option key={target.guid} value={target.guid}>
                   {target.firstName} {target.lastName} · {target.email}

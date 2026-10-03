@@ -25,6 +25,7 @@ import api, { errorMessage } from '@/lib/api';
 import { useAlerts } from '@/contexts/AlertContext';
 import { COURSE_STATUS_LABEL } from '@/lib/labels';
 import { shortDate } from '@/lib/dates';
+import { initials, plural } from '@/lib/text';
 import {
   batchSummary,
   candidateSearch,
@@ -67,26 +68,36 @@ interface EnrolledResponse {
 /** Examinadores que se piden de una vez; el servidor no entrega más por página. */
 const MAX_EXAMINERS = 200;
 
-const GRADIENTS = [
-  'bg-gradient-to-br from-purple-500 to-indigo-600',
-  'bg-gradient-to-br from-emerald-400 to-teal-600',
-  'bg-gradient-to-br from-amber-400 to-orange-500',
-  'bg-gradient-to-br from-pink-500 to-rose-600',
-  'bg-gradient-to-br from-blue-500 to-cyan-600',
-  'bg-gradient-to-br from-fuchsia-500 to-purple-600',
-];
+/** Color del avatar según el rol, el mismo que en la pantalla de cuentas, en tono legible. */
+const AVATAR_TONE = {
+  student: 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400',
+  examiner: 'bg-blue-500/10 text-blue-700 dark:text-blue-400',
+} as const;
 
-/** Mismo nombre, mismo color: el avatar no cambia de una carga a otra. */
-const avatarGradient = (name: string) => {
-  if (!name) return GRADIENTS[0];
-  let sum = 0;
-  for (let i = 0; i < name.length; i++) sum = name.charCodeAt(i) + ((sum << 5) - sum);
-  return GRADIENTS[Math.abs(sum) % GRADIENTS.length];
-};
+/** Iniciales de la persona sobre el color de su rol. */
+function PersonInitials({
+  person,
+  tone,
+}: {
+  person: Pick<Person, 'firstName' | 'lastName'>;
+  tone: keyof typeof AVATAR_TONE;
+}) {
+  return (
+    <div
+      aria-hidden="true"
+      className={`h-10 w-10 shrink-0 rounded-full flex items-center justify-center font-bold text-sm ${AVATAR_TONE[tone]}`}
+    >
+      {initials(person.firstName, person.lastName)}
+    </div>
+  );
+}
 
 const fullName = (person: Person) => `${person.firstName} ${person.lastName}`;
 
-/** El servidor responde 409 cuando el alumno ya está dentro: la lista de candidatos estaba desfasada. */
+/**
+ * El servidor responde 409 cuando la lista de candidatos estaba desfasada: el alumno ya está dentro o
+ * terminó el curso después de cargarla y hay que confirmar que empieza de nuevo.
+ */
 const isAlreadyEnrolled = (error: unknown) => isAxiosError(error) && error.response?.status === 409;
 
 export default function CourseAssignmentPage() {
@@ -289,7 +300,7 @@ export default function CourseAssignmentPage() {
     if (!courseGuid) return;
     if (candidate.certified && !(await confirmRestart([fullName(candidate)]))) return;
     try {
-      await api.post(`/enrollments/${courseGuid}`, { userGuid: candidate.guid });
+      await api.post(`/enrollments/${courseGuid}`, { userGuid: candidate.guid, confirmRestart: candidate.certified });
       notify.success('Estudiante matriculado');
       dropCandidate(candidate.guid);
       void loadEnrollments(courseGuid);
@@ -320,7 +331,7 @@ export default function CourseAssignmentPage() {
     setBatchProgress({ done: 0, total: students.length });
     for (const [index, student] of students.entries()) {
       try {
-        await api.post(`/enrollments/${courseGuid}`, { userGuid: student.guid });
+        await api.post(`/enrollments/${courseGuid}`, { userGuid: student.guid, confirmRestart: student.certified });
         added++;
       } catch (error) {
         failures.push({ name: fullName(student), reason: errorMessage(error, 'No se pudo matricular.') });
@@ -435,11 +446,11 @@ export default function CourseAssignmentPage() {
         >
           <div className="p-5 border-b border-border/50 bg-muted/20">
             <h2 className="font-bold text-lg flex items-center gap-2">
-              <BookOpen className="h-5 w-5 text-primary" /> Directorio de Cursos
+              <BookOpen className="h-5 w-5 text-primary" /> Directorio de cursos
             </h2>
             <p className="text-xs text-muted-foreground mt-1 mb-4">
-              {filteredCourses.length} curso{filteredCourses.length !== 1 && 's'}{' '}
-              {assignmentFilter !== 'all' ? 'encontrados' : 'en total'}
+              {filteredCourses.length} {plural(filteredCourses.length, 'curso', 'cursos')}{' '}
+              {assignmentFilter !== 'all' ? plural(filteredCourses.length, 'encontrado', 'encontrados') : 'en total'}
             </p>
 
             <div className="space-y-3">
@@ -477,7 +488,7 @@ export default function CourseAssignmentPage() {
                   aria-pressed={assignmentFilter === 'unassigned'}
                   className={`flex-1 text-[10px] font-bold py-1.5 px-2 rounded-lg transition-all ${assignmentFilter === 'unassigned' ? 'bg-amber-500/10 text-amber-700 dark:text-amber-400' : 'text-muted-foreground hover:text-foreground'}`}
                 >
-                  Sin Asignar
+                  Sin asignar
                 </button>
               </div>
             </div>
@@ -523,7 +534,7 @@ export default function CourseAssignmentPage() {
                       </span>
                     ) : (
                       <span className="text-[10px] font-bold text-muted-foreground flex items-center gap-1">
-                        Sin Examinador
+                        Sin examinador
                       </span>
                     )}
                   </div>
@@ -594,7 +605,7 @@ export default function CourseAssignmentPage() {
                   <div className="absolute inset-0 flex flex-col animate-in fade-in slide-in-from-left-4 duration-300 overflow-y-auto">
                     {/* Una columna salvo en pantallas muy anchas: en dos no caben los nombres ni los correos. */}
                     <div className="grid grid-cols-1 2xl:grid-cols-2 gap-6 p-4 sm:p-6 min-h-full 2xl:h-full">
-                      {/* Lista de Matriculados */}
+                      {/* Lista de matriculados */}
                       <div className="flex flex-col min-h-[280px] max-h-80 2xl:max-h-none 2xl:h-full bg-background border border-border/50 rounded-2xl overflow-hidden shadow-sm">
                         <div className="p-4 border-b border-border/50 bg-emerald-500/5 flex items-center justify-between">
                           <h3 className="font-bold text-sm flex items-center gap-2">
@@ -620,20 +631,13 @@ export default function CourseAssignmentPage() {
                             </div>
                           ) : (
                             enrolledStudents.map((m) => {
-                              const gradient = avatarGradient(m.firstName);
                               return (
                                 <div
                                   key={m.guid}
                                   className="flex items-center justify-between gap-3 p-3 bg-card border border-border/30 rounded-xl hover:border-red-500/30 hover:shadow-sm transition-all"
                                 >
                                   <div className="flex items-center gap-3 min-w-0">
-                                    <div
-                                      aria-hidden="true"
-                                      className={`h-10 w-10 shrink-0 rounded-full flex items-center justify-center text-white font-bold text-sm shadow-inner ${gradient}`}
-                                    >
-                                      {m.firstName?.charAt(0)}
-                                      {m.lastName?.charAt(0)}
-                                    </div>
+                                    <PersonInitials person={m} tone="student" />
                                     <div className="min-w-0">
                                       <p className="text-sm font-bold truncate">{fullName(m)}</p>
                                       <p className="text-xs text-muted-foreground truncate">{m.email}</p>
@@ -668,7 +672,7 @@ export default function CourseAssignmentPage() {
                         </div>
                       </div>
 
-                      {/* Buscador para Añadir */}
+                      {/* Buscador para añadir */}
                       <div className="flex flex-col min-h-[320px] max-h-[36rem] 2xl:max-h-none 2xl:h-full">
                         <div className="mb-3">
                           <h3 className="font-bold text-sm mb-3 flex items-center gap-2">
@@ -751,7 +755,6 @@ export default function CourseAssignmentPage() {
                             </div>
                           ) : (
                             candidates.map((student) => {
-                              const gradient = avatarGradient(student.firstName);
                               const isSelected = selected.has(student.guid);
                               return (
                                 <div
@@ -768,13 +771,7 @@ export default function CourseAssignmentPage() {
                                       disabled={enrollingBatch}
                                       className="h-4 w-4 shrink-0 accent-[hsl(var(--primary))]"
                                     />
-                                    <div
-                                      aria-hidden="true"
-                                      className={`h-10 w-10 shrink-0 rounded-full flex items-center justify-center text-white font-bold text-sm shadow-inner ${gradient}`}
-                                    >
-                                      {student.firstName.charAt(0)}
-                                      {student.lastName.charAt(0)}
-                                    </div>
+                                    <PersonInitials person={student} tone="student" />
                                     <div className="min-w-0">
                                       <p className="text-sm font-bold truncate">{fullName(student)}</p>
                                       <p className="text-xs text-muted-foreground truncate">{student.email}</p>
@@ -815,11 +812,11 @@ export default function CourseAssignmentPage() {
                 {activeTab === 'teacher' && (
                   <div className="absolute inset-0 flex flex-col animate-in fade-in slide-in-from-right-4 duration-300 overflow-y-auto">
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6 p-4 sm:p-6 min-h-full md:h-full">
-                      {/* Examinador Asignado */}
+                      {/* Examinador asignado */}
                       <div className="flex flex-col min-h-[200px] md:h-full bg-background border border-border/50 rounded-2xl overflow-hidden shadow-sm">
                         <div className="p-4 border-b border-border/50 bg-blue-500/5 flex items-center justify-between">
                           <h3 className="font-bold text-sm flex items-center gap-2">
-                            <Presentation className="h-4 w-4 text-blue-500" /> Examinador Asignado
+                            <Presentation className="h-4 w-4 text-blue-500" /> Examinador asignado
                           </h3>
                           <span className="bg-blue-500/10 text-blue-600 font-bold px-2.5 py-0.5 rounded-full text-xs">
                             {currentTeacher ? 1 : 0}
@@ -830,10 +827,7 @@ export default function CourseAssignmentPage() {
                           {currentTeacher ? (
                             <div className="flex items-center justify-between p-3 bg-card border border-blue-500/20 rounded-xl group hover:border-red-500/30 hover:shadow-sm transition-all">
                               <div className="flex items-center gap-3 overflow-hidden">
-                                <div className="h-10 w-10 shrink-0 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center text-white font-bold text-sm shadow-inner">
-                                  {currentTeacher.firstName.charAt(0)}
-                                  {currentTeacher.lastName.charAt(0)}
-                                </div>
+                                <PersonInitials person={currentTeacher} tone="examiner" />
                                 <div className="truncate">
                                   <p className="text-sm font-bold truncate">
                                     {currentTeacher.firstName} {currentTeacher.lastName}
@@ -863,12 +857,12 @@ export default function CourseAssignmentPage() {
                         </div>
                       </div>
 
-                      {/* Buscar y Asignar Examinador */}
+                      {/* Buscar y asignar examinador */}
                       <div className="flex flex-col h-full">
                         <div className="mb-4">
                           <h3 className="font-bold text-sm mb-3 flex items-center gap-2">
                             <UserPlus className="h-4 w-4 text-primary" />{' '}
-                            {currentTeacher ? 'Reemplazar Examinador' : 'Asignar Examinador'}
+                            {currentTeacher ? 'Reemplazar examinador' : 'Asignar examinador'}
                           </h3>
                           <div className="relative">
                             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-muted-foreground" />
@@ -893,7 +887,6 @@ export default function CourseAssignmentPage() {
                           ) : (
                             filteredTeachers.map((teacher) => {
                               const isAssignedTeacher = selectedCourse.teacherGuid === teacher.guid;
-                              const gradient = avatarGradient(teacher.firstName);
                               return (
                                 <div
                                   key={teacher.guid}
@@ -904,14 +897,7 @@ export default function CourseAssignmentPage() {
                                   }`}
                                 >
                                   <div className="flex items-center gap-3 overflow-hidden">
-                                    <div
-                                      className={`h-10 w-10 shrink-0 rounded-full flex items-center justify-center font-bold text-sm shadow-inner ${
-                                        isAssignedTeacher ? 'bg-blue-500 text-white' : `text-white ${gradient}`
-                                      }`}
-                                    >
-                                      {teacher.firstName.charAt(0)}
-                                      {teacher.lastName.charAt(0)}
-                                    </div>
+                                    <PersonInitials person={teacher} tone="examiner" />
                                     <div className="truncate">
                                       <p className="text-sm font-bold truncate">
                                         {teacher.firstName} {teacher.lastName}

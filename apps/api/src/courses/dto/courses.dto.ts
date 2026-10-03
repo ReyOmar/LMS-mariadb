@@ -14,6 +14,7 @@ import {
   Min,
 } from 'class-validator';
 import { Transform } from 'class-transformer';
+import { StrictBoolean } from '../../common/validation/transforms';
 import { MAX_SCORE, MIN_SCORE } from '../../common/domain/grading';
 import { IsStorageKey } from '../../storage/storage-key.validator';
 
@@ -85,8 +86,7 @@ export class UpdateCourseDto {
   @Max(MAX_SCORE, { message: `La nota de aprobación no puede ser mayor que ${MAX_SCORE}.` })
   passingScore?: number;
 
-  @IsOptional() @IsBoolean() strictOrder?: boolean;
-  @IsOptional() @IsBoolean() issuesCertificate?: boolean;
+  @IsOptional() @StrictBoolean() @IsBoolean() strictOrder?: boolean;
 
   /** Alumnos matriculados a la vez como mucho; `null` lo deja sin límite. */
   @IsOptional()
@@ -119,7 +119,7 @@ export class UpdateModuleDto {
   title?: string;
 
   @IsOptional() @IsString() @MaxLength(1000) description?: string;
-  @IsOptional() @IsBoolean() requiresPrevious?: boolean;
+  @IsOptional() @StrictBoolean() @IsBoolean() requiresPrevious?: boolean;
 }
 
 export class ReorderDto {

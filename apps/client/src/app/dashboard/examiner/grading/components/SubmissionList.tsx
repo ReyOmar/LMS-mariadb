@@ -2,10 +2,12 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { BookCheck, Check, ChevronDown, Download, Edit3, FileText, Loader2, MessageSquare, Star } from 'lucide-react';
+import { useCountry } from '@/contexts/CountryContext';
 import { fileUrlFor } from '@/lib/api';
-import { MAX_SCORE, MIN_SCORE, formatPoints } from '@/lib/grading';
+import { formatNumber } from '@/lib/country';
+import { MAX_SCORE, MIN_SCORE } from '@/lib/grading';
 import type { SubmissionToGrade } from '@/types/models';
-import { isGraded, normalizeTypedScore, type ModuleWithAssignments } from './grouping';
+import { gradingStart, isGraded, normalizeTypedScore, type ModuleWithAssignments } from './grouping';
 import { dateTime } from '@/lib/dates';
 import { initials, plural } from '@/lib/text';
 
@@ -161,8 +163,9 @@ interface RowProps {
 }
 
 function SubmissionRow({ submission, beingGraded, saving, onStart, onCancel, onSave }: RowProps) {
+  const { country } = useCountry();
   const graded = isGraded(submission);
-  const score = submission.score == null ? null : formatPoints(submission.score);
+  const score = submission.score == null ? null : formatNumber(submission.score, country);
   // La API entrega una URL firmada, o `null` si el archivo se purgó al certificar.
   const downloadUrl = fileUrlFor(submission.fileUrl);
   const startButton = useRef<HTMLButtonElement>(null);
@@ -287,8 +290,10 @@ function GradingPanel({
   onCancel: () => void;
   onSave: (score: number, feedback: string) => void;
 }) {
-  const [value, setValue] = useState(submission.score == null ? '' : formatPoints(submission.score));
-  const [feedback, setFeedback] = useState(submission.feedback ?? '');
+  const { country } = useCountry();
+  const [start] = useState(() => gradingStart(submission));
+  const [value, setValue] = useState(start.score);
+  const [feedback, setFeedback] = useState(start.feedback);
 
   const score = Number.parseFloat(value);
   const valid = Number.isFinite(score) && score >= MIN_SCORE && score <= MAX_SCORE;
@@ -322,10 +327,22 @@ function GradingPanel({
           </a>
         ) : (
           <span className="text-sm font-medium text-muted-foreground italic">
-            {submission.filePurged ? 'El archivo se retiró al emitir el certificado.' : 'Sin archivo adjunto'}
+            {submission.filePurged ? 'El archivo de esta entrega ya no está disponible.' : 'Sin archivo adjunto'}
           </span>
         )}
       </div>
+
+      {start.previous && (
+        <div className="mb-6 bg-muted/30 border border-border rounded-xl p-4">
+          <p className="text-xs font-bold text-muted-foreground uppercase tracking-wider mb-1">
+            Calificación anterior
+            {start.previous.score !== null && `: ${formatNumber(start.previous.score, country)} / ${MAX_SCORE}`}
+          </p>
+          {start.previous.feedback && (
+            <p className="text-sm italic text-foreground/80 whitespace-pre-line">{start.previous.feedback}</p>
+          )}
+        </div>
+      )}
 
       <div className="flex flex-col md:flex-row gap-6">
         <div className="w-full md:w-48 shrink-0">

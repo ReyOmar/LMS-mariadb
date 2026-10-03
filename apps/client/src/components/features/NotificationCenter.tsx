@@ -15,6 +15,7 @@ import {
   Inbox,
   ChevronRight,
   Trash2,
+  Award,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { useSession } from '@/contexts/SessionContext';
@@ -40,6 +41,7 @@ const ICON_BY_TYPE: Partial<Record<NotificationType, LucideIcon>> = {
   NEW_ASSESSMENT: Star,
   COURSE_ANNOUNCEMENT: BookOpen,
   GLOBAL_ANNOUNCEMENT: Bell,
+  BADGE_UNLOCKED: Award,
 };
 
 const COLOR_BY_TYPE: Partial<Record<NotificationType, string>> = {
@@ -50,6 +52,7 @@ const COLOR_BY_TYPE: Partial<Record<NotificationType, string>> = {
   NEW_MESSAGE: 'text-primary bg-primary/10',
   COURSE_REACTIVATED: 'text-emerald-500 bg-emerald-500/10',
   INACTIVITY_REMINDER: 'text-amber-500 bg-amber-500/10',
+  BADGE_UNLOCKED: 'text-emerald-500 bg-emerald-500/10',
 };
 
 export function NotificationCenter() {
@@ -59,6 +62,11 @@ export function NotificationCenter() {
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [unread, setUnread] = useState(0);
   const [open, setOpen] = useState(false);
+  /**
+   * Avisos que estaban sin leer al abrir el panel. Abrirlo los marca leídos, pero siguen
+   * resaltados hasta cerrarlo: si no, el resaltado desaparecería antes de poder verlo.
+   */
+  const [highlighted, setHighlighted] = useState<ReadonlySet<number>>(() => new Set());
   // Dónde está la campana al abrir: en pantallas anchas el panel se despliega bajo ella.
   const [anchor, setAnchor] = useState({ top: 0, left: 0 });
   const [loading, setLoading] = useState(false);
@@ -95,6 +103,9 @@ export function NotificationCenter() {
     setUnread((prev) => prev + 1);
   });
 
+  // Leer una conversación marca como leídos los avisos de sus mensajes.
+  useRealtimeEvent('message:read', () => void loadNotifications());
+
   useEffect(() => {
     if (!open) return;
     const onClickOutside = (event: MouseEvent) => {
@@ -127,6 +138,7 @@ export function NotificationCenter() {
     const opening = !open;
     const bell = panelContainer.current?.getBoundingClientRect();
     if (opening && bell) setAnchor({ top: bell.top, left: bell.left });
+    if (opening) setHighlighted(new Set(notifications.filter((item) => !item.read).map((item) => item.id)));
     setOpen(opening);
     if (opening && unread > 0) markAllRead();
   };
@@ -142,6 +154,10 @@ export function NotificationCenter() {
       notify.error('No se pudieron borrar las notificaciones', errorMessage(error));
     }
   };
+
+  const isNew = (notification: Notification) => !notification.read || highlighted.has(notification.id);
+  // Con más avisos sin leer de los que caben en el panel, manda el recuento del servidor.
+  const newCount = Math.max(unread, notifications.filter(isNew).length);
 
   const openNotification = (notification: Notification) => {
     if (!notification.actionUrl) return;
@@ -186,9 +202,9 @@ export function NotificationCenter() {
                 <h3 id={titleId} className="font-bold text-sm">
                   Notificaciones
                 </h3>
-                {unread > 0 && (
+                {newCount > 0 && (
                   <span className="bg-primary/10 text-primary text-[10px] font-bold px-2 py-0.5 rounded-full">
-                    {unread} {plural(unread, 'nueva', 'nuevas')}
+                    {newCount} {plural(newCount, 'nueva', 'nuevas')}
                   </span>
                 )}
               </div>
@@ -233,6 +249,7 @@ export function NotificationCenter() {
                   <NotificationItem
                     key={notification.id}
                     notification={notification}
+                    isNew={isNew(notification)}
                     onOpen={() => openNotification(notification)}
                   />
                 ))
@@ -245,7 +262,15 @@ export function NotificationCenter() {
   );
 }
 
-function NotificationItem({ notification, onOpen }: { notification: Notification; onOpen: () => void }) {
+function NotificationItem({
+  notification,
+  isNew,
+  onOpen,
+}: {
+  notification: Notification;
+  isNew: boolean;
+  onOpen: () => void;
+}) {
   const Icon = ICON_BY_TYPE[notification.type] ?? Bell;
   const colorClass = COLOR_BY_TYPE[notification.type] ?? 'text-muted-foreground bg-muted';
 
@@ -255,7 +280,7 @@ function NotificationItem({ notification, onOpen }: { notification: Notification
       onClick={onOpen}
       disabled={!notification.actionUrl}
       className={`block w-full text-left px-4 py-3.5 border-b border-border/40 cursor-pointer hover:bg-muted/40 transition-all group/item disabled:cursor-default ${
-        !notification.read ? 'bg-primary/[0.03]' : ''
+        isNew ? 'bg-primary/[0.03]' : ''
       }`}
     >
       <div className="flex items-start gap-3">
@@ -264,10 +289,8 @@ function NotificationItem({ notification, onOpen }: { notification: Notification
         </div>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
-            {!notification.read && <div className="w-1.5 h-1.5 rounded-full bg-primary shrink-0 animate-pulse" />}
-            <p className={`text-sm truncate ${!notification.read ? 'font-bold' : 'font-medium'}`}>
-              {notification.title}
-            </p>
+            {isNew && <div className="w-1.5 h-1.5 rounded-full bg-primary shrink-0 animate-pulse" />}
+            <p className={`text-sm truncate ${isNew ? 'font-bold' : 'font-medium'}`}>{notification.title}</p>
           </div>
           <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2 leading-relaxed">{notification.message}</p>
           <p className="text-[10px] text-muted-foreground/70 mt-1.5 font-medium">{timeAgo(notification.createdAt)}</p>

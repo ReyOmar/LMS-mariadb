@@ -1,5 +1,5 @@
 import type { SubmissionToGrade } from '@/types/models';
-import { toScore } from '@/lib/grading';
+import { averageScore, toScore } from '@/lib/grading';
 import { COLOR, type Slice, type RangeBucket } from '@/components/ui/charts';
 
 /**
@@ -132,7 +132,7 @@ interface QuizWithStudents {
   key: string;
   assignmentTitle: string;
   students: StudentWithAttempts[];
-  average: string;
+  average: number;
 }
 
 interface ModuleWithQuizzes {
@@ -140,12 +140,12 @@ interface ModuleWithQuizzes {
   key: string;
   moduleTitle: string;
   assignments: QuizWithStudents[];
-  average: string;
+  average: number;
 }
 
-function averageOf(scores: number[]): string {
-  if (scores.length === 0) return '0.0';
-  return (scores.reduce((sum, n) => sum + n, 0) / scores.length).toFixed(1);
+/** Media de las notas, o 0 si todavía no hay ninguna. */
+function averageOf(scores: number[]): number {
+  return averageScore(scores) ?? 0;
 }
 
 /**

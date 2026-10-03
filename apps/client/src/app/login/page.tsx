@@ -4,8 +4,8 @@ import { FormEvent, Suspense, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { CheckCircle2, Eye, EyeOff, GraduationCap, Home, Lock, Mail, ShieldCheck, User } from 'lucide-react';
-import api, { errorMessage, fileUrlFor, type LogoutReason } from '@/lib/api';
-import { COUNTRY_INFO } from '@/lib/country';
+import api, { errorMessage, fileUrlFor, isLogoutReason, loginUrl, safeNextPath, type LogoutReason } from '@/lib/api';
+import { COUNTRY_INFO, isCountry } from '@/lib/country';
 import { PASSWORD_HINT, passwordProblem } from '@/lib/password';
 import { CountryFlag } from '@/components/ui/CountryFlag';
 import { CountrySwitcher } from '@/components/features/CountrySwitcher';
@@ -26,8 +26,6 @@ interface LoginResponse {
   user: SessionUser | { email: string; firstName: string };
 }
 
-const VALID_REASONS: LogoutReason[] = ['expired', 'revoked', 'displaced'];
-
 export default function LoginPage() {
   return (
     <Suspense
@@ -45,12 +43,16 @@ export default function LoginPage() {
 function LoginContent() {
   const router = useRouter();
   const params = useSearchParams();
-  const { country, ready: countryReady } = useCountry();
+  const { country, ready: countryReady, selectCountry } = useCountry();
   const { login } = useSession();
   const { config } = useConfig();
 
   const [view, setView] = useState<View>('login');
   const [logoutReason, setLogoutReason] = useState<LogoutReason | null>(null);
+  /** Página a la que volver tras entrar, como la de un enlace de correo abierto sin sesión. */
+  const [next] = useState(() => safeNextPath(params?.get('next')));
+  /** Con el correo ya verificado, la solicitud queda atada a la sede en la que se empezó. */
+  const [requestEmailVerified, setRequestEmailVerified] = useState(false);
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -63,19 +65,26 @@ function LoginContent() {
   /** Explicación del servidor de por qué hay que crear la contraseña antes de entrar. */
   const [setupMessage, setSetupMessage] = useState('');
 
-  // Motivo por el que el usuario llegó aquí sin pedirlo. Se limpia de la URL para que al
-  // recargar no vuelva a aparecer el mismo mensaje.
+  // Lo que llega por la URL: el motivo por el que el usuario acabó aquí sin pedirlo y la
+  // sede de su cuenta, que trae el enlace del correo de bienvenida. Se limpia de la URL para
+  // que al recargar no vuelva a aparecer el mismo aviso.
   useEffect(() => {
+    if (!countryReady) return;
     const reason = params?.get('reason');
-    if (!reason || !VALID_REASONS.includes(reason as LogoutReason)) return;
+    const site = params?.get('sede');
+    if (!isLogoutReason(reason) && !isCountry(site)) return;
 
-    setLogoutReason(reason as LogoutReason);
-    setView('notice');
-    window.history.replaceState({}, '', '/login');
-  }, [params]);
+    if (isCountry(site)) selectCountry(site);
+    if (isLogoutReason(reason)) {
+      setLogoutReason(reason);
+      setView('notice');
+    }
+    window.history.replaceState({}, '', loginUrl(undefined, next));
+  }, [params, countryReady, selectCountry, next]);
 
   const backToLogin = () => {
     setView('login');
+    setRequestEmailVerified(false);
     setError('');
     setSetupMessage('');
     setPassword('');
@@ -134,7 +143,7 @@ function LoginContent() {
     }
     login(response.token, response.user as SessionUser);
     setLoggingIn(true);
-    router.push('/dashboard');
+    router.push(next ?? '/dashboard');
   };
 
   if (!countryReady) {
@@ -158,6 +167,8 @@ function LoginContent() {
   const logo = fileUrlFor(config?.logoUrl);
   // El mensaje de bienvenida lo escribe cada sede desde «Tema y apariencia».
   const description = (view === 'login' && config?.welcomeMessage?.trim()) || DESCRIPTIONS[view];
+  // El aviso de sesión y la confirmación de la solicitud traen su propio icono.
+  const headerIcon = view !== 'notice' && view !== 'request-sent';
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-muted/30 p-4 relative overflow-hidden">
@@ -175,13 +186,15 @@ function LoginContent() {
           {logo && view === 'login' ? (
             <img src={logo} alt="" className="max-h-20 max-w-[200px] object-contain" />
           ) : (
-            <div className="h-14 w-14 rounded-2xl bg-primary/10 flex items-center justify-center ring-1 ring-primary/20">
-              {view === 'first-password' ? (
-                <ShieldCheck className="h-7 w-7 text-primary" />
-              ) : (
-                <GraduationCap className="h-7 w-7 text-primary" />
-              )}
-            </div>
+            headerIcon && (
+              <div className="h-14 w-14 rounded-2xl bg-primary/10 flex items-center justify-center ring-1 ring-primary/20">
+                {view === 'first-password' ? (
+                  <ShieldCheck className="h-7 w-7 text-primary" />
+                ) : (
+                  <GraduationCap className="h-7 w-7 text-primary" />
+                )}
+              </div>
+            )
           )}
 
           <div>
@@ -192,16 +205,20 @@ function LoginContent() {
 
         {/* Recordatorio de sede. Entrar en la equivocada es el error más probable y el
             mensaje de rechazo no puede decir en cuál está la cuenta, así que se avisa
-            antes; el cambio se ofrece aquí mismo para no obligar a volver a la portada. */}
-        <div className="mb-6 flex items-center gap-3 rounded-xl border border-border bg-muted/40 px-3 py-2">
-          <CountryFlag country={country} size="sm" />
-          <p className="flex-1 text-xs leading-snug text-muted-foreground">
-            {view === 'request' ? 'Solicitas acceso a la sede de ' : 'Entrando en la sede de '}
-            <strong className="text-foreground">{COUNTRY_INFO[country].name}</strong>.{' '}
-            {view === 'request' ? 'Tu cuenta pertenecerá sólo a ella.' : 'Tu cuenta pertenece a una sola.'}
-          </p>
-          <CountrySwitcher />
-        </div>
+            antes; el cambio se ofrece aquí mismo para no obligar a volver a la portada.
+            Al completar la solicitud ya no se ofrece: la sede quedó elegida al verificar
+            el correo. */}
+        {!(view === 'request' && requestEmailVerified) && (
+          <div className="mb-6 flex items-center gap-3 rounded-xl border border-border bg-muted/40 px-3 py-2">
+            <CountryFlag country={country} size="sm" />
+            <p className="flex-1 text-xs leading-snug text-muted-foreground">
+              {view === 'request' ? 'Solicitas acceso a la sede de ' : 'Entrando en la sede de '}
+              <strong className="text-foreground">{COUNTRY_INFO[country].name}</strong>.{' '}
+              {view === 'request' ? 'Tu cuenta pertenecerá sólo a ella.' : 'Tu cuenta pertenece a una sola.'}
+            </p>
+            <CountrySwitcher />
+          </div>
+        )}
 
         {error && (
           <p
@@ -325,7 +342,12 @@ function LoginContent() {
         )}
 
         {view === 'request' && (
-          <AccessRequestForm country={country} onCancel={backToLogin} onSubmitted={() => setView('request-sent')} />
+          <AccessRequestForm
+            country={country}
+            onEmailVerified={() => setRequestEmailVerified(true)}
+            onCancel={backToLogin}
+            onSubmitted={() => setView('request-sent')}
+          />
         )}
 
         {view === 'request-sent' && (

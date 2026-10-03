@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import {
   AlertTriangle,
   CheckCircle,
@@ -13,8 +13,10 @@ import {
   XCircle,
 } from 'lucide-react';
 import api, { errorMessage, fileUrlFor } from '@/lib/api';
-import { formatPoints, MAX_SCORE } from '@/lib/grading';
+import { MAX_SCORE, toScore } from '@/lib/grading';
+import { formatNumber } from '@/lib/country';
 import { useAlerts } from '@/contexts/AlertContext';
+import { useCountry } from '@/contexts/CountryContext';
 import { useDialog } from '@/hooks/useDialog';
 import { sanitizeHTML } from '@/lib/sanitize';
 import { externalUrl } from '@/lib/resources';
@@ -57,6 +59,11 @@ interface QuizViewerProps {
   /** Se invoca al cerrar el intento; `passed` decide si el curso puede continuar. */
   onFinish: (passed: boolean) => void;
   onQuizStateChange?: (inProgress: boolean) => void;
+  /**
+   * Recibe los rechazos de la API para que el curso decida si el alumno sigue teniendo
+   * acceso (baja, mantenimiento). Devuelve si se ha hecho cargo; si no, avisa el visor.
+   */
+  onAccessError?: (error: unknown, title: string) => boolean;
 }
 
 export default function QuizViewer({
@@ -68,8 +75,25 @@ export default function QuizViewer({
   attachmentName,
   onFinish,
   onQuizStateChange,
+  onAccessError,
 }: QuizViewerProps) {
   const { showAlert } = useAlerts();
+  const { country } = useCountry();
+
+  // Se lee desde la carga inicial, que no debe repetirse porque el curso cambie la función.
+  const onAccessErrorRef = useRef(onAccessError);
+  onAccessErrorRef.current = onAccessError;
+
+  /** Avisa de un error, salvo que sea de acceso: de eso se encarga el curso. */
+  const report = (title: string, failure: unknown) => {
+    if (!onAccessErrorRef.current?.(failure, title)) showAlert.error(title, errorMessage(failure));
+  };
+
+  /** Nota como se escribe en la sede (83,2 en Colombia); «—» si no hay. */
+  const points = (score: unknown) => {
+    const value = toScore(score);
+    return value === null ? '—' : formatNumber(value, country);
+  };
 
   const [status, setStatus] = useState<QuizState | null>(null);
   const [questions, setQuestions] = useState<QuizQuestion[]>([]);
@@ -97,7 +121,9 @@ export default function QuizViewer({
       setStatus(data);
       return data;
     } catch (failure) {
-      setError(errorMessage(failure, 'No se pudo cargar el cuestionario.'));
+      if (!onAccessErrorRef.current?.(failure, 'No se pudo abrir el cuestionario')) {
+        setError(errorMessage(failure, 'No se pudo cargar el cuestionario.'));
+      }
       return null;
     } finally {
       setLoading(false);
@@ -130,7 +156,9 @@ export default function QuizViewer({
       if (saved) setAnswers(saved);
       adjustTimer(data.startedAt, data.timeLimitMinutes || state.timeLimitMinutes);
     } catch (failure) {
-      setError(errorMessage(failure, 'No se pudo retomar el intento.'));
+      if (!onAccessErrorRef.current?.(failure, 'No se pudo retomar el intento')) {
+        setError(errorMessage(failure, 'No se pudo retomar el intento.'));
+      }
     }
   };
 
@@ -180,7 +208,7 @@ export default function QuizViewer({
       adjustTimer(data.startedAt, data.timeLimitMinutes);
       onQuizStateChange?.(true);
     } catch (failure) {
-      showAlert.error('No se pudo comenzar', errorMessage(failure));
+      report('No se pudo comenzar', failure);
     } finally {
       setStarting(false);
     }
@@ -197,7 +225,7 @@ export default function QuizViewer({
       setRemainingSeconds(null);
       clearQuizDraft(resourceGuid);
     } catch (failure) {
-      showAlert.error('No se pudo enviar', errorMessage(failure));
+      report('No se pudo enviar', failure);
     } finally {
       setSubmitting(false);
     }
@@ -253,7 +281,7 @@ export default function QuizViewer({
         <p className="text-muted-foreground text-lg max-w-sm">
           Lo superaste con{' '}
           <strong className="text-emerald-700 dark:text-emerald-400">
-            {formatPoints(status.bestScore)} / {MAX_SCORE}
+            {points(status.bestScore)} / {MAX_SCORE}
           </strong>
           .
         </p>
@@ -366,7 +394,7 @@ export default function QuizViewer({
                 <Field
                   icon={Trophy}
                   color="text-emerald-500"
-                  value={`${formatPoints(status.passingScore)} pts`}
+                  value={`${points(status.passingScore)} pts`}
                   label="Para aprobar"
                 />
                 <Field
@@ -379,12 +407,7 @@ export default function QuizViewer({
                   }
                   label="Intentos usados"
                 />
-                <Field
-                  icon={CheckCircle}
-                  color="text-primary"
-                  value={status.bestScore === null ? '—' : formatPoints(status.bestScore)}
-                  label="Mejor nota"
-                />
+                <Field icon={CheckCircle} color="text-primary" value={points(status.bestScore)} label="Mejor nota" />
               </div>
 
               {status.blockedReason ? (
@@ -525,7 +548,7 @@ export default function QuizViewer({
             </div>
 
             <p className="font-black text-6xl mb-4 tracking-tighter">
-              {formatPoints(result.score)}
+              {points(result.score)}
               <span className="text-2xl text-muted-foreground font-bold tracking-normal"> / {MAX_SCORE}</span>
             </p>
             <p
@@ -556,7 +579,7 @@ export default function QuizViewer({
 
             {!result.passed && (
               <p className="mb-6 text-sm text-muted-foreground leading-relaxed">
-                Necesitas {formatPoints(status.passingScore)} puntos. Repasa el módulo y vuelve a intentarlo.
+                Necesitas {points(status.passingScore)} puntos. Repasa el módulo y vuelve a intentarlo.
               </p>
             )}
 

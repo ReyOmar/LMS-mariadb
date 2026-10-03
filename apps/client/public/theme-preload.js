@@ -14,9 +14,9 @@
 (function () {
   try {
     // Marca de cada sede para la primera visita, cuando todavía no hay configuración en
-    // caché. Son los colores que cada sede tiene en «Tema y apariencia»: la API no guarda
-    // uno de serie por sede (el de `CountrySettings` en apps/api/prisma/schema.prisma es
-    // común), así que si una sede cambia su marca hay que actualizarlos aquí.
+    // caché. Son los colores con que la API crea cada sede (`primaryColor` de
+    // `COUNTRY_METADATA` en apps/api/src/common/domain/country.ts): si cambian allí, van
+    // también aquí.
     var BRANDS = { COLOMBIA: { primaryColor: '#0F766E' }, MEXICO: { primaryColor: '#1f2937' } };
 
     // Misma regla que `savedCountry()` en `src/lib/country.ts`: sin elección guardada se

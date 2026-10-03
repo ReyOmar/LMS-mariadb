@@ -26,6 +26,8 @@ export const REALTIME_EVENTS = [
   'presence:sync',
   'notification:new',
   'message:new',
+  'message:read',
+  'contact:updated',
   'certificate:new',
 ] as const;
 
@@ -43,4 +45,18 @@ export interface CourseEditor {
   guid: string;
   name: string;
   role: UserRole;
+}
+
+/**
+ * Clave con la que se agrupan las ráfagas de un evento antes de repartirlo: el evento y,
+ * si el aviso es de un curso, el curso.
+ *
+ * Agrupando sólo por evento, la baja de un alumno en un curso y su alta en otro se
+ * fundirían en un único aviso —el último— y la pantalla del primer curso no se enteraría
+ * de la baja.
+ */
+export function batchKey(event: RealtimeEvent, data: unknown): string {
+  const payload = data as { courseGuid?: unknown; guid?: unknown } | null | undefined;
+  const course = payload?.courseGuid ?? (event.startsWith('course:') ? payload?.guid : undefined);
+  return typeof course === 'string' ? `${event}:${course}` : event;
 }

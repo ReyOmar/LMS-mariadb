@@ -1,5 +1,5 @@
 import type { SubmissionToGrade } from '@/types/models';
-import { MAX_SCORE } from '@/lib/grading';
+import { MAX_SCORE, formatPoints } from '@/lib/grading';
 import { COLOR, type Slice, type RangeBucket } from '@/components/ui/charts';
 
 /**
@@ -141,6 +141,33 @@ export function normalizeTypedScore(value: string): string {
   if (decimal !== undefined && decimal.length > 1) return `${integerPart}.${decimal.slice(0, 1)}`;
 
   return cleaned;
+}
+
+/**
+ * Con qué se abre el panel de calificación.
+ *
+ * Al corregir una nota ya puesta se parte de ella. Una entrega por calificar —también la
+ * versión corregida de una que suspendió— empieza vacía: la nota y el comentario anteriores
+ * sólo se enseñan como referencia, para no volver a enviar por descuido los del suspenso.
+ */
+export function gradingStart(submission: Pick<SubmissionToGrade, 'status' | 'score' | 'feedback'>): {
+  score: string;
+  feedback: string;
+  previous: { score: number | null; feedback: string | null } | null;
+} {
+  if (isGraded(submission)) {
+    return {
+      score: submission.score == null ? '' : formatPoints(submission.score),
+      feedback: submission.feedback ?? '',
+      previous: null,
+    };
+  }
+  const hasPrevious = submission.score != null || Boolean(submission.feedback);
+  return {
+    score: '',
+    feedback: '',
+    previous: hasPrevious ? { score: submission.score ?? null, feedback: submission.feedback || null } : null,
+  };
 }
 
 /** Porcentaje de avance de la corrección, para la barra de la tarjeta de curso. */

@@ -3,6 +3,7 @@ import { CourseStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { Country } from '../common/domain/country';
 import { JwtPayload } from '../common/interfaces/jwt-payload.interface';
+import { isResourceUnlocked, waitedTooLong } from './progression';
 
 /** Datos mínimos de un curso para decidir si alguien puede verlo o tocarlo. */
 export interface CourseAccessInfo {
@@ -21,6 +22,7 @@ export interface CourseAccessInfo {
  *  2. ¿Lo gestiono yo?
  *  3. ¿Estoy matriculado en él?
  *  4. ¿A qué curso pertenece este módulo, recurso o entrega?
+ *  5. ¿Le toca ya al alumno este recurso, si el curso exige orden?
  *
  * Un recurso de otra sede responde «no encontrado» y no «no autorizado»: para un usuario
  * de Colombia, los cursos de México no existen.
@@ -118,6 +120,62 @@ export class CourseAccessService {
       throw new ForbiddenException('Este curso está en mantenimiento. Podrás continuar cuando vuelva a publicarse.');
     }
     return course;
+  }
+
+  /**
+   * Acceso para hacer el trabajo del alumno sobre un recurso: presentar un cuestionario,
+   * entregar una tarea o darlo por leído. El personal consulta el contenido, pero no lo
+   * presenta: su intento o su entrega no serían de nadie matriculado.
+   */
+  async studentResourceAccess(resourceGuid: string, user: JwtPayload): Promise<CourseAccessInfo> {
+    if (user.role !== 'STUDENT') {
+      throw new ForbiddenException('Sólo los estudiantes matriculados pueden realizar las actividades del curso.');
+    }
+    return this.ensureResourceAccess(resourceGuid, user);
+  }
+
+  /**
+   * Como `studentResourceAccess` y, si el curso tiene orden estricto, con el recurso ya
+   * desbloqueado: los anteriores completados según la regla del visor (`progression.ts`).
+   */
+  async unlockedResourceAccess(resourceGuid: string, user: JwtPayload): Promise<CourseAccessInfo> {
+    const course = await this.studentResourceAccess(resourceGuid, user);
+    await this.ensureUnlocked(course.guid, resourceGuid, user.sub);
+    return course;
+  }
+
+  private async ensureUnlocked(courseGuid: string, resourceGuid: string, userGuid: string): Promise<void> {
+    const course = await this.prisma.course.findUnique({
+      where: { guid: courseGuid },
+      select: {
+        strictOrder: true,
+        modules: {
+          orderBy: { position: 'asc' },
+          select: { resources: { orderBy: { position: 'asc' }, select: { guid: true } } },
+        },
+      },
+    });
+    if (!course?.strictOrder) return;
+
+    const guids = course.modules.flatMap((module) => module.resources.map((resource) => resource.guid));
+    const [progress, pending] = await Promise.all([
+      this.prisma.resourceProgress.findMany({
+        where: { userGuid, resourceGuid: { in: guids } },
+        select: { resourceGuid: true },
+      }),
+      this.prisma.submission.findMany({
+        where: { userGuid, assignmentGuid: { in: guids }, status: { in: ['SUBMITTED', 'IN_REVIEW'] } },
+        select: { assignmentGuid: true, submittedAt: true },
+      }),
+    ]);
+
+    const completed = new Set([
+      ...progress.map((row) => row.resourceGuid),
+      ...pending.flatMap((row) => (row.assignmentGuid && waitedTooLong(row.submittedAt) ? [row.assignmentGuid] : [])),
+    ]);
+    if (!isResourceUnlocked(course.modules, resourceGuid, completed)) {
+      throw new BadRequestException('Este recurso aún está bloqueado: completa primero los anteriores del curso.');
+    }
   }
 
   /**

@@ -1,5 +1,6 @@
 import {
   BROWSER_STORAGE,
+  asksForConsentOn,
   STORAGE_NOTICE,
   collectionNotice,
   dataControllerFrom,
@@ -250,5 +251,27 @@ describe('legalVersionLabel', () => {
 
   it('la versión publicada por una sede lleva también la hora, porque puede haber varias en un día', () => {
     expect(legalVersionLabel('2026-10-02T15:04:05.678Z')).toMatch(/de octubre de 2026, \d{2}:\d{2}$/);
+  });
+});
+
+/**
+ * Dónde se pide aceptar la política vigente. La página legal tiene que poder leerse antes de
+ * aceptar, y la verificación de certificados es de terceros.
+ */
+describe('asksForConsentOn', () => {
+  it('no tapa la página legal ni la verificación de certificados', () => {
+    expect(asksForConsentOn('/legal')).toBe(false);
+    expect(asksForConsentOn('/verify')).toBe(false);
+    expect(asksForConsentOn('/verify/ABC-123')).toBe(false);
+  });
+
+  it('la pide en el resto del campus', () => {
+    expect(asksForConsentOn('/dashboard')).toBe(true);
+    expect(asksForConsentOn('/courses/abc')).toBe(true);
+    expect(asksForConsentOn('/')).toBe(true);
+  });
+
+  it('no se deja engañar por una ruta que sólo empieza igual', () => {
+    expect(asksForConsentOn('/legalidad')).toBe(true);
   });
 });

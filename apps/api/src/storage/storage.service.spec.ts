@@ -8,14 +8,33 @@ import { S3Client } from '@aws-sdk/client-s3';
 import { StorageService } from './storage.service';
 import { isPublicKey, isStorageKey } from './folders';
 
+const UPLOADER = { sub: 'profe-1', country: 'COLOMBIA' as const };
+
+/** Registro de subidas en memoria, en lugar de la tabla `lms_archivos`. */
+function fakeRegistry() {
+  const rows = new Map<string, Record<string, unknown>>();
+  return {
+    rows,
+    storedFile: {
+      create: jest.fn(async ({ data }: { data: { key: string } }) => {
+        rows.set(data.key, data);
+        return data;
+      }),
+      deleteMany: jest.fn(async ({ where }: { where: { key: string } }) => ({ count: rows.delete(where.key) ? 1 : 0 })),
+    },
+  };
+}
+
 /** Configuración mínima: sin R2, para que el servicio use el disco local. */
-function createService(values: Record<string, string> = {}): StorageService {
+function createService(values: Record<string, string> = {}, prisma = fakeRegistry()): StorageService {
   const config = {
     get: (key: string) => ({ JWT_SECRET: 'secreto-de-pruebas-suficientemente-largo', ...values })[key],
   } as unknown as ConfigService;
 
-  return new StorageService(config);
+  return new StorageService(config, prisma as never);
 }
+
+const UPLOADS = path.resolve(__dirname, '..', '..', 'uploads');
 
 describe('StorageService', () => {
   describe('clasificación de archivos', () => {
@@ -76,6 +95,24 @@ describe('StorageService', () => {
       expect(url).toContain('/api/storage/download/entregas/tarea.pdf');
       expect(url).toMatch(/exp=\d+/);
       expect(url).toMatch(/sig=[0-9a-f]{64}/);
+    });
+
+    it('lleva el nombre original para la descarga, fuera de la firma', () => {
+      const service = createService();
+      const url = service.downloadUrl('entregas/1789941375380-b13c4b5df175.pdf', 'Informe final (versión 2).pdf');
+      const query = new URLSearchParams(url.split('?')[1]);
+
+      expect(query.get('originalName')).toBe('Informe final (versión 2).pdf');
+      expect(
+        service.isValidSignature(
+          'entregas/1789941375380-b13c4b5df175.pdf',
+          query.get('exp') ?? undefined,
+          query.get('sig') ?? undefined,
+        ),
+      ).toBe(true);
+      expect(service.downloadUrl('logos/marca.png', 'Logo sede.png')).toBe(
+        '/api/storage/download/logos/marca.png?originalName=Logo%20sede.png',
+      );
     });
   });
 
@@ -156,27 +193,31 @@ describe('StorageService', () => {
 
     it('rechaza una extensión no admitida', async () => {
       const filePath = asTempFile(pdf);
-      await expect(service.uploadFromDisk(filePath, 'programa.exe', 'recursos')).rejects.toThrow(BadRequestException);
+      await expect(service.uploadFromDisk(filePath, 'programa.exe', 'recursos', UPLOADER)).rejects.toThrow(
+        BadRequestException,
+      );
     });
 
     it('rechaza un archivo cuyo contenido no corresponde a su extensión', async () => {
       // Un ejecutable renombrado a .pdf: la extensión pasa, la firma del archivo no.
       const filePath = asTempFile(Buffer.concat([Buffer.from([0x4d, 0x5a]), Buffer.alloc(100)]));
 
-      await expect(service.uploadFromDisk(filePath, 'informe.pdf', 'recursos')).rejects.toThrow(/no corresponde/);
+      await expect(service.uploadFromDisk(filePath, 'informe.pdf', 'recursos', UPLOADER)).rejects.toThrow(
+        /no corresponde/,
+      );
     });
 
     it('rechaza un archivo que supera el límite indicado y dice cuál es', async () => {
       const filePath = asTempFile(Buffer.concat([pdf, Buffer.alloc(2 * 1024 * 1024)]));
 
-      await expect(service.uploadFromDisk(filePath, 'informe.pdf', 'entregas', 1024 * 1024)).rejects.toThrow(
+      await expect(service.uploadFromDisk(filePath, 'informe.pdf', 'entregas', UPLOADER, 1024 * 1024)).rejects.toThrow(
         new PayloadTooLargeException('El archivo supera el límite de 1 MB de esta tarea.'),
       );
     });
 
     it('acepta un archivo que mide exactamente el límite', async () => {
       const filePath = asTempFile(Buffer.concat([pdf, Buffer.alloc(1024 * 1024 - pdf.length)]));
-      const key = await service.uploadFromDisk(filePath, 'informe.pdf', 'entregas', 1024 * 1024);
+      const key = await service.uploadFromDisk(filePath, 'informe.pdf', 'entregas', UPLOADER, 1024 * 1024);
 
       storedKeys.push(key);
       expect(fs.statSync(path.resolve(__dirname, '..', '..', 'uploads', key)).size).toBe(1024 * 1024);
@@ -185,9 +226,9 @@ describe('StorageService', () => {
     it('mantiene el tope fijo de las imágenes aunque se pida uno mayor', async () => {
       const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47]), Buffer.alloc(3 * 1024 * 1024)]);
 
-      await expect(service.uploadFromDisk(asTempFile(png), 'firma.png', 'firmas', 50 * 1024 * 1024)).rejects.toThrow(
-        'La imagen supera el límite de 2 MB.',
-      );
+      await expect(
+        service.uploadFromDisk(asTempFile(png), 'firma.png', 'firmas', UPLOADER, 50 * 1024 * 1024),
+      ).rejects.toThrow('La imagen supera el límite de 2 MB.');
     });
 
     // Las carpetas públicas se sirven sin firma: si admitieran cualquier formato, serían un
@@ -195,7 +236,9 @@ describe('StorageService', () => {
     it('no acepta un documento en una carpeta pública de imágenes', async () => {
       const filePath = asTempFile(pdf);
 
-      await expect(service.uploadFromDisk(filePath, 'foto.pdf', 'avatars')).rejects.toThrow(/sólo se admiten imágenes/);
+      await expect(service.uploadFromDisk(filePath, 'foto.pdf', 'avatars', UPLOADER)).rejects.toThrow(
+        /sólo se admiten imágenes/,
+      );
     });
 
     it('no acepta una firma que el certificado no sabría imprimir', async () => {
@@ -203,7 +246,7 @@ describe('StorageService', () => {
       const webp = Buffer.concat([Buffer.from([0x52, 0x49, 0x46, 0x46]), Buffer.alloc(100)]);
       const filePath = asTempFile(webp);
 
-      await expect(service.uploadFromDisk(filePath, 'firma.webp', 'firmas')).rejects.toThrow(
+      await expect(service.uploadFromDisk(filePath, 'firma.webp', 'firmas', UPLOADER)).rejects.toThrow(
         /sólo se admiten imágenes/,
       );
     });
@@ -211,7 +254,7 @@ describe('StorageService', () => {
     it('acepta una imagen en una carpeta de imágenes', async () => {
       const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47]), Buffer.alloc(100)]);
       const filePath = asTempFile(png);
-      const key = await service.uploadFromDisk(filePath, 'foto.png', 'avatars');
+      const key = await service.uploadFromDisk(filePath, 'foto.png', 'avatars', UPLOADER);
 
       expect(key).toMatch(/^avatars\/.+\.png$/);
       storedKeys.push(key);
@@ -219,17 +262,155 @@ describe('StorageService', () => {
 
     it('acepta un archivo válido y le da una clave dentro de su carpeta', async () => {
       const filePath = asTempFile(pdf);
-      const key = await service.uploadFromDisk(filePath, 'informe.pdf', 'entregas');
+      const key = await service.uploadFromDisk(filePath, 'informe.pdf', 'entregas', UPLOADER);
 
       expect(key).toMatch(/^entregas\/\d+-[0-9a-f]{12}\.pdf$/);
       storedKeys.push(key);
     });
 
     it('guarda en apps/api/uploads, se lance el proceso desde donde se lance', async () => {
-      const key = await service.uploadFromDisk(asTempFile(pdf), 'informe.pdf', 'entregas');
+      const key = await service.uploadFromDisk(asTempFile(pdf), 'informe.pdf', 'entregas', UPLOADER);
       storedKeys.push(key);
 
       expect(fs.existsSync(path.resolve(__dirname, '..', '..', 'uploads', key))).toBe(true);
+    });
+  });
+
+  describe('registro de subidas', () => {
+    const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47]), Buffer.alloc(100)]);
+    let tempFile: string;
+
+    beforeEach(() => {
+      tempFile = path.join(os.tmpdir(), `prueba-${crypto.randomUUID()}`);
+      fs.writeFileSync(tempFile, png);
+    });
+    afterEach(() => fs.rmSync(tempFile, { force: true }));
+
+    it('anota cada subida con su carpeta, quién la subió y su sede', async () => {
+      const registry = fakeRegistry();
+      const service = createService({}, registry);
+
+      const key = await service.uploadFromDisk(tempFile, 'portada.png', 'portadas', UPLOADER);
+
+      expect(registry.rows.get(key)).toEqual({ key, folder: 'portadas', uploaderGuid: 'profe-1', country: 'COLOMBIA' });
+      await service.deleteFile(key);
+      expect(registry.rows.has(key)).toBe(false);
+    });
+
+    it('si no se puede anotar, retira el archivo: nadie podría usarlo', async () => {
+      const registry = fakeRegistry();
+      registry.storedFile.create.mockRejectedValueOnce(new Error('la base no responde'));
+      const service = createService({}, registry);
+      jest.spyOn(service['logger'], 'log').mockImplementation(() => undefined);
+
+      await expect(service.uploadFromDisk(tempFile, 'portada.png', 'portadas', UPLOADER)).rejects.toThrow(
+        'la base no responde',
+      );
+      const [{ where }] = registry.storedFile.deleteMany.mock.calls[0];
+      expect(fs.existsSync(path.join(UPLOADS, where.key))).toBe(false);
+    });
+  });
+
+  describe('contenido que no corresponde a la extensión', () => {
+    const service = createService();
+    const storedKeys: string[] = [];
+    const tempFiles: string[] = [];
+
+    function upload(content: Buffer, name: string, folder: 'recursos' | 'entregas' = 'recursos') {
+      const filePath = path.join(os.tmpdir(), `prueba-${crypto.randomUUID()}`);
+      fs.writeFileSync(filePath, content);
+      tempFiles.push(filePath);
+      return service.uploadFromDisk(filePath, name, folder, UPLOADER).then((key) => {
+        storedKeys.push(key);
+        return key;
+      });
+    }
+
+    afterAll(async () => {
+      for (const filePath of tempFiles) fs.rmSync(filePath, { force: true });
+      await service.deleteFiles(storedKeys);
+    });
+
+    const executable = Buffer.concat([Buffer.from([0x4d, 0x5a, 0x90, 0x00]), Buffer.alloc(100)]);
+    const ole2 = Buffer.concat([Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]), Buffer.alloc(100)]);
+    const rar = Buffer.concat([Buffer.from('Rar!\x1a\x07\x01\x00', 'latin1'), Buffer.alloc(100)]);
+    const mp4 = Buffer.concat([Buffer.from([0x00, 0x00, 0x00, 0x20]), Buffer.from('ftypisom'), Buffer.alloc(100)]);
+
+    it.each(['.doc', '.xls', '.ppt', '.rar', '.mp4', '.txt', '.csv'])(
+      'rechaza un ejecutable renombrado a %s',
+      async (ext) => {
+        await expect(upload(executable, `programa${ext}`)).rejects.toThrow(/no corresponde/);
+      },
+    );
+
+    it.each([
+      ['un documento de Word antiguo', ole2, 'acta.doc'],
+      ['una hoja de Excel antigua', ole2, 'notas.xls'],
+      ['una presentación antigua', ole2, 'charla.ppt'],
+      ['un RAR', rar, 'anexos.rar'],
+      ['un vídeo MP4', mp4, 'practica.mp4'],
+      ['un texto en UTF-8', Buffer.from('Nombre;Ciudad\nÁngela;Bogotá\n'), 'lista.csv'],
+    ])('acepta %s', async (_case, content, name) => {
+      await expect(upload(content, name)).resolves.toMatch(/^recursos\//);
+    });
+
+    it('rechaza un archivo más corto que su firma', async () => {
+      await expect(upload(Buffer.from('%PD'), 'informe.pdf')).rejects.toThrow(/no corresponde/);
+    });
+
+    it('rechaza un texto con bytes nulos o con cabecera de ejecutable de Linux', async () => {
+      await expect(upload(Buffer.from('hola\u0000mundo'), 'notas.txt')).rejects.toThrow(/no corresponde/);
+      await expect(upload(Buffer.from('\x7fELF texto', 'latin1'), 'notas.txt')).rejects.toThrow(/no corresponde/);
+    });
+
+    it('sólo admite como entrega lo que ofrece el formulario del alumno', async () => {
+      await expect(upload(Buffer.from('a;b\n'), 'datos.csv', 'entregas')).rejects.toThrow(
+        /En las entregas sólo se admiten estos formatos/,
+      );
+      await expect(upload(Buffer.from('<svg/>'), 'dibujo.svg', 'entregas')).rejects.toThrow(BadRequestException);
+    });
+
+    it('sirve los textos declarando UTF-8', async () => {
+      const key = await upload(Buffer.from('Ángela'), 'nombre.txt');
+      const file = await service.openStream(key);
+      file?.stream.destroy();
+
+      expect(file?.contentType).toBe('text/plain; charset=utf-8');
+    });
+  });
+
+  describe('descarga por fragmentos', () => {
+    const service = createService();
+    const content = Buffer.concat([Buffer.from([0x25, 0x50, 0x44, 0x46]), Buffer.from('0123456789')]);
+    let key: string;
+    let tempFile: string;
+
+    beforeAll(async () => {
+      tempFile = path.join(os.tmpdir(), `prueba-${crypto.randomUUID()}`);
+      fs.writeFileSync(tempFile, content);
+      key = await service.uploadFromDisk(tempFile, 'manual.pdf', 'recursos', UPLOADER);
+    });
+    afterAll(async () => {
+      fs.rmSync(tempFile, { force: true });
+      await service.deleteFile(key);
+    });
+
+    async function read(stream: NodeJS.ReadableStream): Promise<string> {
+      const chunks: Buffer[] = [];
+      for await (const chunk of stream) chunks.push(Buffer.from(chunk as Buffer));
+      return Buffer.concat(chunks).toString('latin1');
+    }
+
+    it('conoce el tamaño del archivo', async () => {
+      expect(await service.fileSize(key)).toBe(content.length);
+      expect(await service.fileSize('recursos/no-existe.pdf')).toBeNull();
+    });
+
+    it('envía sólo el fragmento pedido y declara su tamaño', async () => {
+      const file = await service.openStream(key, { start: 4, end: 7 });
+
+      expect(file?.size).toBe(4);
+      expect(await read(file!.stream)).toBe('0123');
     });
   });
 

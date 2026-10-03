@@ -1,15 +1,21 @@
 import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { MailService } from '../mail/mail.service';
-import { StorageService } from '../storage/storage.service';
-import { CourseAccessService } from '../courses/course-access.service';
+import { NotificationsService } from '../notifications/notifications.service';
+import { CourseAccessInfo, CourseAccessService } from '../courses/course-access.service';
 import { encodeCursor, ROWS_PER_PAGE, decodeCursor } from '../common/domain/pagination';
 import { JwtPayload } from '../common/interfaces/jwt-payload.interface';
 import { MIN_SEARCH_LENGTH, searchTerm } from '../common/domain/search';
+import { MIN_SCORE } from '../common/domain/grading';
+import { plural } from '../common/domain/text';
 
 /** Candidatos que se ofrecen de una vez; con más, se afina la búsqueda. */
 const VISIBLE_CANDIDATES = 50;
+
+/** Nota con la que se cierra un intento de cuestionario abierto al dar de baja. */
+const CLOSED_ATTEMPT_FEEDBACK = 'Intento cerrado por la baja de la matrícula.';
 
 /**
  * Matrículas de alumnos en cursos.
@@ -30,7 +36,7 @@ export class EnrollmentsService {
     private readonly access: CourseAccessService,
     private readonly realtime: RealtimeService,
     private readonly mail: MailService,
-    private readonly storage: StorageService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   /**
@@ -78,9 +84,10 @@ export class EnrollmentsService {
    * Alumnos de la sede que no están matriculados en el curso, incluidos los que se dieron
    * de baja: es la vía para volver a matricularlos.
    *
-   * `certified` avisa de que el alumno ya tiene certificado de este curso: matricularlo otra
-   * vez abre una vuelta nueva y retira su avance y sus entregas anteriores (ver
-   * `reactivateEnrollment`), así que la pantalla lo pide confirmar antes.
+   * `certified` avisa de que el alumno terminó su vuelta en el curso: matricularlo otra vez
+   * abre una vuelta nueva, que reinicia su avance y archiva sus entregas (ver
+   * `startNewRound`), así que la pantalla lo pide confirmar antes. Un certificado de una
+   * vuelta anterior no cuenta: quien se quedó a medias en la siguiente la retoma.
    *
    * Sin texto se listan los primeros de la sede; con una sola letra no se busca: casa con
    * casi todos y recorre la sede entera para devolver lo mismo que sin filtro.
@@ -109,20 +116,26 @@ export class EnrollmentsService {
         firstName: true,
         lastName: true,
         email: true,
-        certificates: { where: { courseGuid }, select: { id: true }, take: 1 },
+        enrollments: { where: { courseGuid, completedAt: { not: null } }, select: { id: true } },
       },
       orderBy: [{ firstName: 'asc' }, { lastName: 'asc' }],
       take: VISIBLE_CANDIDATES,
     });
 
-    return candidates.map(({ certificates, ...candidate }) => ({ ...candidate, certified: certificates.length > 0 }));
+    return candidates.map(({ enrollments, ...candidate }) => ({ ...candidate, certified: enrollments.length > 0 }));
   }
 
   /**
    * Matricula a un alumno.
+   *
    * Comprueba la sede del alumno, su rol y el cupo del curso antes de crear la matrícula.
+   * A quien ya terminó su vuelta sólo se le abre otra con `confirmRestart`: empieza de cero
+   * (ver `startNewRound`) y no puede ocurrir por una lista de candidatos desfasada.
+   *
+   * Todo ocurre con la fila del curso bloqueada: dos altas simultáneas en el mismo curso
+   * esperan su turno y la segunda ya cuenta la primera al comprobar el cupo.
    */
-  async enroll(courseGuid: string, studentGuid: string, user: JwtPayload) {
+  async enroll(courseGuid: string, studentGuid: string, user: JwtPayload, confirmRestart = false) {
     const course = await this.access.managedCourse(courseGuid, user);
 
     const student = await this.prisma.user.findFirst({
@@ -133,21 +146,32 @@ export class EnrollmentsService {
       throw new BadRequestException('El alumno debe ser un estudiante de tu misma sede.');
     }
 
-    const previous = await this.prisma.enrollment.findUnique({
-      where: { userGuid_courseGuid: { userGuid: studentGuid, courseGuid } },
-      select: { id: true, active: true },
+    const enrollment = await this.prisma.$transaction(async (tx) => {
+      const maxStudents = await this.lockCourse(tx, courseGuid);
+
+      const previous = await tx.enrollment.findUnique({
+        where: { userGuid_courseGuid: { userGuid: studentGuid, courseGuid } },
+        select: { id: true, active: true, completedAt: true },
+      });
+      if (previous?.active) {
+        throw new ConflictException('Este alumno ya está matriculado en el curso.');
+      }
+      if (previous?.completedAt && !confirmRestart) {
+        throw new ConflictException(
+          'Este alumno ya terminó el curso. Si lo matriculas de nuevo empezará desde cero: confirma que quieres abrirle una vuelta nueva.',
+        );
+      }
+
+      await this.checkCapacity(tx, courseGuid, maxStudents);
+
+      if (!previous) {
+        return tx.enrollment.create({ data: { userGuid: studentGuid, courseGuid, type: 'MANUAL' } });
+      }
+      if (previous.completedAt) return this.startNewRound(tx, previous.id, courseGuid, studentGuid);
+
+      this.logger.log(`Matrícula reactivada de ${studentGuid} en ${courseGuid}: retoma donde lo dejó`);
+      return tx.enrollment.update({ where: { id: previous.id }, data: this.reopened() });
     });
-    if (previous?.active) {
-      throw new ConflictException('Este alumno ya está matriculado en el curso.');
-    }
-
-    await this.checkCapacity(courseGuid);
-
-    const enrollment = previous
-      ? await this.reactivateEnrollment(previous.id, courseGuid, studentGuid)
-      : await this.prisma.enrollment.create({
-          data: { userGuid: studentGuid, courseGuid, type: 'MANUAL' },
-        });
 
     this.realtime.emitToUsers(
       'enrollment:changed',
@@ -162,11 +186,43 @@ export class EnrollmentsService {
       course.teacherGuid,
     );
 
-    void this.mail
-      .sendEnrollment(student.email, student.firstName, course.title, courseGuid, user.country)
-      .catch((error) => this.logger.error('No se pudo avisar de la matrícula', error));
+    this.welcome(course, student, user);
 
     return enrollment;
+  }
+
+  /**
+   * Avisa al alumno de su matrícula en la campana y, si el curso está publicado, por correo.
+   *
+   * El correo dice que ya puede empezar, y en un curso sin publicar no es verdad: ahí sólo
+   * queda el aviso, y el correo de que el curso está disponible sale al publicarlo.
+   */
+  private welcome(
+    course: CourseAccessInfo,
+    student: { guid: string; email: string; firstName: string },
+    user: JwtPayload,
+  ) {
+    const published = course.status === 'PUBLISHED';
+
+    void this.notifications
+      .create({
+        userGuid: student.guid,
+        country: user.country,
+        type: 'COURSE_WELCOME',
+        title: 'Te matricularon en un curso',
+        message: published
+          ? `"${course.title}" ya está en tus cursos. Puedes empezar cuando quieras.`
+          : `"${course.title}" todavía no está publicado. Podrás empezar en cuanto se publique; te avisaremos.`,
+        actionUrl: `/courses/${course.guid}`,
+        refType: 'curso',
+        refGuid: course.guid,
+      })
+      .catch((error) => this.logger.error('No se pudo crear el aviso de matrícula', error));
+
+    if (!published) return;
+    void this.mail
+      .sendEnrollment(student.email, student.firstName, course.title, course.guid, user.country)
+      .catch((error) => this.logger.error('No se pudo avisar de la matrícula', error));
   }
 
   /**
@@ -174,6 +230,10 @@ export class EnrollmentsService {
    *
    * No se borra la fila: el progreso, las entregas y los certificados cuelgan de ella y
    * eliminarla destruiría el registro documental de una capacitación ya realizada.
+   *
+   * Un intento de cuestionario que tuviera abierto se cierra como uno que se quedó sin
+   * tiempo: cuenta como gastado y sin aciertos. Ya vio las preguntas, y un intento abierto
+   * de quien ya no está en el curso impediría pasarlo a Borrador.
    */
   async unenroll(courseGuid: string, studentGuid: string, user: JwtPayload) {
     const course = await this.access.managedCourse(courseGuid, user);
@@ -185,10 +245,17 @@ export class EnrollmentsService {
     if (!enrollment) throw new NotFoundException('Este alumno no está matriculado en el curso.');
     if (!enrollment.active) throw new BadRequestException('Esta matrícula ya está dada de baja.');
 
-    await this.prisma.enrollment.update({
-      where: { id: enrollment.id },
-      data: { active: false, unenrolledAt: new Date() },
-    });
+    const now = new Date();
+    await this.prisma.$transaction([
+      this.prisma.enrollment.update({
+        where: { id: enrollment.id },
+        data: { active: false, unenrolledAt: now },
+      }),
+      this.prisma.submission.updateMany({
+        where: { userGuid: studentGuid, status: 'DRAFT', assignment: { module: { courseGuid } } },
+        data: { status: 'GRADED', submittedAt: now, score: MIN_SCORE, feedback: CLOSED_ATTEMPT_FEEDBACK },
+      }),
+    ]);
 
     this.realtime.emitToUsers('enrollment:changed', { action: 'unenrolled', courseGuid }, user.country, [studentGuid]);
     this.realtime.emitToCourseStaff(
@@ -202,89 +269,95 @@ export class EnrollmentsService {
   }
 
   /**
-   * Reactiva la matrícula de alguien que ya estuvo en el curso.
+   * Abre una vuelta nueva a quien ya terminó el curso.
    *
-   * Hay dos situaciones muy distintas y se distinguen por una sola cosa: **si llegó a
-   * certificarse**.
+   * Necesita la capacitación otra vez —otra infracción, años después— y tiene que **volver
+   * a hacerla**, no encontrársela aprobada. Empieza de cero: se retira su avance y sus
+   * entregas pasan a `lms_entregas_archivadas`, con lo que los cuestionarios recuperan sus
+   * intentos y la nota se calculará sólo con esta vuelta. Las entregas archivadas conservan
+   * sus archivos y el título de la actividad: son la evidencia de la formación acreditada.
    *
-   *  - **No se certificó.** Se quedó a medias y se le dio de baja —a veces por error—.
-   *    Vuelve exactamente donde lo dejó: su avance y sus entregas se conservan. Borrárselos
-   *    sería castigarle por una baja administrativa.
-   *  - **Ya se certificó.** Necesita la capacitación otra vez —otra infracción, años
-   *    después— y tiene que **volver a hacerla**, no encontrársela aprobada. Empieza de
-   *    cero: se retiran su avance y sus entregas de este curso, con lo que los
-   *    cuestionarios recuperan sus intentos y la nota se calculará sólo con esta vuelta.
+   * Quien no terminó retoma donde lo dejó (ver `enroll`): borrarle el trabajo sería
+   * castigarle por una baja administrativa.
    *
-   * En los dos casos el certificado anterior **no se toca**. Su código de verificación es
-   * público y puede estar impreso en un documento ya entregado; anularlo haría desaparecer
-   * una formación que sí ocurrió. Al terminar la nueva vuelta se emite otro, que lo
-   * sustituye.
-   *
-   * Todo va en una transacción: o queda la matrícula al día con el recorrido que le
-   * corresponde, o no cambia nada.
+   * El certificado anterior **no se toca**. Su código de verificación es público y puede
+   * estar impreso en un documento ya entregado; anularlo haría desaparecer una formación
+   * que sí ocurrió. Al terminar la nueva vuelta se emite otro, que lo sustituye.
    */
-  private async reactivateEnrollment(enrollmentId: number, courseGuid: string, studentGuid: string) {
-    const alreadyCertified = await this.prisma.certificate.findFirst({
-      where: { userGuid: studentGuid, courseGuid },
-      select: { id: true },
-    });
-
-    // Empieza una vuelta nueva: deja de estar terminada aunque la anterior se certificara, y
-    // quien empieza de cero no conserva avance que contar.
-    const reactivation = this.prisma.enrollment.update({
-      where: { id: enrollmentId },
-      data: {
-        active: true,
-        unenrolledAt: null,
-        enrolledAt: new Date(),
-        completedAt: null,
-        ...(alreadyCertified ? { completedResources: 0 } : {}),
+  private async startNewRound(
+    tx: Prisma.TransactionClient,
+    enrollmentId: number,
+    courseGuid: string,
+    studentGuid: string,
+  ) {
+    const submissions = await tx.submission.findMany({
+      where: { userGuid: studentGuid, assignment: { module: { courseGuid } } },
+      select: {
+        guid: true,
+        assignmentGuid: true,
+        attachmentKey: true,
+        attachmentName: true,
+        status: true,
+        attemptNumber: true,
+        submittedAt: true,
+        score: true,
+        feedback: true,
+        assignment: { select: { title: true } },
       },
     });
 
-    if (!alreadyCertified) {
-      this.logger.log(`Matrícula reactivada de ${studentGuid} en ${courseGuid}: retoma donde lo dejó`);
-      return reactivation;
+    if (submissions.length > 0) {
+      await tx.archivedSubmission.createMany({
+        data: submissions.map(({ assignment, ...submission }) => ({
+          ...submission,
+          userGuid: studentGuid,
+          courseGuid,
+          assignmentTitle: assignment?.title ?? 'Tarea',
+        })),
+      });
+      await tx.submission.deleteMany({ where: { guid: { in: submissions.map((submission) => submission.guid) } } });
     }
 
-    const previousRound = { userGuid: studentGuid, assignment: { module: { courseGuid } } };
-    const files = await this.prisma.submission.findMany({
-      where: { ...previousRound, attachmentKey: { not: null } },
-      select: { attachmentKey: true },
+    const progress = await tx.resourceProgress.deleteMany({
+      where: { userGuid: studentGuid, resource: { module: { courseGuid } } },
     });
 
-    const [enrollment, progress, submissions] = await this.prisma.$transaction([
-      reactivation,
-      this.prisma.resourceProgress.deleteMany({
-        where: { userGuid: studentGuid, resource: { module: { courseGuid } } },
-      }),
-      this.prisma.submission.deleteMany({ where: previousRound }),
-    ]);
-
-    // Los archivos se borran después de confirmar: si fallan, sólo quedan archivos sin uso
-    // en el almacenamiento, no una matrícula a medias.
-    void this.storage.deleteFiles(files.map((file) => file.attachmentKey));
-
     this.logger.log(
-      `Nueva vuelta de ${studentGuid} en ${courseGuid}: ` +
-        `${progress.count} avance(s) y ${submissions.count} entrega(s) de la vuelta anterior retirados`,
+      `Nueva vuelta de ${studentGuid} en ${courseGuid}: ${progress.count} recursos completados retirados y ` +
+        `${submissions.length} entregas archivadas`,
     );
 
-    return enrollment;
+    return tx.enrollment.update({
+      where: { id: enrollmentId },
+      data: { ...this.reopened(), completedResources: 0 },
+    });
+  }
+
+  /** La matrícula vuelve a estar activa y en curso, con la vuelta empezando ahora. */
+  private reopened() {
+    return { active: true, unenrolledAt: null, enrolledAt: new Date(), completedAt: null };
+  }
+
+  /**
+   * Bloquea la fila del curso hasta el final de la transacción y devuelve su cupo.
+   * Es la primera lectura de la transacción: lo que se lea después ya incluye las altas de
+   * quien tenía el bloqueo antes.
+   */
+  private async lockCourse(tx: Prisma.TransactionClient, courseGuid: string): Promise<number | null> {
+    const [course] = await tx.$queryRaw<{ maxStudents: number | null }[]>`
+      SELECT max_estudiantes AS maxStudents FROM lms_cursos WHERE guid = ${courseGuid} FOR UPDATE`;
+    if (!course) throw new NotFoundException('Curso no encontrado.');
+    return course.maxStudents === null ? null : Number(course.maxStudents);
   }
 
   /** Impide superar el cupo declarado del curso. */
-  private async checkCapacity(courseGuid: string): Promise<void> {
-    const course = await this.prisma.course.findUnique({
-      where: { guid: courseGuid },
-      select: { maxStudents: true },
-    });
-    if (!course?.maxStudents) return;
+  private async checkCapacity(tx: Prisma.TransactionClient, courseGuid: string, maxStudents: number | null) {
+    if (!maxStudents) return;
 
-    const enrolledCount = await this.prisma.enrollment.count({ where: { courseGuid, active: true } });
-    if (enrolledCount >= course.maxStudents) {
+    const enrolledCount = await tx.enrollment.count({ where: { courseGuid, active: true } });
+    if (enrolledCount >= maxStudents) {
       throw new BadRequestException(
-        `El curso ha alcanzado su cupo máximo de ${course.maxStudents} estudiantes. Amplíalo desde la ficha del curso para poder matricular a más.`,
+        `El curso ha alcanzado su cupo máximo de ${maxStudents} ${plural(maxStudents, 'estudiante', 'estudiantes')}. Amplíalo desde la ficha del curso para poder matricular a más.`,
       );
     }
   }

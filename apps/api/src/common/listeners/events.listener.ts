@@ -53,6 +53,7 @@ export class EventsListener {
         type: 'ASSIGNMENT_GRADED',
         title: 'Cuestionario aprobado',
         message: `Obtuviste ${formatScore(event.score)} en "${event.quizTitle}". ¡Buen trabajo!`,
+        actionUrl: `/courses/${event.courseGuid}`,
         refType: 'quiz',
         refGuid: event.resourceGuid,
       });
@@ -83,6 +84,7 @@ export class EventsListener {
           message:
             `Obtuviste ${formatScore(event.score)} en "${event.quizTitle}" y se requieren ` +
             `${formatPoints(event.passingScore)} puntos. Repasa el módulo y vuelve a intentarlo.`,
+          actionUrl: `/courses/${event.courseGuid}`,
           refType: 'quiz',
           refGuid: event.resourceGuid,
         }),
@@ -92,6 +94,8 @@ export class EventsListener {
           type: 'SUBMISSION_REVIEW',
           title: 'Cuestionario no superado',
           message: `${studentName} obtuvo ${formatScore(event.score)} en "${event.quizTitle}" del curso "${event.courseTitle}".`,
+          // El examinador revisa los intentos en su panel, no en la vista del alumno.
+          actionUrl: '/dashboard/examiner/quizzes',
           refType: 'quiz',
           refGuid: event.resourceGuid,
         }),
@@ -121,6 +125,7 @@ export class EventsListener {
         type: 'NEW_ASSESSMENT',
         title: 'Nuevo intento disponible',
         message: `Tu examinador te ha habilitado un nuevo intento en "${event.quizTitle}".`,
+        actionUrl: `/courses/${event.courseGuid}`,
         refType: 'quiz',
         refGuid: event.resourceGuid,
       });
@@ -214,6 +219,7 @@ export class EventsListener {
               event.score,
               event.passingScore,
               event.country,
+              event.feedback,
             )
           : this.mail.sendSubmissionRejected(
               student.email,

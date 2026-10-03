@@ -1,4 +1,5 @@
 import type { CourseStatus, UserRole } from '@/types/models';
+import { plural } from '@/lib/text';
 
 /** Lo que la pantalla de asignación necesita de cada curso. */
 export interface AssignableCourse {
@@ -40,21 +41,21 @@ export function isSearchTooShort(typed: string): boolean {
 }
 
 /**
- * Aviso antes de volver a matricular a quien ya se certificó: empieza de cero y el servidor
- * borra su vuelta anterior, así que no puede ocurrir sin que quien matricula lo confirme.
+ * Aviso antes de volver a matricular a quien ya se certificó: empieza de cero —el servidor
+ * reinicia su avance y archiva sus entregas— y no puede ocurrir sin que quien matricula lo
+ * confirme.
  */
 export function restartWarning(names: readonly string[]): string {
   if (names.length === 1) {
     return (
       `${names[0]} ya tiene el certificado de este curso. Si lo matriculas de nuevo, empezará el curso desde ` +
-      'cero y se borrarán de forma permanente su avance y sus entregas anteriores, incluidos los archivos que ' +
-      'subió. El certificado emitido se conserva.'
+      'cero: su avance se reinicia y sus entregas anteriores se archivan. El certificado emitido se conserva.'
     );
   }
   return (
     `Ya tienen el certificado de este curso: ${names.join(', ')}. Si los matriculas de nuevo, empezarán el ` +
-    'curso desde cero y se borrarán de forma permanente su avance y sus entregas anteriores, incluidos los ' +
-    'archivos que subieron. Los certificados emitidos se conservan.'
+    'curso desde cero: su avance se reinicia y sus entregas anteriores se archivan. Los certificados emitidos ' +
+    'se conservan.'
   );
 }
 
@@ -82,7 +83,7 @@ export function batchSummary(
   const attempted = added + failures.length;
   const title =
     failures.length === 0
-      ? `${added} ${added === 1 ? 'estudiante matriculado' : 'estudiantes matriculados'}`
+      ? `${added} ${plural(added, 'estudiante matriculado', 'estudiantes matriculados')}`
       : added === 0
         ? 'No se pudo matricular a ningún estudiante'
         : `Se matriculó a ${added} de ${attempted} estudiantes`;

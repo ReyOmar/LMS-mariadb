@@ -5,6 +5,8 @@
  * umbral. Ninguna pantalla escribe la escala a mano: la toma de aquí.
  */
 
+import { formatNumber, type Country } from './country';
+
 export const MIN_SCORE = 0;
 export const MAX_SCORE = 100;
 export const DEFAULT_PASSING_SCORE = 80;
@@ -22,18 +24,21 @@ export function isPassing(score: unknown, threshold: number = DEFAULT_PASSING_SC
   return num !== null && num >= threshold;
 }
 
-/** Sólo el número: `85`, `87.5`, `—` si no hay nota. */
+/**
+ * Sólo el número, con punto decimal: `85`, `87.5`, `—` si no hay nota. Sirve para rellenar
+ * un campo o redondear una cifra; en pantalla, la nota se escribe con `formatScore`.
+ */
 export function formatPoints(score: unknown): string {
   const num = toScore(score);
   if (num === null) return '—';
   return Number.isInteger(num) ? String(num) : num.toFixed(1);
 }
 
-/** Nota con su escala: `85 / 100`. */
-export function formatScore(score: unknown): string {
+/** Nota con su escala, con los decimales de la sede: `87,5 / 100` en Colombia. */
+export function formatScore(score: unknown, country: Country): string {
   const num = toScore(score);
   if (num === null) return 'Sin calificar';
-  return `${formatPoints(num)} / ${MAX_SCORE}`;
+  return `${formatNumber(num, country)} / ${MAX_SCORE}`;
 }
 
 /**

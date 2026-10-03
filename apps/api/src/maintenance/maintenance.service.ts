@@ -5,8 +5,9 @@ import { PrismaService } from '../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { MailService } from '../mail/mail.service';
 import { recordCompletion } from '../courses/resource-progress';
-import { AUTO_UNLOCK_HOURS } from '../students/students.service';
+import { AUTO_UNLOCK_HOURS } from '../courses/progression';
 import { Country } from '../common/domain/country';
+import { plural } from '../common/domain/text';
 
 /** Días sin entrar tras los cuales se envía un recordatorio. */
 const INACTIVITY_DAYS = 3;
@@ -156,7 +157,7 @@ export class MaintenanceService {
       country: student.country,
       type: 'INACTIVITY_REMINDER',
       title: 'Tienes formación pendiente',
-      message: `Llevas ${days} día(s) sin entrar. Retoma tus cursos cuando puedas.`,
+      message: `Llevas ${days} ${plural(days, 'día', 'días')} sin entrar. Retoma tus cursos cuando puedas.`,
       actionUrl: '/dashboard',
     });
     await this.mail.sendInactivityReminder(student.email, student.firstName, days, student.country);

@@ -79,12 +79,14 @@ describe('formateo', () => {
 
   it('marca la ausencia de nota en lugar de enseñar un cero', () => {
     expect(formatPoints(null)).toBe('—');
-    expect(formatScore(null)).toBe('Sin calificar');
-    expect(formatScore(0)).toBe('0 / 100');
+    expect(formatScore(null, 'COLOMBIA')).toBe('Sin calificar');
+    expect(formatScore(0, 'COLOMBIA')).toBe('0 / 100');
   });
 
-  it('la nota completa lleva su escala', () => {
-    expect(formatScore(85)).toBe('85 / 100');
+  it('la nota completa lleva su escala y los decimales de la sede', () => {
+    expect(formatScore(85, 'MEXICO')).toBe('85 / 100');
+    expect(formatScore(83.2, 'COLOMBIA')).toBe('83,2 / 100');
+    expect(formatScore(83.2, 'MEXICO')).toBe('83.2 / 100');
   });
 });
 

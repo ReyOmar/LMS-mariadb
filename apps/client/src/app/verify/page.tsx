@@ -9,6 +9,7 @@ import { formatScore } from '@/lib/grading';
 import { PageLoader } from '@/components/ui/PageLoader';
 import { longDate } from '@/lib/dates';
 import { plural } from '@/lib/text';
+import { issuedBy, type CertificateIssuer } from './issuer';
 
 /**
  * Verificación pública de un certificado.
@@ -16,11 +17,13 @@ import { plural } from '@/lib/text';
  * Aquí cualquiera —una empresa, un auditor— puede comprobar con el código impreso que un
  * certificado es auténtico, sin necesidad de cuenta.
  *
- * La respuesta es deliberadamente escueta: nombre, curso y fecha. Lo justo para confirmar
- * el documento que se tiene delante, sin exponer datos de contacto ni el historial de nadie.
+ * La respuesta es deliberadamente escueta: nombre, curso, fecha y sede que lo emitió. Lo
+ * justo para confirmar el documento que se tiene delante, sin exponer datos de contacto ni
+ * el historial de nadie.
  */
 
 interface VerifiedCertificate {
+  /** Nombre del titular tal como figura en el diploma. */
   studentName: string;
   course: string;
   issuedAt: string;
@@ -31,6 +34,8 @@ interface VerifiedCertificate {
   hours: number;
   averageScore: number | null;
   verificationCode: string;
+  /** Plataforma y sede que lo emitieron; puede ser la otra sede. */
+  issuer: CertificateIssuer;
 }
 
 type VerifyResponse = { valid: true; certificate: VerifiedCertificate } | { valid: false; message: string };
@@ -114,8 +119,8 @@ function Verifier() {
             </div>
             <h1 className="text-3xl md:text-4xl font-black tracking-tight mb-3">Comprueba un certificado</h1>
             <p className="text-muted-foreground leading-relaxed">
-              Introduce el código de verificación que aparece al pie del documento para confirmar que fue emitido por
-              este campus.
+              Introduce el código de verificación que aparece al pie del documento para confirmar que es auténtico y qué
+              sede lo emitió.
             </p>
           </div>
 
@@ -166,9 +171,8 @@ function Verifier() {
                 <div>
                   <h2 className="text-xl font-bold">Certificado auténtico</h2>
                   <p className="text-sm text-muted-foreground">
-                    {result.certificate.unexpired
-                      ? 'Emitido por este campus.'
-                      : 'Emitido por este campus. Su periodo de vigencia ya terminó.'}
+                    {issuedBy(result.certificate.issuer)}
+                    {!result.certificate.unexpired && ' Su periodo de vigencia ya terminó.'}
                   </p>
                 </div>
               </div>
@@ -187,7 +191,10 @@ function Verifier() {
                     value={longDate(result.certificate.validUntil)}
                   />
                 )}
-                <Field label="Calificación" value={formatScore(result.certificate.averageScore)} />
+                <Field
+                  label="Calificación"
+                  value={formatScore(result.certificate.averageScore, result.certificate.issuer.country)}
+                />
                 <Field label="Código" value={result.certificate.verificationCode} monospace />
               </dl>
             </div>

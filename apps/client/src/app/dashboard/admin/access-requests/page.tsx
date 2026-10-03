@@ -10,6 +10,7 @@ import type { AccessRequest, UserRole } from '@/types/models';
 import { USER_ROLE_LABEL } from '@/lib/labels';
 import { shortDate } from '@/lib/dates';
 import { plural } from '@/lib/text';
+import { RejectRequestDialog } from './components/RejectRequestDialog';
 
 const ROLE_BADGE: Record<UserRole, string> = {
   ADMIN: 'bg-red-500/10 text-red-700 dark:text-red-400',
@@ -21,6 +22,7 @@ export default function AccessRequestsPage() {
   const [requests, setRequests] = useState<AccessRequest[]>([]);
   const [loading, setLoading] = useState(true);
   const [processing, setProcessing] = useState<number | null>(null);
+  const [rejecting, setRejecting] = useState<AccessRequest | null>(null);
   const { showAlert, showConfirmation } = useAlerts();
 
   const loadAccessRequests = useCallback(async () => {
@@ -41,26 +43,29 @@ export default function AccessRequestsPage() {
   useRealtimeEvent('request:new', loadAccessRequests);
   useRealtimeEvent('request:resolved', loadAccessRequests);
 
-  const resolveRequest = async (request: AccessRequest, action: 'approve' | 'reject') => {
-    if (action === 'reject') {
-      const confirmed = await showConfirmation(
-        `¿Rechazar la solicitud de ${request.firstName} ${request.lastName}?`,
-        'El solicitante no podrá acceder con este correo.',
-        'Rechazar',
-      );
-      if (!confirmed) return;
-    }
+  /** Aprobar crea la cuenta y envía la contraseña: se confirma antes, porque no se deshace. */
+  const approveRequest = async (request: AccessRequest) => {
+    const confirmed = await showConfirmation(
+      `¿Aprobar la solicitud de ${request.firstName} ${request.lastName}?`,
+      `Se creará su cuenta de ${USER_ROLE_LABEL[request.requestedRole].toLowerCase()} y recibirá por correo una contraseña temporal.`,
+      'Aprobar',
+      'info',
+    );
+    if (confirmed) await resolveRequest(request, 'approve');
+  };
 
+  const resolveRequest = async (request: AccessRequest, action: 'approve' | 'reject', reason?: string) => {
     const id = request.id;
+    setRejecting(null);
     setProcessing(id);
     try {
-      await api.post(`/auth/access-requests/${id}/${action}`, {});
+      await api.post(`/auth/access-requests/${id}/${action}`, reason ? { reason } : {});
       setRequests((prev) => prev.filter((item) => item.id !== id));
       showAlert.success(
         action === 'approve' ? 'Solicitud aprobada' : 'Solicitud rechazada',
         action === 'approve'
-          ? 'La cuenta se creó y el usuario recibirá un correo con su contraseña temporal.'
-          : 'El solicitante no podrá acceder con este correo.',
+          ? 'La cuenta se creó y la persona recibirá un correo con su contraseña temporal.'
+          : 'La persona recibirá un correo con la decisión.',
       );
     } catch (error) {
       showAlert.error('No se pudo procesar', errorMessage(error));
@@ -68,6 +73,9 @@ export default function AccessRequestsPage() {
       setProcessing(null);
     }
   };
+
+  // Mientras llega la primera carga sólo se pinta el indicador, en el mismo sitio que el del panel.
+  if (loading) return <PageLoader message="Cargando solicitudes..." />;
 
   return (
     <div className="animate-in slide-in-from-bottom-4 duration-700">
@@ -88,9 +96,7 @@ export default function AccessRequestsPage() {
       </header>
 
       {/* ===== TABLA DE SOLICITUDES ===== */}
-      {loading ? (
-        <PageLoader message="Cargando solicitudes..." />
-      ) : requests.length === 0 ? (
+      {requests.length === 0 ? (
         <div className="bg-card border border-border/50 rounded-2xl p-12 flex flex-col items-center justify-center text-center shadow-sm">
           <Check className="h-16 w-16 text-emerald-500 mb-4 opacity-50" />
           <h3 className="text-xl font-bold">Bandeja limpia</h3>
@@ -131,7 +137,7 @@ export default function AccessRequestsPage() {
                   <td className="px-6 py-4 text-right space-x-2">
                     <button
                       type="button"
-                      onClick={() => resolveRequest(req, 'approve')}
+                      onClick={() => approveRequest(req)}
                       disabled={processing === req.id}
                       className="bg-success hover:bg-success/90 text-success-foreground p-2 rounded-lg transition-colors disabled:opacity-50"
                       title="Aprobar"
@@ -141,7 +147,7 @@ export default function AccessRequestsPage() {
                     </button>
                     <button
                       type="button"
-                      onClick={() => resolveRequest(req, 'reject')}
+                      onClick={() => setRejecting(req)}
                       disabled={processing === req.id}
                       className="bg-destructive hover:bg-destructive/90 text-white p-2 rounded-lg transition-colors disabled:opacity-50"
                       title="Rechazar"
@@ -181,7 +187,7 @@ export default function AccessRequestsPage() {
                   <div className="flex items-center gap-2">
                     <button
                       type="button"
-                      onClick={() => resolveRequest(req, 'approve')}
+                      onClick={() => approveRequest(req)}
                       disabled={processing === req.id}
                       className="bg-success hover:bg-success/90 text-success-foreground px-3 py-1.5 rounded-lg transition-colors disabled:opacity-50 text-xs font-bold flex items-center gap-1"
                     >
@@ -189,7 +195,7 @@ export default function AccessRequestsPage() {
                     </button>
                     <button
                       type="button"
-                      onClick={() => resolveRequest(req, 'reject')}
+                      onClick={() => setRejecting(req)}
                       disabled={processing === req.id}
                       className="bg-destructive hover:bg-destructive/90 text-white px-3 py-1.5 rounded-lg transition-colors disabled:opacity-50 text-xs font-bold flex items-center gap-1"
                     >
@@ -201,6 +207,14 @@ export default function AccessRequestsPage() {
             ))}
           </div>
         </div>
+      )}
+
+      {rejecting && (
+        <RejectRequestDialog
+          request={rejecting}
+          onCancel={() => setRejecting(null)}
+          onConfirm={(reason) => resolveRequest(rejecting, 'reject', reason)}
+        />
       )}
     </div>
   );

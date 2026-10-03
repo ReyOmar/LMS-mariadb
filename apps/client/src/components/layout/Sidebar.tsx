@@ -54,19 +54,20 @@ export function Sidebar() {
 
   useEffect(() => {
     void countRequests();
+  }, [countRequests]);
+
+  // Se cuenta al cargar y al entrar o salir de la bandeja, por si se perdió algún aviso.
+  const inInbox = pathname.startsWith('/dashboard/messages');
+  useEffect(() => {
     void countMessages();
-  }, [countRequests, countMessages]);
+  }, [inInbox, countMessages]);
 
   useRealtimeEvent('request:new', countRequests);
   useRealtimeEvent('request:resolved', countRequests);
-  useRealtimeEvent('message:new', () => {
-    // Si ya se está en la bandeja, el propio listado marca los mensajes como leídos.
-    if (!pathname.startsWith('/dashboard/messages')) setUnreadMessages((total) => total + 1);
-  });
-
-  useEffect(() => {
-    if (pathname.startsWith('/dashboard/messages')) setUnreadMessages(0);
-  }, [pathname]);
+  // Cada mensaje nuevo suma uno; al leer una conversación —en esta pestaña o en otra— el
+  // servidor lo anuncia y se vuelve a contar.
+  useRealtimeEvent('message:new', () => setUnreadMessages((total) => total + 1));
+  useRealtimeEvent('message:read', countMessages);
 
   // ── Interacción ──
 

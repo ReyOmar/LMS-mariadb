@@ -1,3 +1,4 @@
+import { BadRequestException, ConflictException } from '@nestjs/common';
 import { EnrollmentsService } from './enrollments.service';
 import { sessionFor } from '../common/testing/test-campus';
 
@@ -7,9 +8,11 @@ import { sessionFor } from '../common/testing/test-campus';
  * Son dos situaciones que se parecen mucho y piden lo contrario:
  *
  *  - A quien se quedó a medias y se le dio de baja hay que **devolverle su avance**. Una
- *    baja administrativa no puede costarle el trabajo hecho.
- *  - A quien ya se certificó y vuelve —otra infracción, años después— hay que **ponerlo a
- *    cero**, o se encontrará el curso aprobado sin haberlo repetido.
+ *    baja administrativa no puede costarle el trabajo hecho, aunque tenga el certificado
+ *    de una vuelta anterior.
+ *  - A quien terminó su vuelta y vuelve —otra infracción, años después— hay que **ponerlo a
+ *    cero**, o se encontrará el curso aprobado sin haberlo repetido. Sus entregas no se
+ *    pierden: se archivan con sus archivos, como evidencia de la formación acreditada.
  *
  * Equivocarse en cualquiera de las dos direcciones se nota tarde y mal, así que las dos
  * quedan fijadas aquí.
@@ -20,139 +23,304 @@ const STUDENT_ID = 'alumno-1';
 const ADMIN = sessionFor('ADMIN', 'COLOMBIA', 'admin');
 
 interface State {
-  /** Certificados que ya tiene el alumno de este curso. */
-  certificates: number;
-  progress: number;
-  submissions: number;
+  /** La matrícula anterior, o `null` si nunca estuvo en el curso. */
+  previous?: { active: boolean; completedAt: Date | null } | null;
+  progress?: number;
+  submissions?: number;
+  maxStudents?: number | null;
+  enrolled?: number;
+  courseStatus?: 'DRAFT' | 'PUBLISHED';
 }
 
-function baseWith(status: State) {
-  const deleted = { progress: 0, submissions: 0 };
+/** Una entrega de la vuelta anterior tal y como la lee el servicio. */
+function previousSubmission(index: number) {
+  return {
+    guid: `entrega-${index}`,
+    assignmentGuid: `tarea-${index}`,
+    attachmentKey: `entregas/informe-${index}.pdf`,
+    attachmentName: 'informe.pdf',
+    status: 'GRADED',
+    attemptNumber: 1,
+    submittedAt: new Date(2025, 0, index + 1),
+    score: 90,
+    feedback: null,
+    assignment: { title: `Informe ${index}` },
+  };
+}
+
+/**
+ * Servicio con un doble de Prisma que anota, en orden, lo que se le pide. La transacción
+ * interactiva recibe el mismo doble: lo que importa es qué se hace dentro de ella.
+ */
+function baseWith({
+  previous = { active: false, completedAt: null },
+  progress = 0,
+  submissions = 0,
+  maxStudents = null,
+  enrolled = 0,
+  courseStatus = 'PUBLISHED',
+}: State = {}) {
+  const steps: string[] = [];
+  const deleted = { progress: 0, submissions: [] as string[] };
+  const archived: Record<string, unknown>[] = [];
   let updatedEnrollment: Record<string, unknown> | null = null;
+  let createdEnrollment: Record<string, unknown> | null = null;
 
   const prisma = {
-    certificate: {
-      findFirst: async () => (status.certificates > 0 ? { id: 1 } : null),
-    },
-    resource: {
-      findMany: async () => [{ guid: 'r1' }, { guid: 'r2' }],
+    $queryRaw: async (parts: TemplateStringsArray) => {
+      steps.push(parts.join('?').includes('FOR UPDATE') ? 'bloqueo' : 'consulta');
+      return [{ maxStudents }];
     },
     enrollment: {
-      findUnique: async () => ({ id: 7, active: false }),
+      findUnique: async () => (previous ? { id: 7, ...previous } : null),
+      create: async ({ data }: { data: Record<string, unknown> }) => {
+        createdEnrollment = data;
+        return { id: 8, ...data };
+      },
       update: async ({ data }: { data: Record<string, unknown> }) => {
         updatedEnrollment = data;
         return { id: 7, ...data };
       },
-      count: async () => 0,
+      count: async () => {
+        steps.push('recuento');
+        return enrolled;
+      },
     },
     resourceProgress: {
       deleteMany: async () => {
-        deleted.progress = status.progress;
-        return { count: status.progress };
+        deleted.progress = progress;
+        return { count: progress };
       },
     },
     submission: {
-      findMany: async () => [{ attachmentKey: 'entregas/informe.pdf' }],
-      deleteMany: async () => {
-        deleted.submissions = status.submissions;
-        return { count: status.submissions };
+      findMany: async () => Array.from({ length: submissions }, (_, i) => previousSubmission(i)),
+      deleteMany: async ({ where }: { where: { guid: { in: string[] } } }) => {
+        deleted.submissions.push(...where.guid.in);
+        return { count: where.guid.in.length };
       },
     },
-    course: {
-      findUnique: async () => ({ maxStudents: null }),
+    archivedSubmission: {
+      createMany: async ({ data }: { data: Record<string, unknown>[] }) => {
+        archived.push(...data);
+        return { count: data.length };
+      },
     },
     user: {
       findFirst: async () => ({ guid: STUDENT_ID, email: 'alumno@pesv.test', firstName: 'Ana' }),
     },
-    // Las operaciones de la transacción ya se resolvieron al construirlas.
-    $transaction: async (operations: Promise<unknown>[]) => Promise.all(operations),
+    $transaction: async (work: (tx: unknown) => Promise<unknown>) => work(prisma),
   };
 
-  const access = { managedCourse: async () => ({ guid: COURSE, title: 'Manejo defensivo' }) };
-  const realtime = { emitToUsers: () => undefined, emitToCourseStaff: () => undefined };
-  const mail = { sendEnrollment: async () => true };
-  const deletedFiles: (string | null)[] = [];
-  const storage = {
-    deleteFiles: async (keys: (string | null)[]) => {
-      deletedFiles.push(...keys);
-    },
+  const access = {
+    managedCourse: async () => ({
+      guid: COURSE,
+      title: 'Manejo defensivo',
+      status: courseStatus,
+      teacherGuid: 'profe',
+    }),
   };
+  const realtime = { emitToUsers: () => undefined, emitToCourseStaff: () => undefined };
+  const mail = { sendEnrollment: jest.fn(async () => true) };
+  const notifications = { create: jest.fn(async () => ({ id: 1 })) };
 
   const service = new EnrollmentsService(
     prisma as never,
     access as never,
     realtime as never,
     mail as never,
-    storage as never,
+    notifications as never,
   );
   jest.spyOn(service['logger'], 'log').mockImplementation(() => undefined);
   jest.spyOn(service['logger'], 'error').mockImplementation(() => undefined);
 
-  return { service, deleted, deletedFiles, enrollment: () => updatedEnrollment };
+  return {
+    service,
+    steps,
+    deleted,
+    archived,
+    mail,
+    notifications,
+    enrollment: () => updatedEnrollment,
+    created: () => createdEnrollment,
+  };
 }
 
+const FINISHED = { active: false, completedAt: new Date(2025, 5, 1) };
+const HALFWAY = { active: false, completedAt: null };
+
 describe('EnrollmentsService · volver a matricular', () => {
-  it('quien se quedó a medias retoma donde lo dejó', async () => {
-    const { service, deleted, deletedFiles } = baseWith({ certificates: 0, progress: 5, submissions: 2 });
+  it('quien se quedó a medias retoma donde lo dejó, aunque tenga el certificado de una vuelta anterior', async () => {
+    // La segunda vuelta va por la mitad: su matrícula no está terminada.
+    const { service, deleted, archived } = baseWith({ previous: HALFWAY, progress: 5, submissions: 2 });
 
     await service.enroll(COURSE, STUDENT_ID, ADMIN);
 
-    expect(deleted).toEqual({ progress: 0, submissions: 0 });
-    expect(deletedFiles).toEqual([]);
+    expect(deleted).toEqual({ progress: 0, submissions: [] });
+    expect(archived).toEqual([]);
   });
 
-  it('quien ya se certificó empieza de cero', async () => {
-    const { service, deleted } = baseWith({ certificates: 1, progress: 5, submissions: 2 });
+  it('a quien terminó su vuelta no se le abre otra sin confirmarlo: 409 y nada cambia', async () => {
+    const { service, deleted, archived, enrollment } = baseWith({ previous: FINISHED, progress: 5, submissions: 2 });
 
-    await service.enroll(COURSE, STUDENT_ID, ADMIN);
+    await expect(service.enroll(COURSE, STUDENT_ID, ADMIN)).rejects.toThrow(ConflictException);
+    await expect(service.enroll(COURSE, STUDENT_ID, ADMIN)).rejects.toThrow(/ya terminó el curso/);
 
-    expect(deleted).toEqual({ progress: 5, submissions: 2 });
+    expect(deleted).toEqual({ progress: 0, submissions: [] });
+    expect(archived).toEqual([]);
+    expect(enrollment()).toBeNull();
   });
 
-  it('al empezar de cero también retira los archivos de las entregas borradas', async () => {
-    const { service, deletedFiles } = baseWith({ certificates: 1, progress: 5, submissions: 2 });
+  it('con la confirmación, quien terminó su vuelta empieza de cero', async () => {
+    const { service, deleted } = baseWith({ previous: FINISHED, progress: 5, submissions: 2 });
 
-    await service.enroll(COURSE, STUDENT_ID, ADMIN);
+    await service.enroll(COURSE, STUDENT_ID, ADMIN, true);
 
-    expect(deletedFiles).toEqual(['entregas/informe.pdf']);
+    expect(deleted).toEqual({ progress: 5, submissions: ['entrega-0', 'entrega-1'] });
   });
 
-  it('la matrícula queda activa y con fecha nueva en los dos casos', async () => {
-    for (const certificates of [0, 1]) {
-      const { service, enrollment } = baseWith({ certificates, progress: 3, submissions: 1 });
+  it('al empezar de cero sus entregas se archivan con el título de la actividad y el archivo', async () => {
+    const { service, archived } = baseWith({ previous: FINISHED, submissions: 2 });
 
-      await service.enroll(COURSE, STUDENT_ID, ADMIN);
+    await service.enroll(COURSE, STUDENT_ID, ADMIN, true);
 
-      expect(enrollment()).toMatchObject({ active: true, unenrolledAt: null });
+    expect(archived).toHaveLength(2);
+    expect(archived[0]).toEqual({
+      guid: 'entrega-0',
+      userGuid: STUDENT_ID,
+      courseGuid: COURSE,
+      assignmentGuid: 'tarea-0',
+      assignmentTitle: 'Informe 0',
+      attachmentKey: 'entregas/informe-0.pdf',
+      attachmentName: 'informe.pdf',
+      status: 'GRADED',
+      attemptNumber: 1,
+      submittedAt: new Date(2025, 0, 1),
+      score: 90,
+      feedback: null,
+    });
+  });
+
+  it('la matrícula queda activa, en curso y con fecha nueva en los dos casos', async () => {
+    for (const [previous, confirmRestart] of [
+      [HALFWAY, false],
+      [FINISHED, true],
+    ] as const) {
+      const { service, enrollment } = baseWith({ previous, progress: 3, submissions: 1 });
+
+      await service.enroll(COURSE, STUDENT_ID, ADMIN, confirmRestart);
+
+      expect(enrollment()).toMatchObject({ active: true, unenrolledAt: null, completedAt: null });
       expect(enrollment()?.enrolledAt).toBeInstanceOf(Date);
     }
   });
 
-  it('la vuelta nueva deja de estar terminada en los dos casos', async () => {
-    for (const certificates of [0, 1]) {
-      const { service, enrollment } = baseWith({ certificates, progress: 3, submissions: 1 });
-
-      await service.enroll(COURSE, STUDENT_ID, ADMIN);
-
-      expect(enrollment()).toMatchObject({ completedAt: null });
-    }
-  });
-
   it('quien empieza de cero también empieza con el recuento de avance a cero; quien retoma lo conserva', async () => {
-    const fromScratch = baseWith({ certificates: 1, progress: 5, submissions: 2 });
-    await fromScratch.service.enroll(COURSE, STUDENT_ID, ADMIN);
+    const fromScratch = baseWith({ previous: FINISHED, progress: 5, submissions: 2 });
+    await fromScratch.service.enroll(COURSE, STUDENT_ID, ADMIN, true);
     expect(fromScratch.enrollment()).toMatchObject({ completedResources: 0 });
 
-    const resumes = baseWith({ certificates: 0, progress: 5, submissions: 2 });
+    const resumes = baseWith({ previous: HALFWAY, progress: 5, submissions: 2 });
     await resumes.service.enroll(COURSE, STUDENT_ID, ADMIN);
     expect(resumes.enrollment()).not.toHaveProperty('completedResources');
   });
 
-  it('nunca toca el certificado anterior', async () => {
-    const { service } = baseWith({ certificates: 1, progress: 5, submissions: 2 });
-    // El doble no expone forma de borrar certificados: si el servicio lo intentara,
-    // fallaría aquí en lugar de pasar desapercibido.
-    await expect(service.enroll(COURSE, STUDENT_ID, ADMIN)).resolves.toBeDefined();
+  it('quien ya está dentro no se matricula dos veces', async () => {
+    const { service } = baseWith({ previous: { active: true, completedAt: null } });
+
+    await expect(service.enroll(COURSE, STUDENT_ID, ADMIN, true)).rejects.toThrow(/ya está matriculado/);
+  });
+});
+
+describe('EnrollmentsService · cupo', () => {
+  it('bloquea la fila del curso antes de contar a los matriculados', async () => {
+    const { service, steps } = baseWith({ previous: null, maxStudents: 30, enrolled: 10 });
+
+    await service.enroll(COURSE, STUDENT_ID, ADMIN);
+
+    // Sin el bloqueo, dos altas simultáneas contarían lo mismo y las dos entrarían.
+    expect(steps).toEqual(['bloqueo', 'recuento']);
+  });
+
+  it('con el cupo lleno no matricula y lo dice en singular o en plural según la cifra', async () => {
+    const one = baseWith({ previous: null, maxStudents: 1, enrolled: 1 });
+    await expect(one.service.enroll(COURSE, STUDENT_ID, ADMIN)).rejects.toThrow(BadRequestException);
+    await expect(one.service.enroll(COURSE, STUDENT_ID, ADMIN)).rejects.toThrow('cupo máximo de 1 estudiante.');
+    expect(one.created()).toBeNull();
+
+    const many = baseWith({ previous: null, maxStudents: 2, enrolled: 2 });
+    await expect(many.service.enroll(COURSE, STUDENT_ID, ADMIN)).rejects.toThrow('cupo máximo de 2 estudiantes.');
+  });
+
+  it('sin cupo declarado no cuenta a nadie', async () => {
+    const { service, steps, created } = baseWith({ previous: null });
+
+    await service.enroll(COURSE, STUDENT_ID, ADMIN);
+
+    expect(steps).toEqual(['bloqueo']);
+    expect(created()).toMatchObject({ userGuid: STUDENT_ID, courseGuid: COURSE });
+  });
+});
+
+describe('EnrollmentsService · aviso de matrícula', () => {
+  it('en un curso publicado avisa en la campana con enlace al curso y por correo', async () => {
+    const { service, mail, notifications } = baseWith({ previous: null });
+
+    await service.enroll(COURSE, STUDENT_ID, ADMIN);
+
+    expect(notifications.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userGuid: STUDENT_ID,
+        type: 'COURSE_WELCOME',
+        actionUrl: `/courses/${COURSE}`,
+        message: expect.stringContaining('Puedes empezar'),
+      }),
+    );
+    expect(mail.sendEnrollment).toHaveBeenCalledTimes(1);
+  });
+
+  it('en un curso en borrador no dice que ya puede empezar ni envía el correo de bienvenida', async () => {
+    const { service, mail, notifications } = baseWith({ previous: null, courseStatus: 'DRAFT' });
+
+    await service.enroll(COURSE, STUDENT_ID, ADMIN);
+
+    expect(notifications.create).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringContaining('todavía no está publicado') }),
+    );
+    expect(mail.sendEnrollment).not.toHaveBeenCalled();
+  });
+});
+
+describe('EnrollmentsService · dar de baja', () => {
+  it('desactiva la matrícula y cierra en la misma transacción los intentos abiertos del curso', async () => {
+    const operations: { model: string; args: Record<string, any> }[] = [];
+    const record = (model: string) => (args: Record<string, any>) => {
+      operations.push({ model, args });
+      return { model };
+    };
+    const prisma = {
+      enrollment: { findUnique: async () => ({ id: 7, active: true }), update: record('enrollment') },
+      submission: { updateMany: record('submission') },
+      $transaction: jest.fn(async (batch: unknown[]) => batch),
+    };
+    const access = { managedCourse: async () => ({ guid: COURSE, teacherGuid: 'profe' }) };
+    const realtime = { emitToUsers: () => undefined, emitToCourseStaff: () => undefined };
+    const service = new EnrollmentsService(
+      prisma as never,
+      access as never,
+      realtime as never,
+      {} as never,
+      {} as never,
+    );
+
+    await service.unenroll(COURSE, STUDENT_ID, ADMIN);
+
+    expect(prisma.$transaction).toHaveBeenCalledWith([{ model: 'enrollment' }, { model: 'submission' }]);
+    expect(operations[0].args.data).toMatchObject({ active: false });
+    // Como un intento que se quedó sin tiempo: gastado y sin aciertos.
+    expect(operations[1].args).toMatchObject({
+      where: { userGuid: STUDENT_ID, status: 'DRAFT', assignment: { module: { courseGuid: COURSE } } },
+      data: { status: 'GRADED', score: 0 },
+    });
   });
 });
 
@@ -306,15 +474,15 @@ describe('EnrollmentsService · candidatos', () => {
 });
 
 describe('EnrollmentsService · candidatos ya certificados', () => {
-  it('marca a quien ya tiene certificado de este curso, para avisar antes de abrirle una vuelta nueva', async () => {
+  it('marca a quien terminó su vuelta en este curso, para avisar antes de abrirle una nueva', async () => {
     const queries: { select: Record<string, unknown> }[] = [];
     const prisma = {
       user: {
         findMany: async (query: { select: Record<string, unknown> }) => {
           queries.push(query);
           return [
-            { guid: 'a', firstName: 'Ana', lastName: 'Ruiz', email: 'a@pesv.test', certificates: [{ id: 3 }] },
-            { guid: 'b', firstName: 'Beto', lastName: 'Gil', email: 'b@pesv.test', certificates: [] },
+            { guid: 'a', firstName: 'Ana', lastName: 'Ruiz', email: 'a@pesv.test', enrollments: [{ id: 3 }] },
+            { guid: 'b', firstName: 'Beto', lastName: 'Gil', email: 'b@pesv.test', enrollments: [] },
           ];
         },
       },
@@ -324,8 +492,12 @@ describe('EnrollmentsService · candidatos ya certificados', () => {
 
     const candidates = await service.getCandidates(COURSE, ADMIN);
 
-    // Sólo cuentan los certificados de este curso, no los de otros.
-    expect(queries[0].select.certificates).toMatchObject({ where: { courseGuid: COURSE } });
+    // Cuenta que la vuelta actual en este curso esté terminada, no un certificado cualquiera:
+    // quien tiene el de una vuelta anterior y va por la mitad de la siguiente la retoma.
+    expect(queries[0].select.enrollments).toMatchObject({
+      where: { courseGuid: COURSE, completedAt: { not: null } },
+    });
+    expect(queries[0].select).not.toHaveProperty('certificates');
     expect(candidates).toEqual([
       { guid: 'a', firstName: 'Ana', lastName: 'Ruiz', email: 'a@pesv.test', certified: true },
       { guid: 'b', firstName: 'Beto', lastName: 'Gil', email: 'b@pesv.test', certified: false },

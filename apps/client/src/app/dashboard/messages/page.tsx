@@ -25,7 +25,7 @@ import { useAlerts } from '@/contexts/AlertContext';
 import { useDebounce } from '@/hooks/useDebounce';
 import { USER_ROLE_LABEL } from '@/lib/labels';
 import { shortTime, conversationTimestamp } from '@/lib/dates';
-import { initials } from '@/lib/text';
+import { initials, searchable } from '@/lib/text';
 
 /** Relación con alguien a quien se ha pedido conversar. */
 type ContactStatus = 'PENDING' | 'ACCEPTED' | 'REJECTED';
@@ -37,7 +37,8 @@ interface ContactCandidate {
   email: string;
   role: UserRole;
   contactStatus: ContactStatus | null;
-  isExaminer: boolean;
+  /** Se le puede escribir ya, sin pedir contacto antes. */
+  canWrite: boolean;
 }
 
 interface ContactRequest {
@@ -67,8 +68,12 @@ const isTooShort = (text: string) => {
   return length > 0 && length < MIN_SEARCH_LENGTH;
 };
 
+/** Largo máximo de un mensaje; el mismo que admite el servidor. */
+const MAX_MESSAGE_LENGTH = 5000;
+
 export default function MessagesPage() {
-  const { user } = useSession();
+  const { user, role } = useSession();
+  const isAdmin = role === 'admin';
   const { showAlert, showConfirmation, notify } = useAlerts();
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -121,7 +126,7 @@ export default function MessagesPage() {
     void loadPendingRequests();
   }, [loadContacts, loadPendingRequests]);
 
-  // Sólo se busca entre quienes comparten curso: el chat no abre la sede entera. Se espera a
+  // Se busca entre quienes comparten curso (el administrador, en toda su sede). Se espera a
   // que se deje de teclear para no lanzar una consulta por letra.
   useEffect(() => {
     if (!showNewChat || isTooShort(appliedPersonSearch)) {
@@ -178,7 +183,12 @@ export default function MessagesPage() {
     void api.patch(`/notifications/messages/${message.senderGuid}/read`).catch(() => undefined);
   });
 
-  useRealtimeEvent('notification:new', () => loadPendingRequests());
+  // Una solicitud recibida o aceptada cambia la bandeja: se ve sin recargar.
+  useRealtimeEvent('contact:updated', () => {
+    void loadPendingRequests();
+    void loadContacts();
+    setSearchVersion((version) => version + 1);
+  });
 
   // Al llegar un mensaje se baja del todo: lo último escrito es lo que se quiere leer.
   useEffect(() => {
@@ -244,7 +254,7 @@ export default function MessagesPage() {
     const confirmed = await showConfirmation(
       'Vaciar conversación',
       `Se eliminará de tu bandeja la conversación con ${openContact.firstName}. ` +
-        'La otra persona conservará su copia y podréis seguir escribiéndoos. No se puede deshacer.',
+        'La otra persona conservará su copia y podrán seguir escribiéndose. No se puede deshacer.',
       'Vaciar',
     );
     if (!confirmed) return;
@@ -263,12 +273,28 @@ export default function MessagesPage() {
   const sendContactRequest = async (receiverGuid: string) => {
     try {
       await api.post('/notifications/messages/requests', { receiverGuid });
-      // Se vuelven a pedir los resultados para que el botón pase a «Pendiente» o «Conectado».
+      // Se vuelven a pedir los resultados para que el botón pase a «Pendiente».
       setSearchVersion((version) => version + 1);
-      void loadContacts();
     } catch (error) {
       showAlert.error('No se pudo enviar la solicitud', errorMessage(error));
     }
+  };
+
+  /** Abre la conversación con alguien a quien ya se puede escribir, aunque aún no haya mensajes. */
+  const startConversation = (candidate: ContactCandidate) => {
+    setShowNewChat(false);
+    void openConversation(
+      contacts.find((contact) => contact.guid === candidate.guid) ?? {
+        guid: candidate.guid,
+        firstName: candidate.firstName,
+        lastName: candidate.lastName,
+        role: candidate.role,
+        lastMessage: '',
+        lastMessageAt: null,
+        unreadCount: 0,
+        canWrite: true,
+      },
+    );
   };
 
   const respondToRequest = async (id: number, accept: boolean) => {
@@ -281,9 +307,13 @@ export default function MessagesPage() {
     }
   };
 
-  const filteredContacts = contacts.filter((c) =>
-    `${c.firstName} ${c.lastName}`.toLowerCase().includes(search.toLowerCase()),
-  );
+  // La lista se recarga en vivo: lo que diga es más reciente que la copia de la conversación abierta.
+  const openContactCanWrite = openContact
+    ? (contacts.find((contact) => contact.guid === openContact.guid) ?? openContact).canWrite
+    : false;
+
+  const contactSearch = searchable(search.trim());
+  const filteredContacts = contacts.filter((c) => searchable(`${c.firstName} ${c.lastName}`).includes(contactSearch));
 
   if (loading) return <PageLoader message="Cargando mensajes..." />;
 
@@ -294,7 +324,11 @@ export default function MessagesPage() {
           <MessageSquare className="h-6 w-6 sm:h-8 sm:w-8 text-primary" />
           Mensajes
         </h1>
-        <p className="text-muted-foreground mt-1.5">Comunicación exclusiva entre participantes del curso.</p>
+        <p className="text-muted-foreground mt-1.5">
+          {isAdmin
+            ? 'Comunicación con las personas de tu sede.'
+            : 'Comunicación exclusiva entre participantes del curso.'}
+        </p>
       </header>
 
       <div className="flex gap-0 h-[calc(100vh-14rem)] bg-card border border-border rounded-2xl overflow-hidden shadow-sm">
@@ -402,12 +436,12 @@ export default function MessagesPage() {
             </div>
           )}
 
-          {/* Chat nuevo: buscar entre los del curso */}
+          {/* Chat nuevo: buscar entre los del curso (el administrador, en su sede) */}
           {showNewChat && (
             <div className="p-3 border-b border-border bg-muted/20 max-h-80 overflow-hidden flex flex-col">
               <div className="flex items-center justify-between mb-2">
                 <span className="text-xs font-bold text-muted-foreground uppercase tracking-widest">
-                  Buscar en tus cursos
+                  {isAdmin ? 'Buscar en tu sede' : 'Buscar en tus cursos'}
                 </span>
                 <button
                   type="button"
@@ -422,7 +456,7 @@ export default function MessagesPage() {
                 type="text"
                 value={personSearch}
                 onChange={(e) => setPersonSearch(e.target.value)}
-                aria-label="Buscar en tus cursos por nombre o correo electrónico"
+                aria-label={`Buscar en ${isAdmin ? 'tu sede' : 'tus cursos'} por nombre o correo electrónico`}
                 placeholder="Nombre o correo electrónico..."
                 className="w-full bg-card border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 mb-2"
                 autoFocus
@@ -438,7 +472,9 @@ export default function MessagesPage() {
                   </div>
                 ) : searchResults.length === 0 ? (
                   <p className="text-xs text-muted-foreground text-center py-3">
-                    No se encontraron participantes en tus cursos. Verifica que estés inscrito o asignado a un curso.
+                    {isAdmin
+                      ? 'No se encontró a nadie de tu sede con ese nombre o correo.'
+                      : 'No se encontraron participantes en tus cursos. Verifica que estés inscrito o asignado a un curso.'}
                   </p>
                 ) : (
                   searchResults.map((u) => (
@@ -456,18 +492,22 @@ export default function MessagesPage() {
                           <p className="text-sm font-bold truncate">
                             {u.firstName} {u.lastName}
                           </p>
-                          {u.isExaminer && (
+                          {u.role !== 'STUDENT' && (
                             <span className="text-[9px] bg-blue-500/10 text-blue-500 px-1.5 py-0.5 rounded-full font-bold shrink-0">
-                              Examinador
+                              {USER_ROLE_LABEL[u.role]}
                             </span>
                           )}
                         </div>
                         <p className="text-xs text-muted-foreground truncate">{u.email}</p>
                       </div>
-                      {u.contactStatus === 'ACCEPTED' ? (
-                        <span className="text-[10px] text-emerald-700 dark:text-emerald-400 font-bold px-2 py-1 bg-emerald-500/10 rounded-full shrink-0">
-                          Conectado
-                        </span>
+                      {u.canWrite ? (
+                        <button
+                          type="button"
+                          onClick={() => startConversation(u)}
+                          className="text-[10px] bg-primary text-primary-foreground font-bold px-2.5 py-1.5 rounded-lg hover:bg-primary/90 transition-colors shrink-0"
+                        >
+                          Escribir
+                        </button>
                       ) : u.contactStatus === 'PENDING' ? (
                         <span className="text-[10px] text-amber-700 dark:text-amber-400 font-bold px-2 py-1 bg-amber-500/10 rounded-full shrink-0">
                           Pendiente
@@ -495,7 +535,9 @@ export default function MessagesPage() {
                 <Inbox className="h-10 w-10 opacity-20 mb-3" />
                 <p className="text-sm font-medium">Sin conversaciones</p>
                 <p className="text-xs text-center mt-1">
-                  Busca un compañero o examinador de tu curso para iniciar una conversación.
+                  {isAdmin
+                    ? 'Busca a una persona de tu sede para iniciar una conversación.'
+                    : 'Busca un compañero o examinador de tu curso para iniciar una conversación.'}
                 </p>
               </div>
             ) : (
@@ -544,7 +586,11 @@ export default function MessagesPage() {
               <div className="text-center">
                 <MessageSquare className="h-14 w-14 mx-auto mb-4 opacity-10" />
                 <p className="font-medium">Selecciona una conversación</p>
-                <p className="text-sm mt-1">o busca un contacto en tus cursos para comenzar.</p>
+                <p className="text-sm mt-1">
+                  {isAdmin
+                    ? 'o busca a una persona de tu sede para comenzar.'
+                    : 'o busca un contacto en tus cursos para comenzar.'}
+                </p>
               </div>
             </div>
           ) : (
@@ -620,29 +666,53 @@ export default function MessagesPage() {
               </div>
 
               {/* Campo */}
-              <div className="p-4 border-t border-border/50 shrink-0">
-                <div className="flex items-center gap-3">
-                  <input
-                    type="text"
-                    value={newMessage}
-                    onChange={(e) => setNewMessage(e.target.value)}
-                    onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && sendMessage()}
-                    aria-label="Mensaje"
-                    placeholder="Escribe un mensaje..."
-                    className="flex-1 bg-muted/50 border border-border rounded-xl px-4 py-3 min-h-[44px] focus:outline-none focus:ring-2 focus:ring-primary/50 text-sm"
-                    disabled={sending}
-                  />
-                  <button
-                    type="button"
-                    onClick={sendMessage}
-                    disabled={!newMessage.trim() || sending}
-                    aria-label="Enviar mensaje"
-                    className="h-11 w-11 bg-primary text-primary-foreground rounded-xl flex items-center justify-center hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
+              {openContactCanWrite ? (
+                <div className="p-4 border-t border-border/50 shrink-0">
+                  <div className="flex items-end gap-3">
+                    <textarea
+                      value={newMessage}
+                      onChange={(e) => setNewMessage(e.target.value)}
+                      onKeyDown={(e) => {
+                        // Intro envía; Mayús + Intro añade un salto de línea.
+                        if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+                          e.preventDefault();
+                          void sendMessage();
+                        }
+                      }}
+                      maxLength={MAX_MESSAGE_LENGTH}
+                      rows={1}
+                      aria-label="Mensaje"
+                      aria-describedby="message-length"
+                      placeholder="Escribe un mensaje..."
+                      className="flex-1 bg-muted/50 border border-border rounded-xl px-4 py-3 min-h-[44px] max-h-40 field-sizing-content resize-none focus:outline-none focus:ring-2 focus:ring-primary/50 text-sm"
+                      disabled={sending}
+                    />
+                    <button
+                      type="button"
+                      onClick={sendMessage}
+                      disabled={!newMessage.trim() || sending}
+                      aria-label="Enviar mensaje"
+                      className="h-11 w-11 bg-primary text-primary-foreground rounded-xl flex items-center justify-center hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
+                    >
+                      {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+                    </button>
+                  </div>
+                  <p
+                    id="message-length"
+                    className="text-[10px] text-muted-foreground mt-1.5 flex justify-between gap-3"
                   >
-                    {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-                  </button>
+                    <span>Mayús + Intro para saltar de línea.</span>
+                    <span>
+                      {newMessage.length}/{MAX_MESSAGE_LENGTH}
+                    </span>
+                  </p>
                 </div>
-              </div>
+              ) : (
+                <p className="p-4 border-t border-border/50 shrink-0 text-xs text-muted-foreground text-center">
+                  Ya no puedes escribir a esta persona porque no comparten un curso activo. El historial sigue
+                  disponible.
+                </p>
+              )}
             </>
           )}
         </div>

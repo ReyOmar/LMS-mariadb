@@ -6,6 +6,7 @@ import { SettingsService } from '../settings/settings.service';
 import { CourseAccessService } from '../courses/course-access.service';
 import { averageOfScores } from '../common/domain/grading';
 import { Country } from '../common/domain/country';
+import { plural } from '../common/domain/text';
 import { CertificateData } from './certificate-pdf';
 import { computeValidUntil } from './validity';
 
@@ -17,6 +18,33 @@ import { computeValidUntil } from './validity';
  * declare su duración se acredita ésta, y queda avisado en el registro.
  */
 const DEFAULT_HOURS = 1;
+
+/**
+ * Texto legal del diploma cuando la sede no escribe el suyo.
+ *
+ * Las evaluaciones son cuestionarios, que corrige la plataforma, y tareas, que califica el
+ * examinador: de todas ellas lo que se puede afirmar es que se superaron.
+ */
+export function defaultLegalText(modules: number, resources: number, assessments: number): string {
+  const program =
+    `${modules} ${plural(modules, 'módulo', 'módulos')} y ` +
+    `${resources} ${plural(resources, 'recurso formativo', 'recursos formativos')}`;
+  const assessed =
+    assessments > 0
+      ? `, incluyendo ${assessments} ${plural(assessments, 'evaluación superada', 'evaluaciones superadas')}`
+      : '';
+
+  return (
+    'El presente certificado acredita que el participante cumplió satisfactoriamente la totalidad del programa ' +
+    `de capacitación, compuesto por ${program}${assessed}.`
+  );
+}
+
+/** Quién emitió un certificado, tal como lo muestra la verificación pública. */
+export interface CertificateIssuer {
+  country: Country;
+  platformName: string;
+}
 
 /** Todo lo que hace falta para emitir: el documento y a quién hay que avisar. */
 export interface IssuanceData {
@@ -83,17 +111,26 @@ export class CertificateDataService {
 
     if (!user || !course) throw new NotFoundException('No se encontró el alumno o el curso.');
 
-    // Tras una certificación anterior empieza una vuelta nueva: sólo cuenta el tiempo de ésta.
+    // Tras una certificación anterior empieza una vuelta nueva: sólo cuenta lo de ésta.
     const previousCertificate = await this.prisma.certificate.findFirst({
       where: { userGuid, courseGuid },
       orderBy: { completedAt: 'desc' },
       select: { completedAt: true },
     });
 
-    const [scores, studyTime] = await Promise.all([
-      this.prisma.submission.findMany({
-        where: { userGuid, status: 'GRADED', score: { not: null }, assignment: { module: { courseGuid } } },
-        select: { score: true },
+    const [bestScores, studyTime] = await Promise.all([
+      // La mejor nota de cada evaluación: los intentos suspendidos antes de aprobar no
+      // rebajan el promedio que acredita el diploma.
+      this.prisma.submission.groupBy({
+        by: ['assignmentGuid'],
+        where: {
+          userGuid,
+          status: 'GRADED',
+          score: { not: null },
+          assignment: { module: { courseGuid } },
+          ...(previousCertificate && { createdAt: { gt: previousCertificate.completedAt } }),
+        },
+        _max: { score: true },
       }),
       this.prisma.studySession.aggregate({
         where: {
@@ -106,7 +143,7 @@ export class CertificateDataService {
     ]);
 
     const activeSeconds = studyTime._sum.durationSeconds ?? 0;
-    const totalAssignments = resources.filter((resource) => resource.type === 'ASSIGNMENT').length;
+    const totalAssessments = resources.filter((resource) => resource.type === 'ASSIGNMENT').length;
     const creditedHours = this.creditedHoursFor(course.title, course.durationHours);
     const issuedAt = new Date();
 
@@ -122,13 +159,13 @@ export class CertificateDataService {
       teacherEmail: course.teacher.email,
       teacherName: course.teacher.firstName,
       certificate: {
-        studentName: `${user.firstName} ${user.lastName}`,
+        studentName: `${user.firstName} ${user.lastName}`.trim(),
         courseTitle: course.title,
         startedAt: enrollment?.enrolledAt ?? issuedAt,
         completedAt: issuedAt,
         validUntil: computeValidUntil(issuedAt, config.certValidityMonths),
         totalHours: creditedHours,
-        averageScore: averageOfScores(scores.map((submission) => submission.score)),
+        averageScore: averageOfScores(bestScores.map((assessment) => assessment._max.score)),
         verificationCode: this.generateCode(),
         teacherName: `${course.teacher.firstName} ${course.teacher.lastName}`,
         platformName: config.platformName,
@@ -136,8 +173,7 @@ export class CertificateDataService {
         secondaryColor: config.secondaryColor,
         totalModules: course._count.modules,
         totalResources: resources.length,
-        legalText:
-          config.certLegalText || this.defaultLegalText(course._count.modules, resources.length, totalAssignments),
+        legalText: config.certLegalText || defaultLegalText(course._count.modules, resources.length, totalAssessments),
         customTitle: config.certCustomTitle,
         subtitle: config.certSubtitle,
         showModules: config.certShowModules,
@@ -153,6 +189,12 @@ export class CertificateDataService {
     };
   }
 
+  /** La plataforma y la sede que emiten los certificados de `country`. */
+  async issuer(country: Country): Promise<CertificateIssuer> {
+    const { platformName } = await this.settings.getSettings(country);
+    return { country, platformName };
+  }
+
   /** Código legible, único y difícil de adivinar para la verificación pública. */
   private generateCode(): string {
     const random = crypto.randomBytes(5).toString('hex').toUpperCase();
@@ -165,18 +207,10 @@ export class CertificateDataService {
     if (declared) return declared;
 
     this.logger.warn(
-      `El curso "${courseTitle}" no declara su duración: el certificado acredita ${DEFAULT_HOURS} hora(s). ` +
-        'Configúrala en la ficha del curso.',
+      `El curso "${courseTitle}" no declara su duración: el certificado acredita ${DEFAULT_HOURS} ` +
+        `${plural(DEFAULT_HOURS, 'hora', 'horas')}. Configúrala en la ficha del curso.`,
     );
     return DEFAULT_HOURS;
-  }
-
-  private defaultLegalText(modules: number, resources: number, assignments: number): string {
-    return (
-      'El presente certificado acredita que el participante cumplió satisfactoriamente la totalidad del programa ' +
-      `de capacitación, compuesto por ${modules} módulo(s) y ${resources} recurso(s) formativo(s), incluyendo ` +
-      `${assignments} evaluación(es) calificada(s) por el examinador asignado.`
-    );
   }
 
   /**

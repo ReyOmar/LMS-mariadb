@@ -1,5 +1,5 @@
 import { Equals, IsEmail, IsIn, IsNotEmpty, IsString, MaxLength } from 'class-validator';
-import { NormalizeEmail, Trim } from '../../common/validation/transforms';
+import { NormalizeEmail, StrictBoolean, Trim } from '../../common/validation/transforms';
 import { IsCountry } from '../../common/validation/country.validator';
 import { Country } from '../../common/domain/country';
 import { UserRole } from '../../common/interfaces/jwt-payload.interface';
@@ -34,6 +34,7 @@ export class RequestAccessDto {
   country: Country;
 
   /** Autorización expresa del tratamiento de datos, obligatoria para solicitar acceso. */
+  @StrictBoolean()
   @Equals(true, { message: 'Debes aceptar la política de tratamiento de datos para enviar la solicitud.' })
   acceptsDataPolicy: boolean;
 }

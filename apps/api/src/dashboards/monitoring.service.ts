@@ -76,14 +76,15 @@ export class MonitoringService {
       GROUP BY weekday`;
     const ranges = await this.progressRanges(students, scope.guids);
     // Entregas de las matrículas en curso: parte de ellas y busca las de cada alumno en las
-    // tareas de su curso, sin recorrer las de quien ya terminó.
+    // tareas de su curso, sin recorrer las de quien ya terminó. Un intento de cuestionario
+    // abierto todavía no es una entrega.
     const submissions = await this.prisma.$queryRaw<{ withSubmissions: bigint; total: bigint }[]>`
       SELECT COUNT(DISTINCT e.usuario_guid) AS withSubmissions, COUNT(*) AS total
       FROM lms_matriculas m
       JOIN usuarios u ON u.guid = m.usuario_guid
       JOIN lms_modulos mo ON mo.curso_guid = m.curso_guid
       JOIN lms_recursos r ON r.modulo_guid = mo.guid
-      JOIN lms_entregas e ON e.tarea_guid = r.guid AND e.usuario_guid = m.usuario_guid
+      JOIN lms_entregas e ON e.tarea_guid = r.guid AND e.usuario_guid = m.usuario_guid AND e.estado <> 'BORRADOR'
       WHERE ${IN_PROGRESS} AND m.curso_guid IN (${courses}) AND ${students}`;
 
     // DAYOFWEEK va de 1 (domingo) a 7; la gráfica, como getDay(), de 0 a 6.
@@ -256,7 +257,7 @@ export class MonitoringService {
         FROM lms_matriculas m
         JOIN lms_modulos mo ON mo.curso_guid = m.curso_guid
         JOIN lms_recursos r ON r.modulo_guid = mo.guid
-        JOIN lms_entregas e ON e.tarea_guid = r.guid AND e.usuario_guid = m.usuario_guid
+        JOIN lms_entregas e ON e.tarea_guid = r.guid AND e.usuario_guid = m.usuario_guid AND e.estado <> 'BORRADOR'
         WHERE m.usuario_guid IN (${Prisma.join(users)}) AND m.curso_guid IN (${Prisma.join(scope.guids)})
           AND ${IN_PROGRESS}
         GROUP BY m.usuario_guid`,

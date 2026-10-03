@@ -16,7 +16,14 @@ import { fileSizeWarning, type UploadLimit } from './upload-limits';
  */
 
 /** Motivos por los que se llega al login sin haber pulsado «cerrar sesión». */
-export type LogoutReason = 'expired' | 'revoked' | 'displaced';
+const LOGOUT_REASON_KEYS = ['expired', 'revoked', 'displaced', 'password', 'role'] as const;
+
+export type LogoutReason = (typeof LOGOUT_REASON_KEYS)[number];
+
+/** ¿Es un motivo que el login sabe explicar? Lo que llega por la URL puede ser cualquier cosa. */
+export function isLogoutReason(value: unknown): value is LogoutReason {
+  return typeof value === 'string' && (LOGOUT_REASON_KEYS as readonly string[]).includes(value);
+}
 
 const TOKEN_KEY = 'lms_token';
 const USER_KEY = 'lms_user';
@@ -101,9 +108,43 @@ function handleExpiredSession(error: AxiosError<{ message?: string }>): void {
   redirectToLogin(match?.reason ?? 'expired');
 }
 
-/** Lleva al login con el motivo, que la pantalla de acceso explica al usuario. */
+/**
+ * Lleva al login con el motivo, que la pantalla de acceso explica al usuario, y con la
+ * página en la que estaba, para devolverlo a ella al volver a entrar.
+ */
 export function redirectToLogin(reason: LogoutReason): void {
-  window.location.href = `/login?reason=${reason}`;
+  window.location.href = loginUrl(reason, `${window.location.pathname}${window.location.search}`);
+}
+
+/** Dirección del login con el motivo de la salida y la página a la que volver después. */
+export function loginUrl(reason?: LogoutReason, next?: string | null): string {
+  const params = new URLSearchParams();
+  if (reason) params.set('reason', reason);
+  const destination = safeNextPath(next);
+  if (destination) params.set('next', destination);
+  const query = params.toString();
+  return query ? `/login?${query}` : '/login';
+}
+
+/** Origen inventado para resolver rutas relativas sin depender de la página actual. */
+const PATH_BASE = 'https://campus.invalid';
+
+/**
+ * Ruta del propio campus a la que se puede volver tras el login, o `null`.
+ *
+ * El parámetro `next` llega por la URL y lo puede escribir cualquiera: sólo se acepta una
+ * ruta relativa que no salga del campus (nada de `//otro.sitio`, `/\otro.sitio` ni
+ * `javascript:`), y nunca el propio login.
+ */
+export function safeNextPath(value: string | null | undefined): string | null {
+  if (!value || !value.startsWith('/')) return null;
+  try {
+    const url = new URL(value, PATH_BASE);
+    if (url.origin !== PATH_BASE || url.pathname === '/login' || url.pathname.startsWith('/login/')) return null;
+    return `${url.pathname}${url.search}${url.hash}`;
+  } catch {
+    return null;
+  }
 }
 
 /**

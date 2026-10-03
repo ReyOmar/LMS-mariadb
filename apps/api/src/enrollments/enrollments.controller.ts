@@ -32,7 +32,7 @@ export class EnrollmentsController {
   @Roles('ADMIN', 'TEACHER')
   @Post('/:courseGuid')
   enroll(@CurrentUser() user: JwtPayload, @Param('courseGuid') courseGuid: string, @Body() dto: EnrollStudentDto) {
-    return this.enrollments.enroll(courseGuid, dto.userGuid, user);
+    return this.enrollments.enroll(courseGuid, dto.userGuid, user, dto.confirmRestart === true);
   }
 
   @Roles('ADMIN', 'TEACHER')

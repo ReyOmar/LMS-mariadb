@@ -409,9 +409,10 @@ estos:
   `lms_entregas(tarea_guid, usuario_guid)` → `(tarea_guid, usuario_guid, estado, calificacion)`
   y `lms_sesion_activa(usuario_guid, curso_guid)` → `(usuario_guid, curso_guid, fin_sesion)`;
   retirado `lms_certificados(usuario_guid)`, que la restricción única ya cubre.
-- **Certificados que sobreviven a la cuenta**: `lms_certificados.usuario_guid` admite nulo y
-  la nueva columna `nombre_titular` guarda el nombre con que se emitió. Si se borra la cuenta
-  del alumno, su certificado sigue verificándose con ese nombre.
+- **Certificados que sobreviven a la cuenta**: `lms_certificados.usuario_guid` admite nulo,
+  la nueva columna `nombre_titular` guarda el nombre con que se emitió y `pais`, la sede que
+  lo emitió. Si se borra la cuenta del alumno, su certificado sigue verificándose con ese
+  nombre y esa sede.
 - **Plantillas de correo por sede**: `lms_plantillas_correo.pais`. Cada sede edita las suyas.
 - **Tablas nuevas**: `lms_versiones_legales` (los textos legales que aceptó cada persona),
   `lms_entregas_archivadas` (las entregas de una vuelta ya certificada cuando el alumno
@@ -429,6 +430,14 @@ Pasos, en este orden:
    ALTER TABLE lms_certificados ADD COLUMN nombre_titular VARCHAR(191) NOT NULL DEFAULT '';
    UPDATE lms_certificados ce JOIN usuarios u ON u.guid = ce.usuario_guid
    SET ce.nombre_titular = CONCAT(u.nombre, ' ', u.apellido);
+
+   -- Sede que emitió cada certificado, tomada de la cuenta o, si ya no existe, del curso.
+   ALTER TABLE lms_certificados
+     ADD COLUMN pais ENUM('COLOMBIA', 'MEXICO') NOT NULL DEFAULT 'COLOMBIA';
+   UPDATE lms_certificados ce
+   LEFT JOIN usuarios u ON u.guid = ce.usuario_guid
+   LEFT JOIN lms_cursos cu ON cu.guid = ce.curso_guid
+   SET ce.pais = COALESCE(u.pais, cu.pais, ce.pais);
 
    -- Las plantillas existentes pasan a ser las de Colombia y se copian para México.
    ALTER TABLE lms_plantillas_correo
@@ -491,6 +500,30 @@ Pasos, en este orden:
    DROP INDEX lms_progreso_recurso_recurso_guid_idx ON lms_progreso_recurso;
    DROP INDEX lms_certificados_usuario_guid_idx ON lms_certificados;
    ```
+
+5. **Actualizar los correos.** En `~/lms-api`, ejecutar la semilla:
+
+   ```bash
+   npx prisma db seed
+   ```
+
+   Crea en las dos sedes los eventos de correo nuevos (por ejemplo `SOLICITUD_RECHAZADA`,
+   el aviso de solicitud no aprobada) y pone al día las variables de los existentes. No
+   toca las plantillas que ya están guardadas, editadas o no.
+
+   Para que los correos de calificación ya guardados muestren el comentario del
+   examinador, en MariaDB:
+
+   ```sql
+   UPDATE lms_plantillas_correo p JOIN lms_eventos_correo e ON e.id = p.evento_id
+   SET p.cuerpo_html = REPLACE(p.cuerpo_html, '{{mensaje_aprobacion}}', '{{mensaje_aprobacion}}\n{{comentario}}')
+   WHERE e.identificador = 'CALIFICACION_RECIBIDA' AND p.cuerpo_html NOT LIKE '%{{comentario}}%';
+   ```
+
+   Se puede repetir sin daño. La plantilla de bienvenida ya guardada (`USUARIO_APROBADO`)
+   tampoco recibe sola la variable nueva `{{sede}}`: el administrador de cada sede puede
+   añadirla desde _Plantillas de correo_ o copiar el texto de serie, que está en
+   `apps/api/prisma/email-templates.ts`.
 
 Después de actualizar:
 

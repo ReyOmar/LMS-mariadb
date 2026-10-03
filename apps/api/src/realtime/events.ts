@@ -36,6 +36,8 @@ export const REALTIME_EVENTS = [
   'presence:sync',
   'notification:new',
   'message:new',
+  'message:read',
+  'contact:updated',
   'certificate:new',
 ] as const;
 

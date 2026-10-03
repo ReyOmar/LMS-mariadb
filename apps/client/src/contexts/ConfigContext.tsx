@@ -5,6 +5,7 @@ import api, { errorMessage } from '@/lib/api';
 import { Country } from '@/lib/country';
 import { readLocalJson, writeLocal } from '@/lib/local-storage';
 import { applyTheme } from '@/lib/theme';
+import { setTimeZone } from '@/lib/dates';
 import { useCountry } from './CountryContext';
 import { useRealtimeEvent } from './RealtimeContext';
 
@@ -29,6 +30,8 @@ export interface CountrySettings {
   maxFileMb: number;
   /** Tope técnico del servidor (`MAX_UPLOAD_MB`): ningún límite configurable puede superarlo. */
   uploadCeilingMb: number;
+  /** Zona horaria IANA de la sede, en la que se escriben todas las fechas. */
+  timeZone: string;
 
   landingHeroTitle1: string;
   landingHeroTitle2: string;
@@ -78,6 +81,12 @@ function writeCache(country: Country, config: CountrySettings): void {
   writeLocal(cacheKey(country), JSON.stringify(config));
 }
 
+/** Lo que la configuración cambia fuera de React: el tema y la zona horaria de las fechas. */
+function applySettings(config: CountrySettings): void {
+  applyTheme(config);
+  setTimeZone(config.timeZone);
+}
+
 export function ConfigProvider({ children }: { children: ReactNode }) {
   const { country } = useCountry();
   const [config, setConfig] = useState<CountrySettings | null>(null);
@@ -96,7 +105,7 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
     const cached = readCache(target);
     if (cached) {
       setConfig(cached);
-      applyTheme(cached);
+      applySettings(cached);
     }
 
     try {
@@ -104,7 +113,7 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
       writeCache(target, data);
       if (requestedCountry.current !== target) return;
       setConfig(data);
-      applyTheme(data);
+      applySettings(data);
     } catch (failure) {
       // Con caché disponible el usuario no nota nada; sin ella, la interfaz queda con el
       // tema por defecto y el error se expone para que la pantalla pueda avisar.
@@ -125,7 +134,7 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
     const updated = data as CountrySettings | null;
     if (!updated?.country || updated.country !== country) return;
     setConfig(updated);
-    applyTheme(updated);
+    applySettings(updated);
     writeCache(updated.country, updated);
   });
 
@@ -133,7 +142,7 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
     setConfig((prev) => {
       if (!prev) return prev;
       const next = { ...prev, ...changes };
-      applyTheme(next);
+      applySettings(next);
       return next;
     });
   }, []);

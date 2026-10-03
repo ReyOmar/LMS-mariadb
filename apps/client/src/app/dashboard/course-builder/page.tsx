@@ -293,7 +293,7 @@ function CourseBuilder() {
       'Eliminar curso',
       `Se borrarán de forma permanente su contenido (${count(modules.length, 'módulo', 'módulos')} y ` +
         `${count(resources, 'recurso', 'recursos')}), las matrículas —también las dadas de baja—, el avance de los ` +
-        'estudiantes y los archivos que entregaron.' +
+        'estudiantes y sus entregas con los archivos, también las de vueltas anteriores.' +
         (enrolled === 1 ? ' Ahora hay 1 estudiante matriculado, que perderá el acceso.' : '') +
         (enrolled && enrolled > 1 ? ` Ahora hay ${enrolled} estudiantes matriculados, que perderán el acceso.` : '') +
         ' Los certificados ya emitidos se conservan y se pueden seguir verificando. No se puede deshacer.',

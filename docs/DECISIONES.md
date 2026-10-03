@@ -30,6 +30,17 @@ error no distingue «no existe», «contraseña incorrecta» y «sede equivocada
 distinguiera, cualquiera podría averiguar en qué sede está registrada una persona probando
 correos.
 
+### ¿Por qué el login sí dice que una solicitud está pendiente o fue rechazada?
+
+Es la única excepción a la regla anterior, y se acepta a sabiendas: escribiendo un correo
+cualquiera en el acceso se puede saber si alguien pidió entrar y si se le rechazó. A cambio,
+quien solicitó acceso tiene una forma de consultar en qué punto está su solicitud sin
+cuenta, sin otro canal y sin escribir a la administración. El riesgo es bajo: no revela la
+sede, ni si existe una cuenta, ni ningún dato de la persona, y la ruta tiene el mismo
+límite de intentos por minuto que cualquier acceso. Si un día pesa más la privacidad de
+quien solicita, basta con quitar esos dos mensajes en `AuthService.login`: el correo de
+aprobación o de rechazo ya le comunica la decisión.
+
 ### ¿Por qué los administradores también están atados a una sede?
 
 Es la lectura literal del requisito: ningún dato cruza entre sedes. Un rol con visión global

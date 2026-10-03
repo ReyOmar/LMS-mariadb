@@ -1,4 +1,11 @@
-import { BadRequestException, ForbiddenException, HttpException, HttpStatus, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  HttpException,
+  HttpStatus,
+  NotFoundException,
+  PayloadTooLargeException,
+} from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { ExceptionsFilter } from './exceptions.filter';
 
@@ -11,6 +18,7 @@ import { ExceptionsFilter } from './exceptions.filter';
 
 interface CapturedResponse {
   status: number;
+  headers: Record<string, string>;
   body: {
     statusCode: number;
     error: string;
@@ -22,9 +30,13 @@ interface CapturedResponse {
 
 /** Recoge lo que el filtro envía, imitando lo justo de Fastify. */
 function capture(exception: unknown, request: Record<string, unknown> = {}): CapturedResponse {
-  const caught = {} as CapturedResponse;
+  const caught = { headers: {} } as CapturedResponse;
 
   const response = {
+    header(name: string, value: string) {
+      caught.headers[name] = value;
+      return this;
+    },
     status(code: number) {
       caught.status = code;
       return this;
@@ -73,6 +85,13 @@ describe('ExceptionsFilter', () => {
       const { body } = capture(new NotFoundException('Cannot GET /api/inventada'));
 
       expect(body.message).toBe('La dirección solicitada no existe en la API.');
+    });
+
+    it('traduce el identificador no numérico que rechaza `ParseIntPipe`', () => {
+      const { status, body } = capture(new BadRequestException('Validation failed (numeric string is expected)'));
+
+      expect(status).toBe(HttpStatus.BAD_REQUEST);
+      expect(body.message).toBe('El identificador de la dirección debe ser un número.');
     });
 
     it('no confunde un mensaje propio que empiece parecido', () => {
@@ -157,6 +176,27 @@ describe('ExceptionsFilter', () => {
       expect(status).toBe(HttpStatus.PAYLOAD_TOO_LARGE);
       expect(body.message).toBe('El archivo supera el tamaño máximo permitido.');
     });
+
+    it('al rechazar por tamaño cierra la conexión para que el navegador deje de enviar', () => {
+      expect(capture(fromFastify('request file too large', 413)).headers.Connection).toBe('close');
+      expect(capture(new PayloadTooLargeException('La imagen supera el límite de 5 MB.')).headers.Connection).toBe(
+        'close',
+      );
+    });
+
+    it('no cierra la conexión por otros errores', () => {
+      expect(capture(new BadRequestException('x')).headers.Connection).toBeUndefined();
+    });
+
+    it.each(['reach files limit', 'reach parts limit', 'reach fields limit'])(
+      'con más de un archivo (%s) pide enviar uno solo',
+      (message) => {
+        const { status, body } = capture(fromFastify(message, 413));
+
+        expect(status).toBe(HttpStatus.PAYLOAD_TOO_LARGE);
+        expect(body.message).toBe('Envía un solo archivo por subida.');
+      },
+    );
 
     it('un cuerpo demasiado grande también se explica en español', () => {
       const { status, body } = capture(new HttpException('Request body is too large', 413));

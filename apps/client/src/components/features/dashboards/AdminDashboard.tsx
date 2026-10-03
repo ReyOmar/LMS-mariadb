@@ -6,14 +6,15 @@ import { HighlightedStat } from '@/components/ui/HighlightedStat';
 import { PageLoader } from '@/components/ui/PageLoader';
 import api, { errorMessage } from '@/lib/api';
 import { useAlerts } from '@/contexts/AlertContext';
-import { useRealtimeEvent } from '@/contexts/RealtimeContext';
+import { useRealtimeEvent, useRealtimeReconnect } from '@/contexts/RealtimeContext';
 import { useSession } from '@/contexts/SessionContext';
 import { useCountry } from '@/contexts/CountryContext';
 import { formatNumber } from '@/lib/country';
 import { plural } from '@/lib/text';
 import { DEFAULT_PASSING_SCORE, formatPoints } from '@/lib/grading';
 import type { CountrySummary } from '@/types/models';
-import { Donut, ActivityAreas, breakdownColor } from '@/components/ui/charts';
+import { Donut, ActivityAreas, COLOR, breakdownColor } from '@/components/ui/charts';
+import { enrollmentDistribution, OTHERS_KEY } from './distribution';
 
 /** Colores de las dos series de la actividad semanal, los mismos en la leyenda y en la gráfica. */
 const ACTIVITY_COLORS = {
@@ -63,6 +64,13 @@ export function AdminDashboard() {
   useRealtimeEvent('request:new', loadDashboardData);
   useRealtimeEvent('request:resolved', loadDashboardData);
   useRealtimeEvent('enrollment:changed', loadDashboardData);
+  useRealtimeEvent('course:created', loadDashboardData);
+  useRealtimeEvent('course:updated', loadDashboardData);
+  useRealtimeEvent('course:deleted', loadDashboardData);
+  useRealtimeEvent('course:maintenance', loadDashboardData);
+  useRealtimeEvent('user:created', loadDashboardData);
+  useRealtimeEvent('user:deleted', loadDashboardData);
+  useRealtimeReconnect(loadDashboardData);
 
   const pendingRequests = stats?.pendingRequests ?? 0;
 
@@ -73,18 +81,16 @@ export function AdminDashboard() {
     resources: day.resources,
     submissions: day.submissions,
   }));
-  const breakdownByCourse = (stats?.courseBreakdown ?? []).map((course, index) => ({
-    guid: course.guid,
-    name: course.name,
-    value: course.enrollments,
-    color: breakdownColor(index),
-  }));
   const totalEnrollments = stats?.totalEnrollments ?? 0;
+  const breakdownByCourse = enrollmentDistribution(stats?.courseBreakdown ?? [], totalEnrollments).map(
+    (slice, index) => ({ ...slice, color: slice.key === OTHERS_KEY ? COLOR.empty : breakdownColor(index) }),
+  );
   const average = stats?.overallAverage ?? null;
   const users = stats?.users;
   const courses = stats?.courses;
   const students = users?.students ?? 0;
   const teachers = users?.teachers ?? 0;
+  const admins = users?.admins ?? 0;
   const published = courses?.published ?? 0;
   const drafts = courses?.draft ?? 0;
   const count = (value: number) => formatNumber(value, country);
@@ -110,7 +116,7 @@ export function AdminDashboard() {
           icon={<Users className="h-5 w-5" />}
           color="primary"
           detail={{
-            text: `${count(students)} ${plural(students, 'estudiante', 'estudiantes')} · ${count(teachers)} ${plural(teachers, 'examinador', 'examinadores')}`,
+            text: `${count(students)} ${plural(students, 'estudiante', 'estudiantes')} · ${count(teachers)} ${plural(teachers, 'examinador', 'examinadores')} · ${count(admins)} ${plural(admins, 'administrador', 'administradores')}`,
           }}
           href="/dashboard/admin/users"
           className="stagger-1 animate-fade-slide-in"
@@ -212,7 +218,7 @@ export function AdminDashboard() {
                 <div className="space-y-2 mt-4">
                   {breakdownByCourse.map((course) => (
                     <div
-                      key={course.guid}
+                      key={course.key}
                       className="flex items-center justify-between text-xs group/item hover:bg-muted/30 rounded-lg px-2 py-1 transition-colors"
                     >
                       <div className="flex items-center gap-2">
@@ -220,10 +226,7 @@ export function AdminDashboard() {
                         <span className="font-medium text-foreground">{course.name}</span>
                       </div>
                       <span className="font-bold text-muted-foreground group-hover/item:text-foreground transition-colors">
-                        {count(course.value)}{' '}
-                        <span className="font-normal">
-                          ({totalEnrollments > 0 ? Math.round((course.value / totalEnrollments) * 100) : 0}%)
-                        </span>
+                        {count(course.value)} <span className="font-normal">({course.percent}%)</span>
                       </span>
                     </div>
                   ))}

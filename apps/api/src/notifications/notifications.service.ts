@@ -3,6 +3,7 @@ import { NotificationType } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { Country } from '../common/domain/country';
+import { plural } from '../common/domain/text';
 import { JwtPayload } from '../common/interfaces/jwt-payload.interface';
 
 /** Notificaciones que se devuelven por defecto en el centro de avisos. */
@@ -76,11 +77,13 @@ export class NotificationsService {
       where: { userGuid: user.sub, read: false },
       data: { read: true },
     });
-    return { message: `${count} notificación(es) marcadas como leídas.` };
+    return {
+      message: `${count} ${plural(count, 'notificación marcada como leída', 'notificaciones marcadas como leídas')}.`,
+    };
   }
 
   async clear(user: JwtPayload) {
     const { count } = await this.prisma.notification.deleteMany({ where: { userGuid: user.sub } });
-    return { message: `${count} notificación(es) eliminadas.` };
+    return { message: `${count} ${plural(count, 'notificación eliminada', 'notificaciones eliminadas')}.` };
   }
 }

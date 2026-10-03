@@ -1,6 +1,6 @@
 'use client';
 
-import { Clock, Monitor, ShieldAlert } from 'lucide-react';
+import { Clock, KeyRound, Monitor, ShieldAlert, UserCog } from 'lucide-react';
 
 import type { LogoutReason } from '@/lib/api';
 
@@ -8,7 +8,19 @@ const NOTICES: Record<LogoutReason, { icon: typeof Clock; title: string; text: s
   expired: {
     icon: Clock,
     title: 'Tu sesión caducó',
-    text: 'Por seguridad, las sesiones se cierran tras un tiempo de inactividad. Vuelve a entrar para continuar donde lo dejaste.',
+    text: 'Por seguridad, cada sesión dura como máximo 24 horas desde que entras. Vuelve a entrar para continuar donde lo dejaste.',
+    tone: 'text-primary bg-primary/10 ring-primary/20',
+  },
+  password: {
+    icon: KeyRound,
+    title: 'Se cambió tu contraseña',
+    text: 'Tu contraseña se cambió. Entra con la nueva; si no fuiste tú, recupérala.',
+    tone: 'text-primary bg-primary/10 ring-primary/20',
+  },
+  role: {
+    icon: UserCog,
+    title: 'Tu rol cambió',
+    text: 'Un administrador cambió tu rol en el campus. Vuelve a entrar para ver las opciones que te corresponden.',
     tone: 'text-primary bg-primary/10 ring-primary/20',
   },
   displaced: {

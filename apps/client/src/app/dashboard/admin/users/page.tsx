@@ -12,7 +12,7 @@ import type { User, UserRole } from '@/types/models';
 import { useCountry } from '@/contexts/CountryContext';
 import { formatNumber } from '@/lib/country';
 import { plural } from '@/lib/text';
-import { CreateAdminForm } from './components/CreateAdminForm';
+import { AccountForm } from './components/AccountForm';
 import { UserDetails } from './components/UserDetails';
 import { AccountList } from './components/AccountList';
 import { CourseTransfer } from './components/CourseTransfer';
@@ -21,8 +21,8 @@ import type { AssignedCourse, TransferTarget, TransferState, Tab } from './compo
 /**
  * Base de usuarios de la sede.
  *
- * Esta pantalla coordina cuatro piezas —el listado, la ficha de una cuenta, el alta de
- * administradores y el traspaso de cursos— y se queda con lo que comparten: la lista de
+ * Esta pantalla coordina cuatro piezas —el listado, la ficha de una cuenta, el formulario
+ * de alta y edición, y el traspaso de cursos— y se queda con lo que comparten: la lista de
  * cuentas y quién está seleccionado.
  *
  * La lista siempre es la de **una sede**: la API la acota por el país de la sesión, aquí
@@ -39,12 +39,14 @@ const NO_ACCOUNTS: CountByRole = { ADMIN: 0, TEACHER: 0, STUDENT: 0 };
 interface AccountsResponse {
   total?: number;
   byRole?: CountByRole;
+  /** Cuentas de la sede, busque lo que se busque. */
+  registered?: number;
   cursor: string | null;
   users: User[];
 }
 
 export default function UsersPage() {
-  const { user: currentUser } = useSession();
+  const { user: currentUser, refreshUser } = useSession();
   const { country } = useCountry();
   const { showAlert, showConfirmation, notify } = useAlerts();
 
@@ -56,6 +58,7 @@ export default function UsersPage() {
   const appliedSearch = useDebounce(search, 300);
   const [total, setTotal] = useState(0);
   const [byRole, setByRole] = useState<CountByRole>(NO_ACCOUNTS);
+  const [registered, setRegistered] = useState(0);
   const [cursor, setCursor] = useState<string | null>(null);
 
   // Ficha abierta y lo que se pide al abrirla.
@@ -65,9 +68,8 @@ export default function UsersPage() {
   /** Ficha cuya carga está en curso: si se abre otra antes de que termine, se ignora. */
   const detailsRequest = useRef<string | null>(null);
 
-  // Alta de administrador y clave temporal con la que nacen las cuentas de esta sede.
-  const [createFormOpen, setCreateFormOpen] = useState(false);
-  const [defaultPassword, setDefaultPassword] = useState('');
+  // Formulario abierto: una cuenta nueva o la cuenta que se edita.
+  const [form, setForm] = useState<{ account?: User } | null>(null);
 
   // Diálogo para decidir a quién pasan los cursos de una cuenta que se va a eliminar.
   const [transfer, setTransfer] = useState<TransferState | null>(null);
@@ -80,6 +82,7 @@ export default function UsersPage() {
       setUsers(data.users ?? []);
       setTotal(data.total ?? 0);
       setByRole(data.byRole ?? NO_ACCOUNTS);
+      setRegistered(data.registered ?? 0);
       setCursor(data.cursor);
     } catch (error) {
       notify.error('No se pudieron cargar las cuentas', errorMessage(error));
@@ -111,13 +114,6 @@ export default function UsersPage() {
   useEffect(() => {
     void loadUsers();
   }, [loadUsers]);
-
-  useEffect(() => {
-    api
-      .get<{ defaultPassword?: string }>('/settings/full')
-      .then(({ data }) => setDefaultPassword(data?.defaultPassword ?? ''))
-      .catch(() => setDefaultPassword(''));
-  }, []);
 
   useRealtimeEvent('user:created', loadUsers);
   useRealtimeEvent('user:deleted', loadUsers);
@@ -173,7 +169,8 @@ export default function UsersPage() {
       try {
         const { data } = await api.get<TransferTarget[]>(`/auth/users/${user.guid}/course-targets`);
         const targets = Array.isArray(data) ? data : [];
-        setTransfer({ user, targets, selectedTarget: targets[0]?.guid ?? '', loading: false });
+        // Sin destino preelegido: a quién pasan los cursos es una decisión, no un valor por defecto.
+        setTransfer({ user, targets, selectedTarget: '', loading: false });
       } catch (error) {
         setTransfer(null);
         showAlert.error('No se pudo preparar la eliminación', errorMessage(error));
@@ -204,9 +201,14 @@ export default function UsersPage() {
     }
   };
 
-  if (loading) return <PageLoader message="Cargando base de usuarios…" />;
+  /** Tras guardar una cuenta: la ficha abierta se pone al día, con sus cursos según el rol. */
+  const accountSaved = (saved: User) => {
+    void loadUsers();
+    if (saved.guid === currentUser?.guid) void refreshUser();
+    if (selected?.guid === saved.guid) void openDetails({ ...selected, ...saved });
+  };
 
-  const registered = byRole.ADMIN + byRole.TEACHER + byRole.STUDENT;
+  if (loading) return <PageLoader message="Cargando base de usuarios…" />;
 
   return (
     <div className="animate-in fade-in duration-700">
@@ -235,7 +237,7 @@ export default function UsersPage() {
         onTabChange={setTab}
         onSearch={setSearch}
         onOpenDetails={openDetails}
-        onNewAdmin={() => setCreateFormOpen(true)}
+        onNewAccount={() => setForm({})}
       />
 
       {selected && (
@@ -245,15 +247,18 @@ export default function UsersPage() {
           loadingCourses={loadingCourses}
           isSelf={selected.guid === currentUser?.guid}
           onClose={closeDetails}
+          onEdit={(account) => setForm({ account })}
           onDelete={requestDelete}
         />
       )}
 
-      {createFormOpen && (
-        <CreateAdminForm
-          defaultPassword={defaultPassword}
-          onClose={() => setCreateFormOpen(false)}
-          onCreated={loadUsers}
+      {form && (
+        <AccountForm
+          account={form.account}
+          initialRole={tab}
+          isSelf={form.account?.guid === currentUser?.guid}
+          onClose={() => setForm(null)}
+          onSaved={accountSaved}
         />
       )}
 

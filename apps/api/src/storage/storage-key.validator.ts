@@ -2,9 +2,9 @@ import { ValidateBy, ValidationOptions } from 'class-validator';
 import { Folder, isStorageKey } from './folders';
 
 /**
- * Valida que un campo sea una clave de almacenamiento de las carpetas indicadas, tal como
- * la devuelve la subida. Sin esto, quien guarda la clave podría apuntar a un archivo ajeno
- * y la API lo firmaría, lo serviría o lo borraría al reemplazarlo.
+ * Valida que un campo tenga la forma de una clave de almacenamiento de las carpetas
+ * indicadas, tal como la devuelve la subida. Que el archivo lo subiera quien guarda la clave
+ * lo comprueba después `FileOwnershipService`, que necesita la base de datos.
  */
 export function IsStorageKey(folders: readonly Folder[], options?: ValidationOptions): PropertyDecorator {
   return ValidateBy(

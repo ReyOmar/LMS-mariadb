@@ -2,12 +2,13 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
+import { usePathname } from 'next/navigation';
 import { ShieldCheck } from 'lucide-react';
 import api, { errorMessage } from '@/lib/api';
 import { useSession } from '@/contexts/SessionContext';
 import { useDialog } from '@/hooks/useDialog';
 import type { Country } from '@/lib/country';
-import { PRIVACY_REFERENCE } from '@/lib/legal';
+import { PRIVACY_REFERENCE, asksForConsentOn } from '@/lib/legal';
 import { PrivacyNoticeSummary } from './PrivacyNoticeSummary';
 
 /**
@@ -39,16 +40,19 @@ const WORDING: Record<Country, { title: string; request: string; rights: string;
  * Pide aceptar la política de tratamiento de datos a quien entra sin haber aceptado la
  * versión vigente de su sede: cuentas creadas antes de existir la aceptación, cuentas que
  * dio de alta un administrador o una política que ha cambiado. Sin aceptarla no se puede
- * usar el campus; la alternativa es cerrar la sesión.
+ * usar el campus; la alternativa es cerrar la sesión. Las páginas públicas quedan a la
+ * vista, empezando por la legal: hay que poder leer lo que se acepta.
  */
 export function DataConsentDialog() {
   const { user, refreshUser, logout } = useSession();
+  const pathname = usePathname();
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const open = Boolean(user?.consentRequired) && asksForConsentOn(pathname);
   // Obligatoria: sin `onClose`, Escape no la cierra.
-  const { dialogProps, titleId } = useDialog({ open: Boolean(user?.consentRequired) });
+  const { dialogProps, titleId } = useDialog({ open });
 
-  if (!user?.consentRequired) return null;
+  if (!open || !user) return null;
   const wording = WORDING[user.country];
 
   const accept = async () => {
@@ -80,11 +84,7 @@ export function DataConsentDialog() {
         </div>
 
         <p className="text-sm text-muted-foreground leading-relaxed mb-3">
-          {wording.request}{' '}
-          <Link href="/legal#privacy" target="_blank" className="font-semibold text-primary hover:underline">
-            {PRIVACY_REFERENCE[user.country]}
-          </Link>
-          .
+          {wording.request} <strong className="text-foreground">{PRIVACY_REFERENCE[user.country]}</strong>.
         </p>
         <div className="mb-3">
           <PrivacyNoticeSummary country={user.country} />

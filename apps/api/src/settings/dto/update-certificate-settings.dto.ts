@@ -1,4 +1,5 @@
 import { IsBoolean, IsInt, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
+import { StrictBoolean } from '../../common/validation/transforms';
 
 export class UpdateCertificateSettingsDto {
   @IsOptional()
@@ -16,22 +17,27 @@ export class UpdateCertificateSettingsDto {
   certLegalText?: string | null;
 
   @IsOptional()
+  @StrictBoolean()
   @IsBoolean()
   certShowModules?: boolean;
 
   @IsOptional()
+  @StrictBoolean()
   @IsBoolean()
   certShowResources?: boolean;
 
   @IsOptional()
+  @StrictBoolean()
   @IsBoolean()
   certShowScore?: boolean;
 
   @IsOptional()
+  @StrictBoolean()
   @IsBoolean()
   certShowSignature?: boolean;
 
   @IsOptional()
+  @StrictBoolean()
   @IsBoolean()
   certShowEnrollmentDate?: boolean;
 

@@ -1,4 +1,5 @@
 import { IsBoolean, IsOptional, IsString, MaxLength } from 'class-validator';
+import { StrictBoolean } from '../../common/validation/transforms';
 
 export class UpdateTemplateDto {
   @IsOptional()
@@ -12,6 +13,7 @@ export class UpdateTemplateDto {
   bodyHtml?: string;
 
   @IsOptional()
+  @StrictBoolean()
   @IsBoolean()
   active?: boolean;
 }

@@ -2,6 +2,7 @@ import { IsIn, IsInt, IsNotEmpty, IsOptional, IsString, IsUrl, Max, MaxLength, M
 import { Transform } from 'class-transformer';
 import { IsStorageKey } from '../../storage/storage-key.validator';
 import { IsUploadLimitMb } from '../../storage/upload-limit.validator';
+import { MAX_FILE_NAME_LENGTH, shortenFileName } from '../../storage/file-name';
 
 const TYPES = ['TEXT', 'VIDEO', 'PDF', 'LINK', 'ASSIGNMENT'] as const;
 export type ResourceType = (typeof TYPES)[number];
@@ -67,7 +68,12 @@ export class UpdateResourceDto {
   @resourceFile()
   attachmentKey?: string | null;
 
-  @IsOptional() @IsString() @MaxLength(255) attachmentName?: string | null;
+  /** Nombre original del adjunto. Uno muy largo se recorta conservando la extensión. */
+  @IsOptional()
+  @IsString()
+  @MaxLength(MAX_FILE_NAME_LENGTH)
+  @Transform(({ value }) => (typeof value === 'string' ? shortenFileName(value.trim()) : value))
+  attachmentName?: string | null;
 
   /**
    * Configuración del cuestionario serializada. `CourseContentService` la valida antes de

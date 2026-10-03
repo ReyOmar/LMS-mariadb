@@ -6,6 +6,7 @@ import {
   statusBreakdown,
   countryTotals,
   mergeFirstPage,
+  gradingStart,
   type CourseSummary,
 } from './grouping';
 import type { SubmissionToGrade } from '@/types/models';
@@ -175,6 +176,32 @@ describe('normalizeTypedScore', () => {
 
   it('quita las letras en vez de dejar escribir algo que luego no vale', () => {
     expect(normalizeTypedScore('8a7')).toBe('87');
+  });
+});
+
+describe('gradingStart', () => {
+  it('al corregir una nota ya puesta parte de ella', () => {
+    expect(gradingStart({ status: 'GRADED', score: 87.5, feedback: 'Bien' })).toEqual({
+      score: '87.5',
+      feedback: 'Bien',
+      previous: null,
+    });
+  });
+
+  it('una versión corregida empieza vacía y enseña lo del suspenso sólo como referencia', () => {
+    expect(gradingStart({ status: 'IN_REVIEW', score: 40, feedback: 'Falta el anexo' })).toEqual({
+      score: '',
+      feedback: '',
+      previous: { score: 40, feedback: 'Falta el anexo' },
+    });
+  });
+
+  it('una primera entrega no tiene nada anterior que enseñar', () => {
+    expect(gradingStart({ status: 'SUBMITTED', score: null, feedback: null })).toEqual({
+      score: '',
+      feedback: '',
+      previous: null,
+    });
   });
 });
 

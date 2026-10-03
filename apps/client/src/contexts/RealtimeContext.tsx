@@ -3,7 +3,7 @@
 import React, { ReactNode, createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { apiUrl, clearSession, readToken, redirectToLogin, type LogoutReason } from '@/lib/api';
 import { connectStream } from '@/lib/realtime/stream';
-import { CourseEditor, RealtimeEvent, RealtimeMessage } from '@/lib/realtime/events';
+import { CourseEditor, RealtimeEvent, RealtimeMessage, batchKey } from '@/lib/realtime/events';
 import { useSession } from './SessionContext';
 
 /**
@@ -22,6 +22,8 @@ interface RealtimeContextType {
   connected: boolean;
   /** Se suscribe a un evento y devuelve la función para darse de baja. */
   subscribe: (event: RealtimeEvent, listener: Listener) => () => void;
+  /** Se suscribe a la recuperación del flujo tras un corte y devuelve la función para darse de baja. */
+  onReconnect: (listener: () => void) => () => void;
   onlineUsers: string[];
   coursesBeingEdited: Record<string, CourseEditor>;
   coursesUnderMaintenance: Record<string, string>;
@@ -30,6 +32,7 @@ interface RealtimeContextType {
 const RealtimeContext = createContext<RealtimeContextType>({
   connected: false,
   subscribe: () => () => undefined,
+  onReconnect: () => () => undefined,
   onlineUsers: [],
   coursesBeingEdited: {},
   coursesUnderMaintenance: {},
@@ -40,7 +43,7 @@ const RealtimeContext = createContext<RealtimeContextType>({
  *
  * Una misma acción puede generar varios eventos seguidos (matricular a diez alumnos
  * dispara diez avisos). Agrupar durante un instante evita que cada pantalla montada lance
- * su propia recarga por cada uno.
+ * su propia recarga por cada uno. Se agrupa por evento y curso (`batchKey`).
  */
 const DEBOUNCE_MS = 250;
 
@@ -53,8 +56,9 @@ const UNBATCHED_EVENTS: ReadonlySet<RealtimeEvent> = new Set(['notification:new'
 /** Traducción del motivo técnico del servidor al aviso que verá el usuario en el login. */
 const REASON_TO_LOGOUT: Record<string, LogoutReason> = {
   session_displaced: 'displaced',
-  password_changed: 'expired',
-  password_reset: 'expired',
+  password_changed: 'password',
+  password_reset: 'password',
+  role_changed: 'role',
   account_deleted: 'revoked',
 };
 
@@ -66,7 +70,8 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
   const [coursesUnderMaintenance, setCoursesUnderMaintenance] = useState<Record<string, string>>({});
 
   const listeners = useRef(new Map<RealtimeEvent, Set<Listener>>());
-  const timers = useRef(new Map<RealtimeEvent, ReturnType<typeof setTimeout>>());
+  const timers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
+  const reconnectListeners = useRef(new Set<() => void>());
 
   const notifyListeners = useCallback((event: RealtimeEvent, data: unknown) => {
     listeners.current.get(event)?.forEach((listener) => {
@@ -87,15 +92,16 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         return;
       }
 
-      const pending = timers.current.get(event);
+      const key = batchKey(event, data);
+      const pending = timers.current.get(key);
       if (pending) clearTimeout(pending);
 
       const timer = setTimeout(() => {
-        timers.current.delete(event);
+        timers.current.delete(key);
         notifyListeners(event, data);
       }, DEBOUNCE_MS);
 
-      timers.current.set(event, timer);
+      timers.current.set(key, timer);
     },
     [notifyListeners],
   );
@@ -168,12 +174,20 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
     }
 
     const control = new AbortController();
+    let connectedBefore = false;
 
     void connectStream({
       url: `${apiUrl()}/realtime/stream`,
       token,
       signal: control.signal,
-      onConnectionChange: setConnected,
+      onConnectionChange: (isConnected) => {
+        setConnected(isConnected);
+        if (!isConnected) return;
+        // Lo que pasó mientras el flujo estuvo cortado no llegará nunca: al recuperarlo,
+        // cada pantalla vuelve a pedir sus datos.
+        if (connectedBefore) reconnectListeners.current.forEach((listener) => listener());
+        connectedBefore = true;
+      },
       onUnauthorized: () => forceLogout(),
       onMessage: (message) => {
         if (message.event === 'session:revoked') {
@@ -203,9 +217,16 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
+  const onReconnect = useCallback((listener: () => void) => {
+    reconnectListeners.current.add(listener);
+    return () => {
+      reconnectListeners.current.delete(listener);
+    };
+  }, []);
+
   const value = useMemo(
-    () => ({ connected, subscribe, onlineUsers, coursesBeingEdited, coursesUnderMaintenance }),
-    [connected, subscribe, onlineUsers, coursesBeingEdited, coursesUnderMaintenance],
+    () => ({ connected, subscribe, onReconnect, onlineUsers, coursesBeingEdited, coursesUnderMaintenance }),
+    [connected, subscribe, onReconnect, onlineUsers, coursesBeingEdited, coursesUnderMaintenance],
   );
 
   return <RealtimeContext.Provider value={value}>{children}</RealtimeContext.Provider>;
@@ -225,4 +246,16 @@ export function useRealtimeEvent(event: RealtimeEvent, listener: Listener): void
   ref.current = listener;
 
   useEffect(() => subscribe(event, (data) => ref.current(data)), [event, subscribe]);
+}
+
+/**
+ * Vuelve a cargar los datos de la pantalla cuando el flujo se recupera tras un corte: los
+ * avisos de ese intervalo se perdieron. Siempre llama a la versión más reciente de `listener`.
+ */
+export function useRealtimeReconnect(listener: () => void): void {
+  const { onReconnect } = useRealtime();
+  const ref = useRef(listener);
+  ref.current = listener;
+
+  useEffect(() => onReconnect(() => ref.current()), [onReconnect]);
 }

@@ -39,13 +39,14 @@ describe('categorías de los correos', () => {
     expect(groupByCategory([{ key: 'CALIFICACION_RECIBIDA' }]).map((group) => group.key)).toEqual(['students']);
   });
 
-  it('reparte los trece eventos que la API tiene hoy', () => {
+  it('reparte los catorce eventos que la API tiene hoy', () => {
     const fromApi = [
       'RECUPERAR_PASSWORD',
       'CALIFICACION_RECIBIDA',
       'RECORDATORIO_INACTIVIDAD',
       'CURSO_REACTIVADO',
       'NUEVA_SOLICITUD_ACCESO',
+      'SOLICITUD_RECHAZADA',
       'NUEVA_ENTREGA',
       'MODULO_REINICIADO',
       'USUARIO_APROBADO',

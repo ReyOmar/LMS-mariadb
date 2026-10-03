@@ -6,11 +6,20 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import {
+  DeleteObjectCommand,
+  GetObjectCommand,
+  HeadObjectCommand,
+  PutObjectCommand,
+  S3Client,
+} from '@aws-sdk/client-s3';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import type { Readable } from 'stream';
+import { PrismaService } from '../prisma/prisma.service';
+import { JwtPayload } from '../common/interfaces/jwt-payload.interface';
+import { ByteRange } from './byte-range';
 import { Folder, FORMATS_BY_FOLDER, isPublicKey, isStorageKey } from './folders';
 import { MIB, uploadLimit } from './upload-limits';
 
@@ -30,8 +39,8 @@ const ALLOWED_TYPES: Readonly<Record<string, string>> = {
   '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
   '.xls': 'application/vnd.ms-excel',
   '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-  '.txt': 'text/plain',
-  '.csv': 'text/csv',
+  '.txt': 'text/plain; charset=utf-8',
+  '.csv': 'text/csv; charset=utf-8',
   '.zip': 'application/zip',
   '.rar': 'application/vnd.rar',
   '.png': 'image/png',
@@ -53,37 +62,68 @@ const ALLOWED_TYPES: Readonly<Record<string, string>> = {
  */
 export const ACTIVE_CONTENT_FORMATS = ['.svg'] as const;
 
-/** Bytes de cabecera que basta leer para reconocer un formato. */
-const FILE_SIGNATURE_LENGTH = 8;
+/** Bytes que identifican un formato y la posición del archivo en la que aparecen. */
+interface FileSignature {
+  readonly offset: number;
+  readonly bytes: readonly number[];
+}
+
+/** Firma al principio del archivo, que es donde la llevan casi todos los formatos. */
+const leading = (...bytes: number[]): FileSignature => ({ offset: 0, bytes });
+
+const ZIP = leading(0x50, 0x4b, 0x03, 0x04);
+/** Contenedor de la ofimática anterior a 2007 (.doc, .xls, .ppt). */
+const OLE2 = leading(0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1);
 
 /**
- * Firmas de archivo conocidas, para detectar un binario renombrado.
- * Un formato sin firma definida (texto plano, CSV, ofimática antigua) no se comprueba.
+ * Firmas de archivo conocidas, para detectar un binario renombrado. Basta con que coincida
+ * una de las de su extensión, y un archivo más corto que su firma no la tiene.
  */
-const FILE_SIGNATURES: Readonly<Record<string, readonly number[][]>> = {
-  '.pdf': [[0x25, 0x50, 0x44, 0x46]],
-  '.png': [[0x89, 0x50, 0x4e, 0x47]],
-  '.jpg': [[0xff, 0xd8, 0xff]],
-  '.jpeg': [[0xff, 0xd8, 0xff]],
-  '.gif': [[0x47, 0x49, 0x46, 0x38]],
-  '.webp': [[0x52, 0x49, 0x46, 0x46]],
+const FILE_SIGNATURES: Readonly<Record<string, readonly FileSignature[]>> = {
+  '.pdf': [leading(0x25, 0x50, 0x44, 0x46)],
+  '.png': [leading(0x89, 0x50, 0x4e, 0x47)],
+  '.jpg': [leading(0xff, 0xd8, 0xff)],
+  '.jpeg': [leading(0xff, 0xd8, 0xff)],
+  '.gif': [leading(0x47, 0x49, 0x46, 0x38)],
+  '.webp': [leading(0x52, 0x49, 0x46, 0x46)],
+  '.zip': [ZIP, leading(0x50, 0x4b, 0x05, 0x06)],
   // Los formatos de Office modernos son ZIP por dentro, de ahí la misma firma.
-  '.zip': [
-    [0x50, 0x4b, 0x03, 0x04],
-    [0x50, 0x4b, 0x05, 0x06],
-  ],
-  '.docx': [[0x50, 0x4b, 0x03, 0x04]],
-  '.xlsx': [[0x50, 0x4b, 0x03, 0x04]],
-  '.pptx': [[0x50, 0x4b, 0x03, 0x04]],
-  '.mp3': [
-    [0x49, 0x44, 0x33],
-    [0xff, 0xfb],
-    [0xff, 0xf3],
-    [0xff, 0xf2],
-  ],
+  '.docx': [ZIP],
+  '.xlsx': [ZIP],
+  '.pptx': [ZIP],
+  '.doc': [OLE2],
+  '.xls': [OLE2],
+  '.ppt': [OLE2],
+  '.rar': [leading(0x52, 0x61, 0x72, 0x21, 0x1a, 0x07)],
+  // MP4 y MOV declaran su formato en la caja `ftyp`, tras los cuatro bytes de su tamaño.
+  '.mp4': [{ offset: 4, bytes: [0x66, 0x74, 0x79, 0x70] }],
+  '.mp3': [leading(0x49, 0x44, 0x33), leading(0xff, 0xfb), leading(0xff, 0xf3), leading(0xff, 0xf2)],
 };
 
-/** Vigencia por defecto de una URL firmada. Suficiente para abrir o descargar el archivo. */
+/** Bytes de cabecera que basta leer para reconocer cualquiera de los formatos anteriores. */
+const FILE_SIGNATURE_LENGTH = Math.max(
+  ...Object.values(FILE_SIGNATURES).flatMap((signatures) => signatures.map((s) => s.offset + s.bytes.length)),
+);
+
+/** Formatos de texto: no tienen firma, pero un binario renombrado se delata en su contenido. */
+const TEXT_FORMATS = ['.txt', '.csv'];
+
+/** Lo que se examina de un archivo de texto: suficiente para delatar un binario. */
+const TEXT_SAMPLE_LENGTH = 8 * 1024;
+
+/** Ejecutables de Windows (MZ) y de Linux (ELF). */
+const EXECUTABLE_SIGNATURES = [leading(0x4d, 0x5a), leading(0x7f, 0x45, 0x4c, 0x46)];
+
+function hasSignature(header: Buffer, { offset, bytes }: FileSignature): boolean {
+  return header.length >= offset + bytes.length && bytes.every((byte, i) => header[offset + i] === byte);
+}
+
+/** Un texto no lleva bytes nulos ni empieza como un ejecutable. */
+function looksLikeText(sample: Buffer): boolean {
+  return !sample.includes(0) && !EXECUTABLE_SIGNATURES.some((signature) => hasSignature(sample, signature));
+}
+
+/** Vigencia de una URL firmada. Suficiente para abrir o descargar el archivo. */
 const SIGNED_URL_VALIDITY_S = 60 * 60;
 
 /** Archivo recuperado del almacenamiento remoto. */
@@ -92,11 +132,15 @@ interface RemoteFile {
   contentType: string;
 }
 
+/** Quien sube un archivo, tal y como queda anotado en el registro de subidas. */
+export type Uploader = Pick<JwtPayload, 'sub' | 'country'>;
+
 /**
  * Archivo listo para enviarse sin pasar por la memoria del servidor.
  *
- * `size` es nulo cuando el destino no lo declara; sirve para la cabecera
- * `Content-Length`, que es lo que permite al navegador enseñar una barra de progreso.
+ * `size` son los bytes del flujo —los del fragmento, si se pidió uno— y es nulo cuando el
+ * destino no lo declara; sirve para la cabecera `Content-Length`, que es lo que permite al
+ * navegador enseñar una barra de progreso.
  */
 interface FileStream {
   stream: Readable;
@@ -120,7 +164,10 @@ export class StorageService {
   private readonly publicUrl: string;
   private readonly signingSecret: string;
 
-  constructor(private readonly config: ConfigService) {
+  constructor(
+    private readonly config: ConfigService,
+    private readonly prisma: PrismaService,
+  ) {
     fs.mkdirSync(LOCAL_DIRECTORY, { recursive: true });
 
     this.bucket = this.config.get<string>('R2_BUCKET_NAME') ?? 'lms-uploads';
@@ -154,23 +201,33 @@ export class StorageService {
   // ── Subida ───────────────────────────────────────────────────────────────
 
   /**
-   * Guarda un archivo y devuelve su clave (`carpeta/nombre`).
+   * Guarda un archivo, anota quién lo subió y devuelve su clave (`carpeta/nombre`).
    *
    * El archivo no pasa por memoria: se mide en disco, se leen sólo sus primeros bytes para
    * reconocer el formato y se copia como flujo a su destino.
    *
+   * @param uploader Quien lo sube. Sólo esa persona podrá guardar la clave en un curso, un
+   *        recurso o una firma (`FileOwnershipService`).
    * @param maxBytes Límite exacto de la operación: el de la tarea o el general de la sede.
    *        Las imágenes tienen el suyo fijo y nada supera el tope técnico (`upload-limits.ts`).
    * @throws BadRequestException si la extensión no está admitida o el contenido no
    *         corresponde a la extensión.
    * @throws PayloadTooLargeException si excede el límite, con un mensaje que lo nombra.
    */
-  async uploadFromDisk(sourcePath: string, originalName: string, folder: Folder, maxBytes?: number): Promise<string> {
+  async uploadFromDisk(
+    sourcePath: string,
+    originalName: string,
+    folder: Folder,
+    uploader: Uploader,
+    maxBytes?: number,
+  ): Promise<string> {
     const { extension, contentType } = this.allowedFormat(originalName);
 
     const folderFormats = FORMATS_BY_FOLDER[folder];
     if (folderFormats && !folderFormats.includes(extension)) {
-      throw new BadRequestException(`Aquí sólo se admiten imágenes: ${folderFormats.join(', ')}.`);
+      const subject =
+        folder === 'entregas' ? 'En las entregas sólo se admiten estos formatos' : 'Aquí sólo se admiten imágenes';
+      throw new BadRequestException(`${subject}: ${folderFormats.join(', ')}.`);
     }
 
     const { size } = await fs.promises.stat(sourcePath);
@@ -183,7 +240,23 @@ export class StorageService {
 
     const key = this.newKey(folder, extension);
     await this.copy(sourcePath, key, contentType, size);
+    await this.register(key, folder, uploader);
     return key;
+  }
+
+  /**
+   * Anota la subida en el registro. Un archivo sin anotar no podría guardarlo nadie, así que
+   * si la anotación falla se retira.
+   */
+  private async register(key: string, folder: Folder, uploader: Uploader): Promise<void> {
+    try {
+      await this.prisma.storedFile.create({
+        data: { key, folder, uploaderGuid: uploader.sub, country: uploader.country },
+      });
+    } catch (error) {
+      await this.deleteFiles([key]);
+      throw error;
+    }
   }
 
   /** Extensión y tipo MIME de un nombre de archivo, si está entre los admitidos. */
@@ -271,27 +344,32 @@ export class StorageService {
   }
 
   /**
-   * Comprueba que los primeros bytes del archivo correspondan a su extensión.
-   * Impide subir un ejecutable renombrado como `.pdf`.
+   * Comprueba que el contenido del archivo corresponda a su extensión.
+   * Impide subir un ejecutable renombrado como `.pdf` o como `.txt`.
    *
-   * Sólo se lee la cabecera —unos pocos bytes—, no el archivo entero.
+   * Sólo se lee la cabecera —unos pocos bytes, o unos KB en un texto—, no el archivo entero.
    */
   private async verifyFileSignature(filePath: string, extension: string): Promise<void> {
-    const expectedSignatures = FILE_SIGNATURES[extension];
-    if (!expectedSignatures) return;
+    const signatures = FILE_SIGNATURES[extension];
+    const isText = TEXT_FORMATS.includes(extension);
+    if (!signatures && !isText) return;
 
+    const header = await this.readHeader(filePath, isText ? TEXT_SAMPLE_LENGTH : FILE_SIGNATURE_LENGTH);
+    const valid = signatures ? signatures.some((signature) => hasSignature(header, signature)) : looksLikeText(header);
+    if (!valid) {
+      throw new BadRequestException(
+        `El contenido del archivo no corresponde a un ${extension}. Puede estar dañado o tener la extensión cambiada.`,
+      );
+    }
+  }
+
+  /** Los primeros bytes de un archivo, o menos si es más corto. */
+  private async readHeader(filePath: string, length: number): Promise<Buffer> {
     const file = await fs.promises.open(filePath, 'r');
     try {
-      const header = Buffer.alloc(FILE_SIGNATURE_LENGTH);
-      const { bytesRead } = await file.read(header, 0, FILE_SIGNATURE_LENGTH, 0);
-      if (bytesRead < 4) return;
-
-      const matches = expectedSignatures.some((signature) => signature.every((byte, i) => header[i] === byte));
-      if (!matches) {
-        throw new BadRequestException(
-          `El contenido del archivo no corresponde a un ${extension}. Puede estar dañado o tener la extensión cambiada.`,
-        );
-      }
+      const header = Buffer.alloc(length);
+      const { bytesRead } = await file.read(header, 0, length, 0);
+      return header.subarray(0, bytesRead);
     } finally {
       await file.close();
     }
@@ -299,21 +377,50 @@ export class StorageService {
 
   // ── Lectura ──────────────────────────────────────────────────────────────
 
+  /** Tamaño de un archivo en bytes, o `null` si no existe en el destino activo. */
+  async fileSize(key: string): Promise<number | null> {
+    if (!isStorageKey(key)) return null;
+
+    if (this.s3) {
+      try {
+        const response = await this.s3.send(new HeadObjectCommand({ Bucket: this.bucket, Key: key }));
+        return response.ContentLength ?? null;
+      } catch {
+        return null;
+      }
+    }
+
+    try {
+      const info = await fs.promises.stat(this.localPath(key));
+      return info.isFile() ? info.size : null;
+    } catch {
+      return null;
+    }
+  }
+
   /**
-   * Abre un archivo para enviarlo tal cual, sin cargarlo entero en memoria.
+   * Abre un archivo —o el fragmento indicado— para enviarlo tal cual, sin cargarlo entero
+   * en memoria.
    *
    * Es la forma de servir descargas: cada descarga ocupa el tamaño de un trozo, no el del
    * archivo. `readFile()` sólo tiene sentido cuando hay que **manipular** el contenido
    * —incrustar un logotipo en un PDF, por ejemplo—.
    *
+   * @param range Fragmento ya validado contra el tamaño del archivo (`parseByteRange`).
    * @returns `null` si el archivo no existe en el destino activo.
    */
-  async openStream(key: string): Promise<FileStream | null> {
+  async openStream(key: string, range?: ByteRange): Promise<FileStream | null> {
     if (!isStorageKey(key)) return null;
 
     if (this.s3) {
       try {
-        const response = await this.s3.send(new GetObjectCommand({ Bucket: this.bucket, Key: key }));
+        const response = await this.s3.send(
+          new GetObjectCommand({
+            Bucket: this.bucket,
+            Key: key,
+            ...(range && { Range: `bytes=${range.start}-${range.end}` }),
+          }),
+        );
         if (!response.Body) return null;
 
         return {
@@ -333,9 +440,9 @@ export class StorageService {
       if (!info.isFile()) return null;
 
       return {
-        stream: fs.createReadStream(filePath),
+        stream: fs.createReadStream(filePath, range),
         contentType: this.contentTypeOf(key),
-        size: info.size,
+        size: range ? range.end - range.start + 1 : info.size,
       };
     } catch {
       return null;
@@ -376,7 +483,13 @@ export class StorageService {
 
   // ── Borrado ──────────────────────────────────────────────────────────────
 
-  /** Elimina un archivo del destino activo. No falla si ya no existe. */
+  /**
+   * Elimina un archivo del destino activo y su anotación en el registro de subidas. No
+   * falla si ya no existe.
+   *
+   * No mira si alguna fila lo sigue usando: para retirar lo sustituido o lo que deja de
+   * usarse está `FileOwnershipService.deleteUnreferenced`.
+   */
   async deleteFile(key: string | null | undefined): Promise<void> {
     if (!key) return;
     if (!isStorageKey(key)) {
@@ -387,11 +500,12 @@ export class StorageService {
     if (this.s3) {
       await this.s3.send(new DeleteObjectCommand({ Bucket: this.bucket, Key: key }));
       this.logger.log(`Borrado de R2: ${key}`);
-      return;
+    } else {
+      await fs.promises.rm(this.localPath(key), { force: true });
+      this.logger.log(`Borrado de disco: ${key}`);
     }
 
-    await fs.promises.rm(this.localPath(key), { force: true });
-    this.logger.log(`Borrado de disco: ${key}`);
+    await this.prisma.storedFile.deleteMany({ where: { key } });
   }
 
   /**
@@ -421,12 +535,20 @@ export class StorageService {
    * Los archivos de marca se sirven sin más; los reservados —entregas, certificados,
    * firmas y material de curso— llevan una firma con caducidad, de modo que una URL
    * filtrada deja de funcionar sola en lugar de quedar accesible indefinidamente.
+   *
+   * @param originalName Nombre con el que se guarda la descarga; sin él, el navegador usa
+   *        la clave, que es un nombre aleatorio. No forma parte de la firma: cambiarlo sólo
+   *        cambia cómo se llama el archivo descargado.
    */
-  downloadUrl(key: string, validitySeconds: number = SIGNED_URL_VALIDITY_S): string {
-    if (isPublicKey(key)) return `/api/storage/download/${key}`;
+  downloadUrl(key: string, originalName?: string | null): string {
+    const params: string[] = [];
+    if (!isPublicKey(key)) {
+      const expiresAt = Math.floor(Date.now() / 1000) + SIGNED_URL_VALIDITY_S;
+      params.push(`exp=${expiresAt}`, `sig=${this.sign(key, expiresAt)}`);
+    }
+    if (originalName) params.push(`originalName=${encodeURIComponent(originalName)}`);
 
-    const expiresAt = Math.floor(Date.now() / 1000) + validitySeconds;
-    return `/api/storage/download/${key}?exp=${expiresAt}&sig=${this.sign(key, expiresAt)}`;
+    return `/api/storage/download/${key}${params.length > 0 ? `?${params.join('&')}` : ''}`;
   }
 
   /** Comprueba la firma de una descarga reservada. */

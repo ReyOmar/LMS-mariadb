@@ -2,16 +2,20 @@ import { BadRequestException, ConflictException, Injectable, Logger, NotFoundExc
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { StorageService } from '../storage/storage.service';
+import { FileOwnershipService } from '../storage/file-ownership.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { Country } from '../common/domain/country';
 import { encodeCursor, rowsPerPage, decodeCursor } from '../common/domain/pagination';
-import { hashPassword, passwordMatches, validateStrength } from '../common/domain/password';
+import { generateTemporaryPassword, hashPassword, passwordMatches, validateStrength } from '../common/domain/password';
 import { CreateUserDto } from './dto/create-user.dto';
 import { ListAccountsDto } from './dto/list-accounts.dto';
 import { UpdateProfileDto } from './dto/update-profile.dto';
+import { UpdateUserDto } from './dto/update-user.dto';
 import { searchTerm } from '../common/domain/search';
+import { plural } from '../common/domain/text';
 import { UserRole } from '../common/interfaces/jwt-payload.interface';
 import { SettingsService } from '../settings/settings.service';
+import { MailService } from '../mail/mail.service';
 
 /** Campos que se devuelven al listar o consultar una cuenta. Nunca incluyen el hash. */
 const PUBLIC_FIELDS = {
@@ -28,8 +32,8 @@ const PUBLIC_FIELDS = {
   photoUrl: true,
 } as const;
 
-/** Una foto de perfil se enseña en todas las pantallas: no hace falta más. */
-const MAX_PHOTO_SIZE = 5 * 1024 * 1024;
+/** Roles que pueden ser responsables de un curso. */
+const COURSE_HOLDER_ROLES: UserRole[] = ['ADMIN', 'TEACHER'];
 
 /**
  * Gestión de cuentas ya creadas: listado, perfil, foto, alta directa y baja.
@@ -45,6 +49,8 @@ export class UserService {
     private readonly storage: StorageService,
     private readonly realtime: RealtimeService,
     private readonly settings: SettingsService,
+    private readonly mail: MailService,
+    private readonly files: FileOwnershipService,
   ) {}
 
   // ── Consulta ─────────────────────────────────────────────────────────────
@@ -98,7 +104,7 @@ export class UserService {
         take: take + 1, // uno de más: así se sabe si queda algo sin pedir otra página
         select: PUBLIC_FIELDS,
       }),
-      cursor ? Promise.resolve(null) : this.summarizeAccounts(matchFilter, filter.role),
+      cursor ? Promise.resolve(null) : this.summarizeAccounts(country, matchFilter, filter.role, Boolean(search)),
     ]);
 
     const hasMore = rows.length > take;
@@ -146,23 +152,32 @@ export class UserService {
   }
 
   /**
-   * Cuántas cuentas hay en cada pestaña y cuántas coinciden en total.
-   * El total sale de las pestañas —la del rol elegido o la suma de todas—, sin volver a
-   * contar la sede.
+   * Cuántas cuentas hay en cada pestaña, cuántas coinciden en total y cuántas tiene la sede.
+   * El total sale de las pestañas —la del rol elegido o la suma de todas—, y las de la sede
+   * también mientras no se busque: sólo con una búsqueda hace falta contarla aparte.
    */
-  private async summarizeAccounts(matchFilter: Prisma.UserWhereInput, role?: UserRole) {
+  private async summarizeAccounts(
+    country: Country,
+    matchFilter: Prisma.UserWhereInput,
+    role: UserRole | undefined,
+    searching: boolean,
+  ) {
     // Las pestañas cuentan sobre la búsqueda pero no sobre el rol elegido: si no, la
     // pestaña activa sería la única con número.
     const { role: _role, ...withoutRole } = matchFilter;
 
-    const groups = await this.prisma.user.groupBy({ by: ['role'], where: withoutRole, _count: { _all: true } });
+    const [groups, registered] = await Promise.all([
+      this.prisma.user.groupBy({ by: ['role'], where: withoutRole, _count: { _all: true } }),
+      searching ? this.prisma.user.count({ where: { country } }) : null,
+    ]);
     const byRole: Record<UserRole, number> = {
       ADMIN: groups.find((g) => g.role === 'ADMIN')?._count._all ?? 0,
       TEACHER: groups.find((g) => g.role === 'TEACHER')?._count._all ?? 0,
       STUDENT: groups.find((g) => g.role === 'STUDENT')?._count._all ?? 0,
     };
+    const matching = byRole.ADMIN + byRole.TEACHER + byRole.STUDENT;
 
-    return { total: role ? byRole[role] : byRole.ADMIN + byRole.TEACHER + byRole.STUDENT, byRole };
+    return { total: role ? byRole[role] : matching, byRole, registered: registered ?? matching };
   }
 
   /** Perfil de una cuenta concreta de la sede. */
@@ -201,15 +216,17 @@ export class UserService {
    * Crea una cuenta directamente, sin pasar por la solicitud de acceso.
    * Hereda la sede del administrador que la crea: no hay forma de dar de alta a alguien
    * en la otra sede.
+   *
+   * La contraseña temporal la genera el servidor, distinta en cada cuenta, y sólo la
+   * conoce la persona, que la recibe por correo: ni el administrador llega a verla.
    */
   async createUser(dto: CreateUserDto, country: Country) {
-    validateStrength(dto.temporaryPassword);
-
     const existing = await this.prisma.user.findUnique({ where: { email: dto.email }, select: { guid: true } });
     if (existing) {
       throw new ConflictException('Ya existe una cuenta con ese correo electrónico.');
     }
 
+    const temporaryPassword = generateTemporaryPassword();
     const user = await this.prisma.user.create({
       data: {
         email: dto.email,
@@ -217,7 +234,7 @@ export class UserService {
         lastName: dto.lastName,
         role: dto.role,
         country,
-        password: await hashPassword(dto.temporaryPassword),
+        password: await hashPassword(temporaryPassword),
         usesDefaultPassword: true,
       },
       select: PUBLIC_FIELDS,
@@ -226,10 +243,64 @@ export class UserService {
     this.realtime.emitToRole('user:created', { guid: user.guid }, country, 'ADMIN');
     this.logger.log(`Cuenta creada por un administrador: ${dto.email} (${dto.role}, ${country})`);
 
+    this.mail
+      .sendWelcome(user.email, user.firstName, temporaryPassword, country)
+      .catch((error) => this.logger.error('No se pudo enviar el correo de bienvenida', error));
+
     return {
-      message: `Cuenta de ${dto.firstName} ${dto.lastName} creada con contraseña temporal.`,
+      message: `Cuenta de ${dto.firstName} ${dto.lastName} creada. Recibirá por correo una contraseña temporal.`,
       user,
     };
+  }
+
+  // ── Edición ──────────────────────────────────────────────────────────────
+
+  /**
+   * Cambia el nombre, el apellido o el rol de una cuenta de la sede.
+   *
+   * Cambiar el rol cierra su sesión: lo que tenía abierto —el panel, el menú, los permisos
+   * que la pantalla dio por buenos— era el del rol anterior.
+   *
+   * Nadie puede cambiar su propio rol. Como quien cambia roles es siempre un administrador,
+   * eso basta para que la sede no se quede nunca sin ninguno: al menos queda él.
+   */
+  async updateUser(guid: string, country: Country, adminGuid: string, dto: UpdateUserDto) {
+    const user = await this.prisma.user.findFirst({
+      where: { guid, country },
+      select: { role: true, _count: { select: { taughtCourses: true } } },
+    });
+    if (!user) throw new NotFoundException('Usuario no encontrado.');
+
+    const data: Prisma.UserUpdateInput = {};
+    if (dto.firstName !== undefined) data.firstName = dto.firstName;
+    if (dto.lastName !== undefined) data.lastName = dto.lastName;
+
+    const roleChanges = dto.role !== undefined && dto.role !== user.role;
+    if (roleChanges) {
+      if (guid === adminGuid) {
+        throw new BadRequestException('No puedes cambiar tu propio rol. Pídeselo a otro administrador.');
+      }
+      // Un curso tiene que tener un responsable que pueda serlo, igual que al borrar la cuenta.
+      const courses = user._count.taughtCourses;
+      if (courses > 0 && !COURSE_HOLDER_ROLES.includes(dto.role!)) {
+        throw new BadRequestException(
+          `Esta cuenta es responsable de ${courses} ${plural(courses, 'curso', 'cursos')}. ${plural(courses, 'Asígnalo', 'Asígnalos')} a otro examinador o administrador antes de cambiarle el rol.`,
+        );
+      }
+      data.role = dto.role;
+      data.currentSessionJti = null;
+    }
+
+    if (Object.keys(data).length === 0) {
+      throw new BadRequestException('No hay ningún cambio que guardar.');
+    }
+
+    const updated = await this.prisma.user.update({ where: { guid }, data, select: PUBLIC_FIELDS });
+
+    if (roleChanges) this.realtime.revokeSession(guid, 'role_changed');
+    this.realtime.emitToRole('user:updated', { guid }, country, 'ADMIN');
+
+    return { message: 'Cuenta actualizada.', user: updated };
   }
 
   // ── Sesión ───────────────────────────────────────────────────────────────
@@ -290,7 +361,10 @@ export class UserService {
 
   // ── Foto de perfil ───────────────────────────────────────────────────────
 
-  /** Sustituye la foto de perfil y borra la anterior del almacenamiento. */
+  /**
+   * Sustituye la foto de perfil y borra la anterior del almacenamiento. El tamaño lo acota
+   * el tope fijo de la carpeta `avatars`.
+   */
   async uploadProfilePhoto(guid: string, filePath: string, originalName: string) {
     const user = await this.prisma.user.findUnique({
       where: { guid },
@@ -299,7 +373,10 @@ export class UserService {
     if (!user) throw new NotFoundException('Usuario no encontrado.');
 
     // Se sube antes de borrar la anterior: si la subida falla, el usuario conserva su foto.
-    const key = await this.storage.uploadFromDisk(filePath, originalName, 'avatars', MAX_PHOTO_SIZE);
+    const key = await this.storage.uploadFromDisk(filePath, originalName, 'avatars', {
+      sub: guid,
+      country: user.country,
+    });
 
     try {
       await this.prisma.user.update({ where: { guid }, data: { photoUrl: key } });
@@ -309,11 +386,7 @@ export class UserService {
       throw error;
     }
 
-    if (user.photoUrl) {
-      await this.storage
-        .deleteFile(user.photoUrl)
-        .catch((error) => this.logger.warn(`No se pudo borrar la foto anterior ${user.photoUrl}`, error));
-    }
+    await this.files.deleteUnreferenced([user.photoUrl]);
 
     this.realtime.emitToUsers('user:updated', { guid }, user.country, [guid]);
     return { message: 'Foto de perfil actualizada.', photoUrl: key };
@@ -329,9 +402,7 @@ export class UserService {
     if (!user.photoUrl) throw new BadRequestException('No tienes foto de perfil.');
 
     await this.prisma.user.update({ where: { guid }, data: { photoUrl: null } });
-    await this.storage
-      .deleteFile(user.photoUrl)
-      .catch((error) => this.logger.warn(`No se pudo borrar la foto ${user.photoUrl}`, error));
+    await this.files.deleteUnreferenced([user.photoUrl]);
 
     this.realtime.emitToUsers('user:updated', { guid }, user.country, [guid]);
     return { message: 'Foto de perfil eliminada.' };
@@ -340,7 +411,7 @@ export class UserService {
   // ── Baja ─────────────────────────────────────────────────────────────────
 
   /**
-   * Borra una cuenta y todo lo que cuelga de ella.
+   * Borra una cuenta y todo lo que cuelga de ella, salvo sus certificados y sus PDF.
    *
    * Un profesor con cursos asignados no se puede borrar sin decir a quién pasan: la relación
    * es `Restrict` para que la cascada no se lleve los cursos con sus módulos, recursos,
@@ -372,14 +443,13 @@ export class UserService {
       await this.checkCourseTransferTarget(guid, courses, country, courseTargetGuid);
     }
 
-    // Los certificados y las entregas guardan archivos en el almacenamiento; se recogen
-    // antes de borrar las filas para no dejar archivos sin dueño.
-    const [certificates, submissions] = await Promise.all([
-      this.prisma.certificate.findMany({ where: { userGuid: guid }, select: { pdfKey: true } }),
-      this.prisma.submission.findMany({
-        where: { userGuid: guid, attachmentKey: { not: null } },
-        select: { attachmentKey: true },
-      }),
+    // Las entregas —las vigentes y las archivadas de rondas anteriores— guardan archivos en
+    // el almacenamiento; se recogen antes de borrar las filas para no dejar archivos sin
+    // dueño. Los PDF de sus certificados no: se conservan.
+    const withAttachment = { userGuid: guid, attachmentKey: { not: null } };
+    const [submissions, archivedSubmissions] = await Promise.all([
+      this.prisma.submission.findMany({ where: withAttachment, select: { attachmentKey: true } }),
+      this.prisma.archivedSubmission.findMany({ where: withAttachment, select: { attachmentKey: true } }),
     ]);
 
     // Sus secretos pendientes se van con él. Un enlace de recuperación se resuelve por
@@ -399,9 +469,11 @@ export class UserService {
         : []),
       this.prisma.passwordReset.deleteMany({ where: { email: user.email } }),
       this.prisma.emailVerification.deleteMany({ where: { email: user.email } }),
-      // El resto de lo suyo —matrículas, entregas, progreso, certificados, mensajes,
-      // contactos, notificaciones y métricas— cae por las relaciones en cascada. Lo que
-      // creó como examinador no: sus cursos acaban de pasar a otra cuenta.
+      // El resto de lo suyo —matrículas, entregas y las archivadas, progreso, mensajes, contactos,
+      // notificaciones y métricas— cae por las relaciones en cascada. Lo que creó como
+      // examinador no: sus cursos acaban de pasar a otra cuenta. Sus certificados tampoco:
+      // acreditan una formación que ocurrió, así que quedan sin cuenta enlazada y se siguen
+      // verificando con el nombre del titular guardado en cada uno.
       this.prisma.user.delete({ where: { guid } }),
     ]);
 
@@ -410,11 +482,10 @@ export class UserService {
     this.realtime.revokeSession(guid, 'account_deleted');
     this.realtime.emitToRole('user:deleted', { guid }, country, 'ADMIN');
 
-    void this.storage.deleteFiles([
+    void this.files.deleteUnreferenced([
       user.photoUrl,
       user.signatureUrl,
-      ...certificates.map((certificate) => certificate.pdfKey),
-      ...submissions.map((submission) => submission.attachmentKey),
+      ...[...submissions, ...archivedSubmissions].map((submission) => submission.attachmentKey),
     ]);
 
     return { message: 'Cuenta eliminada correctamente.', deletedGuid: guid };
@@ -429,7 +500,7 @@ export class UserService {
   ): Promise<void> {
     if (!targetGuid) {
       throw new BadRequestException(
-        `Esta cuenta tiene ${count} curso(s) asignado(s). Indica a qué profesor o administrador deben pasar antes de eliminarla.`,
+        `Esta cuenta tiene ${count} ${plural(count, 'curso asignado', 'cursos asignados')}. Indica a qué profesor o administrador ${plural(count, 'debe', 'deben')} pasar antes de eliminarla.`,
       );
     }
     if (targetGuid === guid) {
@@ -437,7 +508,7 @@ export class UserService {
     }
 
     const target = await this.prisma.user.findFirst({
-      where: { guid: targetGuid, country, role: { in: ['ADMIN', 'TEACHER'] } },
+      where: { guid: targetGuid, country, role: { in: COURSE_HOLDER_ROLES } },
       select: { guid: true },
     });
     if (!target) {
@@ -448,7 +519,7 @@ export class UserService {
   /** Candidatos válidos para heredar los cursos de una cuenta que se va a eliminar. */
   getPossibleCourseTransferTargets(country: Country, excludeGuid: string) {
     return this.prisma.user.findMany({
-      where: { country, role: { in: ['ADMIN', 'TEACHER'] }, guid: { not: excludeGuid } },
+      where: { country, role: { in: COURSE_HOLDER_ROLES }, guid: { not: excludeGuid } },
       select: { guid: true, firstName: true, lastName: true, email: true, role: true },
       orderBy: { firstName: 'asc' },
     });

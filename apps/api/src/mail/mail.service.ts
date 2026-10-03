@@ -1,4 +1,4 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as nodemailer from 'nodemailer';
 import { PrismaService } from '../prisma/prisma.service';
@@ -57,6 +57,16 @@ function escapeHtml(value: string | number): string {
   return String(value).replace(/[&<>"']/g, (char) => ESCAPES[char]);
 }
 
+/**
+ * Recuadro con el comentario del examinador, o nada si no dejó ninguno. El comentario lo
+ * escribe una persona: se escapa antes de entrar en el marcado.
+ */
+function feedbackBlock(feedback?: string | null): string {
+  return feedback?.trim()
+    ? `<div style="background:#f1f5f9;border-radius:12px;padding:16px;margin:16px 0"><p style="color:#64748b;font-size:13px;margin:0;white-space:pre-line"><strong>Comentario del examinador:</strong> ${escapeHtml(feedback.trim())}</p></div>`
+    : '';
+}
+
 /** Nombre visible de cada rol en los correos, en el vocabulario del negocio. */
 const ROLE_LABELS: Record<UserRole, string> = {
   STUDENT: 'Estudiante',
@@ -75,8 +85,8 @@ const ROLE_LABELS: Record<UserRole, string> = {
  * Si no hay ninguna configurada, los envíos se registran y se descartan: el sistema sigue
  * funcionando sin correo, pero deja constancia en el registro de lo que no pudo enviar.
  *
- * Las plantillas se guardan en base de datos y son editables desde el panel. La marca del
- * correo (logotipo, color, nombre) sale de la configuración **de la sede del
+ * Las plantillas se guardan en base de datos y cada sede edita las suyas desde el panel.
+ * La plantilla y la marca del correo (logotipo, color, nombre) salen **de la sede del
  * destinatario**, por eso todos los métodos reciben el país.
  */
 @Injectable()
@@ -86,8 +96,9 @@ export class MailService implements OnModuleInit {
   private brevoApiKey: string | null = null;
 
   /**
-   * Plantilla activa de cada evento, o `null` si no tiene. Se guarda la promesa, no el
-   * valor: los correos de un envío en bloque que llegan a la vez comparten una sola lectura.
+   * Plantilla activa de cada evento en cada sede (clave `sede:evento`), o `null` si no
+   * tiene. Se guarda la promesa, no el valor: los correos de un envío en bloque que llegan
+   * a la vez comparten una sola lectura.
    */
   private readonly templates = new Map<string, { value: Promise<ActiveTemplate | null>; expiresAt: number }>();
 
@@ -208,36 +219,48 @@ export class MailService implements OnModuleInit {
 
   // ── Plantillas ───────────────────────────────────────────────────────────
 
-  /** Plantillas editables desde el panel de administración. */
-  getEvents() {
+  /** Eventos de correo con las plantillas de la sede, para editarlas desde el panel. */
+  getEvents(country: Country) {
     return this.prisma.emailEvent.findMany({
-      include: { templates: true },
+      include: { templates: { where: { country }, orderBy: { id: 'asc' } } },
       orderBy: { key: 'asc' },
     });
   }
 
-  async updateTemplate(id: number, dto: UpdateTemplateDto) {
+  /** Edita una plantilla de la sede. La de la otra sede no existe para quien edita. */
+  async updateTemplate(id: number, country: Country, dto: UpdateTemplateDto) {
+    const template = await this.prisma.emailTemplate.findFirst({ where: { id, country }, select: { id: true } });
+    if (!template) throw new NotFoundException('Plantilla no encontrada.');
+
     const updated = await this.prisma.emailTemplate.update({ where: { id }, data: dto });
     // Activar o desactivar una puede cambiar cuál usa su evento: se vacía todo.
     this.templates.clear();
     return updated;
   }
 
-  /** Plantilla activa del evento, reutilizada durante `TEMPLATE_CACHE_MS`. */
-  private activeTemplate(key: string): Promise<ActiveTemplate | null> {
-    const cached = this.templates.get(key);
+  /** Plantilla activa del evento en la sede, reutilizada durante `TEMPLATE_CACHE_MS`. */
+  private activeTemplate(key: string, country: Country): Promise<ActiveTemplate | null> {
+    const cacheKey = `${country}:${key}`;
+    const cached = this.templates.get(cacheKey);
     if (cached && Date.now() < cached.expiresAt) return cached.value;
 
     const value = this.prisma.emailEvent
       .findUnique({
         where: { key },
-        select: { templates: { where: { active: true }, take: 1, select: { subject: true, bodyHtml: true } } },
+        select: {
+          templates: {
+            where: { country, active: true },
+            orderBy: { id: 'asc' },
+            take: 1,
+            select: { subject: true, bodyHtml: true },
+          },
+        },
       })
       .then((event) => event?.templates[0] ?? null);
-    this.templates.set(key, { value, expiresAt: Date.now() + TEMPLATE_CACHE_MS });
+    this.templates.set(cacheKey, { value, expiresAt: Date.now() + TEMPLATE_CACHE_MS });
     // Un fallo de la base no se queda guardado: el siguiente correo vuelve a intentarlo.
     value.catch(() => {
-      if (this.templates.get(key)?.value === value) this.templates.delete(key);
+      if (this.templates.get(cacheKey)?.value === value) this.templates.delete(cacheKey);
     });
     return value;
   }
@@ -252,9 +275,9 @@ export class MailService implements OnModuleInit {
     variables: Record<string, string | number>,
     country: Country,
   ): Promise<{ subject: string; html: string } | null> {
-    const template = await this.activeTemplate(key);
+    const template = await this.activeTemplate(key, country);
     if (!template) {
-      this.logger.warn(`No hay plantilla activa para el evento de correo "${key}"`);
+      this.logger.warn(`No hay plantilla activa para el evento de correo "${key}" en ${country}`);
       return null;
     }
 
@@ -391,8 +414,19 @@ export class MailService implements OnModuleInit {
     );
   }
 
-  /** Aviso de calificación. La nota se formatea siempre con la escala del sistema. */
-  sendGrade(email: string, name: string, assignment: string, score: number, passingScore: number, country: Country) {
+  /**
+   * Aviso de calificación con el comentario del examinador, si lo dejó. La nota se formatea
+   * siempre con la escala del sistema.
+   */
+  sendGrade(
+    email: string,
+    name: string,
+    assignment: string,
+    score: number,
+    passingScore: number,
+    country: Country,
+    feedback?: string | null,
+  ) {
     const passed = score >= passingScore;
     return this.sendTemplate(
       'CALIFICACION_RECIBIDA',
@@ -405,6 +439,7 @@ export class MailService implements OnModuleInit {
         mensaje_aprobacion: passed
           ? '<p style="color:#10b981;font-size:14px;font-weight:600">¡Buen trabajo! Sigue así.</p>'
           : `<p style="color:#ef4444;font-size:14px;font-weight:600">Necesitas al menos ${formatPoints(passingScore)} puntos. Puedes subir una nueva versión de tu entrega.</p>`,
+        comentario: feedbackBlock(feedback),
         url_campus: `${this.appUrl}/dashboard`,
       },
       country,
@@ -419,10 +454,6 @@ export class MailService implements OnModuleInit {
     country: Country,
     feedback?: string | null,
   ) {
-    // El comentario lo escribe una persona: se escapa antes de entrar en el marcado.
-    const feedbackBlock = feedback
-      ? `<div style="background:#f1f5f9;border-radius:12px;padding:16px;margin:16px 0"><p style="color:#64748b;font-size:13px;margin:0"><strong>Comentario del examinador:</strong> ${escapeHtml(feedback)}</p></div>`
-      : '';
     return this.sendTemplate(
       'ENTREGA_RECHAZADA',
       email,
@@ -430,7 +461,7 @@ export class MailService implements OnModuleInit {
         nombre: name,
         tarea: assignment,
         calificacion: formatScore(score),
-        comentario: feedbackBlock,
+        comentario: feedbackBlock(feedback),
         url_campus: `${this.appUrl}/dashboard`,
       },
       country,

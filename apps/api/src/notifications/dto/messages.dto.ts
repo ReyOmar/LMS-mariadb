@@ -1,5 +1,6 @@
 import { IsBoolean, IsIn, IsInt, IsNotEmpty, IsOptional, IsString, MaxLength, Min } from 'class-validator';
-import { Transform, Type } from 'class-transformer';
+import { Type } from 'class-transformer';
+import { StrictBoolean, Trim } from '../../common/validation/transforms';
 
 const REF_TYPES = ['quiz_retry', 'entrega_revision', 'general'] as const;
 
@@ -11,13 +12,13 @@ export class SendMessageDto {
   @IsString()
   @IsNotEmpty({ message: 'El asunto es obligatorio.' })
   @MaxLength(150, { message: 'El asunto no puede superar los 150 caracteres.' })
-  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @Trim()
   subject: string;
 
   @IsString()
   @IsNotEmpty({ message: 'El mensaje no puede estar vacío.' })
   @MaxLength(5000, { message: 'El mensaje no puede superar los 5000 caracteres.' })
-  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @Trim()
   content: string;
 
   @IsOptional()
@@ -59,6 +60,7 @@ export class NotificationsQueryDto {
 }
 
 export class RespondToContactDto {
+  @StrictBoolean()
   @IsBoolean({ message: 'Indica si aceptas o rechazas la solicitud.' })
   accept: boolean;
 }

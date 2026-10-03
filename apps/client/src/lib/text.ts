@@ -13,6 +13,17 @@ export function plural(count: number, singular: string, pluralForm: string): str
   return count === 1 ? singular : pluralForm;
 }
 
+/** Marcas diacríticas combinables (tildes, diéresis, la virgulilla de la ñ…). */
+const COMBINING_MARKS = /[̀-ͯ]/g;
+
+/**
+ * Texto listo para comparar en una búsqueda: en minúsculas y sin tildes, para que «Díaz»,
+ * «diaz» y «DIAZ» coincidan, igual que en las búsquedas del servidor.
+ */
+export function searchable(text: string): string {
+  return text.normalize('NFD').replace(COMBINING_MARKS, '').toLowerCase();
+}
+
 /** Iniciales para el avatar de una persona: siempre en mayúscula, o `?` si no hay nombre. */
 export function initials(firstName?: string | null, lastName?: string | null): string {
   const letters = `${firstName?.trim().charAt(0) ?? ''}${lastName?.trim().charAt(0) ?? ''}`;

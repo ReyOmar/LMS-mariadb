@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { BookOpen, Loader2, Mail, Trash2, X } from 'lucide-react';
+import { BookOpen, Loader2, Mail, Pencil, Trash2, X } from 'lucide-react';
 import type { CourseStatus, User } from '@/types/models';
 import { AccountAvatar } from './AccountAvatar';
 import { LastAccess } from '@/components/ui/LastAccess';
@@ -17,6 +17,7 @@ interface Props {
   /** La propia cuenta no se puede eliminar desde aquí. */
   isSelf: boolean;
   onClose: () => void;
+  onEdit: (user: User) => void;
   onDelete: (user: User) => void;
 }
 
@@ -32,7 +33,7 @@ const STATUS_COLOR: Record<CourseStatus, string> = {
  * Quien crea cursos ve «Cursos Creados» y quien los recibe «Cursos Matriculados»; es la
  * misma lista leída desde los dos lados de la relación.
  */
-export function UserDetails({ user, courses, loadingCourses, isSelf, onClose, onDelete }: Props) {
+export function UserDetails({ user, courses, loadingCourses, isSelf, onClose, onEdit, onDelete }: Props) {
   const isAdmin = user.role === 'ADMIN';
   const createsCourses = managesCourses(user.role);
   const coursesHeading = createsCourses ? 'Cursos creados' : 'Cursos matriculados';
@@ -63,6 +64,15 @@ export function UserDetails({ user, courses, loadingCourses, isSelf, onClose, on
             </div>
           </div>
           <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => onEdit(user)}
+              className="p-2 hover:bg-primary/10 hover:text-primary rounded-xl transition-colors text-muted-foreground"
+              title="Editar"
+              aria-label="Editar cuenta"
+            >
+              <Pencil className="h-5 w-5" />
+            </button>
             {!isSelf && (
               <button
                 type="button"
@@ -98,11 +108,11 @@ export function UserDetails({ user, courses, loadingCourses, isSelf, onClose, on
             <p
               className={`text-sm font-bold ${user.usesDefaultPassword ? 'text-amber-700 dark:text-amber-400' : 'text-emerald-700 dark:text-emerald-400'}`}
             >
-              {user.usesDefaultPassword ? '⚠ Sin clave' : '✓ Con clave'}
+              {user.usesDefaultPassword ? 'Clave temporal' : '✓ Clave propia'}
             </p>
           </Field>
 
-          <Field title="Último Acceso">
+          <Field title="Último acceso">
             <div className="mt-1">
               <LastAccess guid={user.guid} date={user.lastAccessAt} />
             </div>

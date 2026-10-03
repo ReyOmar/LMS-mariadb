@@ -20,9 +20,11 @@ import { PageLoader } from '@/components/ui/PageLoader';
 import { useSession } from '@/contexts/SessionContext';
 import { useRealtimeEvent } from '@/contexts/RealtimeContext';
 import { useAlerts } from '@/contexts/AlertContext';
+import { useCountry } from '@/contexts/CountryContext';
 import { useDialog } from '@/hooks/useDialog';
 import api, { errorMessage } from '@/lib/api';
-import { averageScore, formatPoints, formatScore } from '@/lib/grading';
+import { averageScore, MAX_SCORE, toScore } from '@/lib/grading';
+import { formatNumber } from '@/lib/country';
 import { longDate } from '@/lib/dates';
 import { plural } from '@/lib/text';
 import type { Certificate } from '@/types/models';
@@ -123,6 +125,15 @@ function StudentCertificates() {
 
   const average = averageScore(certificates.map((certificate) => certificate.averageScore));
 
+  const { country } = useCountry();
+  /** Nota como se escribe en la sede (83,2 en Colombia); «—» si no hay. */
+  const points = (value: unknown) => {
+    const score = toScore(value);
+    return score === null ? '—' : formatNumber(score, country);
+  };
+  /** Nota con su escala: «83,2 / 100». */
+  const scoreText = (value: unknown) => (toScore(value) === null ? 'Sin calificar' : `${points(value)} / ${MAX_SCORE}`);
+
   const onDownload = async (cert: Certificate) => {
     setDownloading(cert.guid);
     try {
@@ -146,6 +157,9 @@ function StudentCertificates() {
     }
   };
 
+  // Mientras llega la primera carga sólo se pinta el indicador, en el mismo sitio que el del panel.
+  if (loading) return <PageLoader message="Cargando tus certificados..." />;
+
   return (
     <div className="animate-in slide-in-from-bottom-4 duration-700">
       <header className="mb-6 sm:mb-8">
@@ -159,7 +173,7 @@ function StudentCertificates() {
       </header>
 
       {/* Resumen de cifras */}
-      {!loading && certificates.length > 0 && (
+      {certificates.length > 0 && (
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-8 animate-in fade-in-0 duration-500">
           <div className="bg-card border border-border/50 rounded-2xl p-5 shadow-sm">
             <div className="flex items-center gap-3">
@@ -179,7 +193,7 @@ function StudentCertificates() {
               </div>
               <div>
                 <p className="text-2xl font-black text-foreground">
-                  {certificates.reduce((sum, c) => sum + Number(c.hours || 0), 0).toFixed(0)}h
+                  {formatNumber(Math.round(certificates.reduce((sum, c) => sum + Number(c.hours || 0), 0)), country)}h
                 </p>
                 <p className="text-xs text-muted-foreground font-medium">Horas de capacitación</p>
               </div>
@@ -191,7 +205,7 @@ function StudentCertificates() {
                 <Star className="h-5 w-5 text-amber-500" />
               </div>
               <div>
-                <p className="text-2xl font-black text-foreground">{formatPoints(average)}</p>
+                <p className="text-2xl font-black text-foreground">{points(average)}</p>
                 <p className="text-xs text-muted-foreground font-medium">Promedio general</p>
               </div>
             </div>
@@ -200,7 +214,7 @@ function StudentCertificates() {
       )}
 
       {/* Aviso de entregas por calificar */}
-      {!loading && pendingCourses.length > 0 && (
+      {pendingCourses.length > 0 && (
         <div className="mb-8 animate-in fade-in-0 duration-500">
           {pendingCourses.map((cp) => (
             <div key={cp.courseGuid} className="bg-amber-500/5 border border-amber-500/20 rounded-2xl p-5 mb-3">
@@ -231,9 +245,7 @@ function StudentCertificates() {
         </div>
       )}
 
-      {loading ? (
-        <PageLoader message="Cargando tus certificados..." />
-      ) : certificates.length === 0 ? (
+      {certificates.length === 0 ? (
         <div className="bg-card border border-border/50 rounded-2xl p-16 text-center shadow-sm">
           <div className="w-24 h-24 bg-primary/5 rounded-full flex items-center justify-center mx-auto mb-6">
             <Award className="h-12 w-12 text-primary/20" />
@@ -303,7 +315,7 @@ function StudentCertificates() {
                       <Star className="h-3.5 w-3.5 shrink-0 text-amber-500" />
                       <span>
                         Calificación promedio:{' '}
-                        <strong className="text-foreground">{formatScore(cert.averageScore)}</strong>
+                        <strong className="text-foreground">{scoreText(cert.averageScore)}</strong>
                       </span>
                     </div>
                   )}
@@ -400,7 +412,7 @@ function StudentCertificates() {
                 </div>
                 <div className="bg-muted/30 rounded-xl p-3">
                   <p className="text-xs text-muted-foreground mb-0.5">Calificación promedio</p>
-                  <p className="text-sm font-bold text-foreground">{formatScore(selectedCert.averageScore)}</p>
+                  <p className="text-sm font-bold text-foreground">{scoreText(selectedCert.averageScore)}</p>
                 </div>
               </div>
 
@@ -414,17 +426,20 @@ function StudentCertificates() {
 
             {/* Pie de la ventana */}
             <div className="px-6 pb-6 flex items-center gap-3">
-              <button
-                type="button"
-                onClick={() => {
-                  const courseGuid = selectedCert.courseGuid;
-                  closeDetails();
-                  router.push(`/courses/${courseGuid}`);
-                }}
-                className="flex-1 bg-muted hover:bg-border text-foreground font-bold py-3 rounded-xl transition-colors flex items-center justify-center gap-2"
-              >
-                <BookOpen className="h-4 w-4" /> Ir al curso
-              </button>
+              {/* Si el curso se eliminó, el certificado sigue valiendo pero ya no hay adónde ir. */}
+              {selectedCert.courseGuid && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const courseGuid = selectedCert.courseGuid;
+                    closeDetails();
+                    router.push(`/courses/${courseGuid}`);
+                  }}
+                  className="flex-1 bg-muted hover:bg-border text-foreground font-bold py-3 rounded-xl transition-colors flex items-center justify-center gap-2"
+                >
+                  <BookOpen className="h-4 w-4" /> Ir al curso
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => {

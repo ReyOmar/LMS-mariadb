@@ -7,6 +7,7 @@ import { RealtimeService } from '../realtime/realtime.service';
 import { SettingsService } from '../settings/settings.service';
 import { Country, countryName } from '../common/domain/country';
 import { countRejected, settleWithConcurrency } from '../common/domain/concurrency';
+import { plural } from '../common/domain/text';
 import {
   generateTemporaryPassword,
   hashPassword,
@@ -351,18 +352,24 @@ export class AuthService {
 
   /**
    * Rechaza una solicitud conservando el registro, para que quede constancia de quién fue
-   * rechazado y por qué.
+   * rechazado y por qué, y se lo comunica por correo a quien la envió.
    */
   async rejectAccessRequest(id: number, country: Country, reason?: string) {
-    await this.pendingRequest(id, country);
+    const accessRequest = await this.pendingRequest(id, country);
+    const rejectionReason = reason?.trim() || null;
 
     await this.prisma.accessRequest.update({
       where: { id },
-      data: { status: 'REJECTED', rejectionReason: reason?.trim() || null },
+      data: { status: 'REJECTED', rejectionReason },
     });
 
     this.realtime.emitToRole('request:resolved', { id, action: 'rejected' }, country, 'ADMIN');
-    return { message: 'Solicitud rechazada.' };
+
+    this.mail
+      .sendAccessRequestRejected(accessRequest.email, accessRequest.firstName, rejectionReason, accessRequest.country)
+      .catch((error) => this.logger.error('No se pudo enviar el aviso de solicitud rechazada', error));
+
+    return { message: 'Solicitud rechazada. La persona recibirá un correo con la decisión.' };
   }
 
   /** Carga una solicitud comprobando que es de la sede del administrador y sigue pendiente. */
@@ -497,7 +504,7 @@ export class AuthService {
       const remaining = Math.max(MAX_CODE_ATTEMPTS - attempts, 0);
       throw new BadRequestException(
         remaining > 0
-          ? `El código no es correcto. Te quedan ${remaining} intento(s).`
+          ? `El código no es correcto. ${plural(remaining, 'Te queda', 'Te quedan')} ${remaining} ${plural(remaining, 'intento', 'intentos')}.`
           : 'Has agotado los intentos con este código. Solicita uno nuevo.',
       );
     }

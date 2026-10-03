@@ -1,4 +1,16 @@
-import { initials, plural } from './text';
+import { initials, plural, searchable } from './text';
+
+describe('searchable', () => {
+  it('compara sin tildes ni mayúsculas', () => {
+    expect(searchable('Darío Muñoz')).toBe('dario munoz');
+    expect(searchable('JOSÉ')).toBe(searchable('jose'));
+  });
+
+  it('una búsqueda con tilde encuentra el nombre escrito sin ella, y al revés', () => {
+    expect(searchable('Maria Lopez').includes(searchable('maría'))).toBe(true);
+    expect(searchable('María López').includes(searchable('lopez'))).toBe(true);
+  });
+});
 
 describe('plural', () => {
   it('usa el singular sólo con una unidad', () => {

@@ -1,6 +1,7 @@
 import { Module, forwardRef } from '@nestjs/common';
 import { StorageService } from './storage.service';
 import { StorageController } from './storage.controller';
+import { FileOwnershipService } from './file-ownership.service';
 import { SettingsModule } from '../settings/settings.module';
 
 // La referencia diferida rompe el ciclo con configuración: el almacenamiento necesita
@@ -9,7 +10,7 @@ import { SettingsModule } from '../settings/settings.module';
 @Module({
   imports: [forwardRef(() => SettingsModule)],
   controllers: [StorageController],
-  providers: [StorageService],
-  exports: [StorageService],
+  providers: [StorageService, FileOwnershipService],
+  exports: [StorageService, FileOwnershipService],
 })
 export class StorageModule {}

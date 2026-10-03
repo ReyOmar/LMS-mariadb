@@ -9,7 +9,8 @@ const settings = { legalVersion: async () => '2026-09-25' };
  *
  * Tiene que llevarse **todo lo de esa persona** —su avance, sus entregas, sus mensajes,
  * sus archivos— y **no tocar lo que creó** como examinador: sus cursos siguen vivos, con
- * sus alumnos dentro, bajo el responsable al que se traspasen.
+ * sus alumnos dentro, bajo el responsable al que se traspasen. Sus certificados tampoco se
+ * tocan: acreditan una formación que ocurrió y se siguen verificando.
  *
  * Lo que se fija aquí son las tres decisiones del servicio; que las filas relacionadas
  * caigan es cosa de las claves ajenas en cascada, y eso se comprueba contra la base.
@@ -28,6 +29,7 @@ interface Scenario {
 function createService({ taughtCourses = 0, photo = 'avatars/foto.png', signature = null }: Scenario = {}) {
   const order: string[] = [];
   const deleted: { emails: string[]; files: unknown[] } = { emails: [], files: [] };
+  const certificateOperations: string[] = [];
 
   const prisma = {
     user: {
@@ -46,8 +48,17 @@ function createService({ taughtCourses = 0, photo = 'avatars/foto.png', signatur
       },
       updateMany: async () => ({ count: taughtCourses }),
     },
-    certificate: { findMany: async () => [{ pdfKey: 'certificados/a.pdf' }] },
+    certificate: Object.fromEntries(
+      ['findMany', 'update', 'updateMany', 'delete', 'deleteMany'].map((operation) => [
+        operation,
+        async () => {
+          certificateOperations.push(operation);
+          return operation === 'findMany' ? [{ pdfKey: 'certificados/a.pdf' }] : { count: 1 };
+        },
+      ]),
+    ),
     submission: { findMany: async () => [{ attachmentKey: 'entregas/b.pdf' }] },
+    archivedSubmission: { findMany: async () => [{ attachmentKey: 'entregas/ronda-anterior.pdf' }] },
     passwordReset: {
       deleteMany: async ({ where }: { where: { email: string } }) => {
         deleted.emails.push(`reset:${where.email}`);
@@ -73,16 +84,23 @@ function createService({ taughtCourses = 0, photo = 'avatars/foto.png', signatur
   };
 
   const realtime = { revokeSession: () => undefined, emitToRole: () => undefined };
-  const storage = {
-    deleteFiles: async (keys: unknown[]) => {
+  const files = {
+    deleteUnreferenced: async (keys: unknown[]) => {
       deleted.files.push(...keys);
     },
   };
 
-  const service = new UserService(prisma as never, storage as never, realtime as never, settings as never);
+  const service = new UserService(
+    prisma as never,
+    {} as never,
+    realtime as never,
+    settings as never,
+    {} as never,
+    files as never,
+  );
   jest.spyOn(service['logger'], 'log').mockImplementation(() => undefined);
 
-  return { service, order, deleted };
+  return { service, order, deleted, certificateOperations };
 }
 
 describe('UserService · borrar una cuenta', () => {
@@ -118,9 +136,27 @@ describe('UserService · borrar una cuenta', () => {
 
     await service.deleteUser(GUID, 'COLOMBIA', ADMIN);
 
-    expect(deleted.files).toEqual(
-      expect.arrayContaining(['avatars/foto.png', 'firmas/f.png', 'certificados/a.pdf', 'entregas/b.pdf']),
-    );
+    expect(deleted.files).toEqual(expect.arrayContaining(['avatars/foto.png', 'firmas/f.png', 'entregas/b.pdf']));
+  });
+
+  it('también borra los archivos de sus entregas archivadas de rondas anteriores', async () => {
+    // Las filas caen en cascada con la cuenta; sus archivos no, y quedarían sin dueño.
+    const { service, deleted } = createService();
+
+    await service.deleteUser(GUID, 'COLOMBIA', ADMIN);
+
+    expect(deleted.files).toContain('entregas/ronda-anterior.pdf');
+  });
+
+  it('conserva sus certificados y sus PDF', async () => {
+    // La fila queda sin cuenta enlazada (SetNull en la base) y se verifica con el nombre
+    // del titular guardado en ella; el servicio no la toca ni borra su archivo.
+    const { service, deleted, certificateOperations } = createService();
+
+    await service.deleteUser(GUID, 'COLOMBIA', ADMIN);
+
+    expect(certificateOperations).toEqual([]);
+    expect(deleted.files).not.toContain('certificados/a.pdf');
   });
 
   it('exige decir a quién pasan los cursos de quien imparte alguno', async () => {
@@ -164,6 +200,10 @@ describe('UserService — listado de cuentas', () => {
           counts++;
           return roles;
         },
+        count: async () => {
+          counts++;
+          return 2071;
+        },
       },
       course: {
         groupBy: async ({ where }: { where: unknown }) => {
@@ -178,7 +218,14 @@ describe('UserService — listado de cuentas', () => {
         },
       },
     };
-    const service = new UserService(prisma as never, {} as never, {} as never, settings as never);
+    const service = new UserService(
+      prisma as never,
+      {} as never,
+      {} as never,
+      settings as never,
+      {} as never,
+      {} as never,
+    );
     return { service, queries, pageCounts, counts: () => counts };
   }
 
@@ -301,6 +348,22 @@ describe('UserService — listado de cuentas', () => {
     expect(result.byRole).toEqual({ ADMIN: 3, TEACHER: 17, STUDENT: 480 });
   });
 
+  it('sin búsqueda, las cuentas de la sede salen de las pestañas sin volver a contarla', async () => {
+    const { service, counts } = recordingService(50, { roles: ROLES_500 });
+    const result = await service.getUsers('COLOMBIA', { role: 'TEACHER' });
+
+    expect(result.registered).toBe(500);
+    expect(counts()).toBe(1);
+  });
+
+  it('con una búsqueda, las cuentas de la sede no dependen de lo que se busca', async () => {
+    const { service } = recordingService(3, { roles: [{ role: 'STUDENT', _count: { _all: 3 } }] });
+    const result = await service.getUsers('COLOMBIA', { search: 'ana' });
+
+    expect(result.total).toBe(3);
+    expect(result.registered).toBe(2071);
+  });
+
   it('una pestaña sin cuentas cuenta cero, no desaparece', async () => {
     const { service } = recordingService(0, { roles: [{ role: 'STUDENT', _count: { _all: 4 } }] });
     const result = await service.getUsers('COLOMBIA', { role: 'ADMIN' });
@@ -370,7 +433,14 @@ describe('UserService · perfil propio', () => {
       },
     };
     const realtime = { revokeSession: jest.fn(), emitToRole: () => undefined };
-    const service = new UserService(prisma as never, {} as never, realtime as never, settings as never);
+    const service = new UserService(
+      prisma as never,
+      {} as never,
+      realtime as never,
+      settings as never,
+      {} as never,
+      {} as never,
+    );
 
     await service.updateProfile('usuario-1', { currentPassword: 'ClaveVieja1', newPassword: 'ClaveNueva2' });
 
@@ -392,10 +462,45 @@ describe('UserService · perfil propio', () => {
       uploadFromDisk: async () => 'avatars/nueva.png',
       deleteFiles: jest.fn().mockResolvedValue(undefined),
     };
-    const service = new UserService(prisma as never, storage as never, {} as never, settings as never);
+    const service = new UserService(
+      prisma as never,
+      storage as never,
+      {} as never,
+      settings as never,
+      {} as never,
+      {} as never,
+    );
 
     await expect(service.uploadProfilePhoto('usuario-1', '/tmp/foto', 'foto.png')).rejects.toThrow();
     expect(storage.deleteFiles).toHaveBeenCalledWith(['avatars/nueva.png']);
+  });
+
+  it('anota la foto a nombre de su dueño y retira la anterior sólo si nadie más la usa', async () => {
+    const prisma = {
+      user: {
+        findUnique: async () => ({ photoUrl: 'avatars/vieja.png', country: 'MEXICO' }),
+        update: async () => ({}),
+      },
+    };
+    const storage = { uploadFromDisk: jest.fn().mockResolvedValue('avatars/nueva.png') };
+    const files = { deleteUnreferenced: jest.fn().mockResolvedValue(undefined) };
+    const realtime = { emitToUsers: () => undefined };
+    const service = new UserService(
+      prisma as never,
+      storage as never,
+      realtime as never,
+      settings as never,
+      {} as never,
+      files as never,
+    );
+
+    await service.uploadProfilePhoto('usuario-1', '/tmp/foto', 'foto.png');
+
+    expect(storage.uploadFromDisk).toHaveBeenCalledWith('/tmp/foto', 'foto.png', 'avatars', {
+      sub: 'usuario-1',
+      country: 'MEXICO',
+    });
+    expect(files.deleteUnreferenced).toHaveBeenCalledWith(['avatars/vieja.png']);
   });
 });
 
@@ -410,7 +515,10 @@ describe('UserService · autorización de tratamiento de datos', () => {
         update: async (args: unknown) => updates.push(args),
       },
     };
-    return { service: new UserService(prisma as never, {} as never, {} as never, settings as never), updates };
+    return {
+      service: new UserService(prisma as never, {} as never, {} as never, settings as never, {} as never, {} as never),
+      updates,
+    };
   }
 
   it('pide aceptar la política a quien no la aceptó o aceptó una versión anterior', async () => {
@@ -431,5 +539,169 @@ describe('UserService · autorización de tratamiento de datos', () => {
       where: { guid: 'u1' },
       data: { dataConsentVersion: '2026-09-25', dataConsentAt: expect.any(Date) },
     });
+  });
+});
+
+describe('UserService · alta desde el panel', () => {
+  function creationService() {
+    const created: Record<string, unknown>[] = [];
+    const welcome: { email: string; password: string; country: string }[] = [];
+    const prisma = {
+      user: {
+        findUnique: async () => null,
+        create: async ({ data }: { data: Record<string, unknown> }) => {
+          created.push(data);
+          return { guid: 'nueva-1', email: data.email, firstName: data.firstName };
+        },
+      },
+    };
+    const mail = {
+      sendWelcome: async (email: string, _name: string, password: string, country: string) => {
+        welcome.push({ email, password, country });
+        return true;
+      },
+    };
+    const realtime = { emitToRole: () => undefined };
+    const service = new UserService(
+      prisma as never,
+      {} as never,
+      realtime as never,
+      settings as never,
+      mail as never,
+      {} as never,
+    );
+    jest.spyOn(service['logger'], 'log').mockImplementation(() => undefined);
+    return { service, created, welcome };
+  }
+
+  const DTO = { firstName: 'Eva', lastName: 'Mora', email: 'eva@pesv.test', role: 'TEACHER' as const };
+
+  it('genera la contraseña temporal en el servidor y se la envía por correo a la persona', async () => {
+    const { service, created, welcome } = creationService();
+
+    await service.createUser(DTO, 'MEXICO');
+
+    expect(welcome).toEqual([{ email: 'eva@pesv.test', password: expect.any(String), country: 'MEXICO' }]);
+    // Se guarda cifrada y la cuenta queda obligada a cambiarla al entrar.
+    expect(created[0].password).not.toBe(welcome[0].password);
+    expect(created[0]).toMatchObject({ role: 'TEACHER', country: 'MEXICO', usesDefaultPassword: true });
+  });
+
+  it('cada cuenta recibe una contraseña distinta', async () => {
+    const first = creationService();
+    const second = creationService();
+    await first.service.createUser(DTO, 'COLOMBIA');
+    await second.service.createUser(DTO, 'COLOMBIA');
+
+    expect(first.welcome[0].password).not.toBe(second.welcome[0].password);
+  });
+
+  it('no devuelve la contraseña temporal en la respuesta', async () => {
+    const { service, welcome } = creationService();
+
+    const result = await service.createUser(DTO, 'COLOMBIA');
+
+    expect(JSON.stringify(result)).not.toContain(welcome[0].password);
+  });
+});
+
+describe('UserService · editar una cuenta', () => {
+  const ADMIN_GUID = 'admin-1';
+
+  function editionService(account: { role: string; taughtCourses?: number } | null) {
+    const updates: Record<string, unknown>[] = [];
+    const lookups: unknown[] = [];
+    const prisma = {
+      user: {
+        findFirst: async (query: unknown) => {
+          lookups.push(query);
+          return account && { role: account.role, _count: { taughtCourses: account.taughtCourses ?? 0 } };
+        },
+        update: async ({ data }: { data: Record<string, unknown> }) => {
+          updates.push(data);
+          return { guid: 'cuenta-1', ...data };
+        },
+      },
+    };
+    const realtime = { revokeSession: jest.fn(), emitToRole: jest.fn() };
+    const service = new UserService(
+      prisma as never,
+      {} as never,
+      realtime as never,
+      settings as never,
+      {} as never,
+      {} as never,
+    );
+    return { service, updates, lookups, realtime };
+  }
+
+  it('sólo encuentra cuentas de la sede de quien edita', async () => {
+    const { service, lookups } = editionService(null);
+
+    await expect(service.updateUser('cuenta-1', 'MEXICO', ADMIN_GUID, { firstName: 'Ana' })).rejects.toThrow(
+      /no encontrado/i,
+    );
+    expect(lookups[0]).toMatchObject({ where: { guid: 'cuenta-1', country: 'MEXICO' } });
+  });
+
+  it('cambiar el nombre no cierra la sesión de la persona', async () => {
+    const { service, updates, realtime } = editionService({ role: 'STUDENT' });
+
+    await service.updateUser('cuenta-1', 'COLOMBIA', ADMIN_GUID, { firstName: 'Ana', lastName: 'Ruiz' });
+
+    expect(updates[0]).toEqual({ firstName: 'Ana', lastName: 'Ruiz' });
+    expect(realtime.revokeSession).not.toHaveBeenCalled();
+  });
+
+  it('cambiar el rol cierra la sesión en la misma escritura y avisa a su dispositivo', async () => {
+    const { service, updates, realtime } = editionService({ role: 'STUDENT' });
+
+    await service.updateUser('cuenta-1', 'COLOMBIA', ADMIN_GUID, { role: 'TEACHER' });
+
+    expect(updates[0]).toEqual({ role: 'TEACHER', currentSessionJti: null });
+    expect(realtime.revokeSession).toHaveBeenCalledWith('cuenta-1', 'role_changed');
+  });
+
+  it('elegir el mismo rol que ya tiene no cuenta como cambio', async () => {
+    const { service, realtime } = editionService({ role: 'TEACHER' });
+
+    await expect(service.updateUser('cuenta-1', 'COLOMBIA', ADMIN_GUID, { role: 'TEACHER' })).rejects.toThrow(
+      /ningún cambio/i,
+    );
+    expect(realtime.revokeSession).not.toHaveBeenCalled();
+  });
+
+  it('nadie puede cambiar su propio rol, y así la sede nunca se queda sin administradores', async () => {
+    const { service, updates } = editionService({ role: 'ADMIN' });
+
+    await expect(service.updateUser(ADMIN_GUID, 'COLOMBIA', ADMIN_GUID, { role: 'STUDENT' })).rejects.toThrow(
+      BadRequestException,
+    );
+    expect(updates).toHaveLength(0);
+  });
+
+  it('sí puede cambiar su propio nombre', async () => {
+    const { service, updates } = editionService({ role: 'ADMIN' });
+
+    await service.updateUser(ADMIN_GUID, 'COLOMBIA', ADMIN_GUID, { firstName: 'Nuevo' });
+
+    expect(updates[0]).toEqual({ firstName: 'Nuevo' });
+  });
+
+  it('un examinador con cursos no pasa a estudiante sin traspasarlos antes', async () => {
+    const { service, updates } = editionService({ role: 'TEACHER', taughtCourses: 3 });
+
+    await expect(service.updateUser('cuenta-1', 'COLOMBIA', ADMIN_GUID, { role: 'STUDENT' })).rejects.toThrow(
+      /3 curso/,
+    );
+    expect(updates).toHaveLength(0);
+  });
+
+  it('un examinador con cursos sí puede pasar a administrador, que también puede tenerlos', async () => {
+    const { service, updates } = editionService({ role: 'TEACHER', taughtCourses: 3 });
+
+    await service.updateUser('cuenta-1', 'COLOMBIA', ADMIN_GUID, { role: 'ADMIN' });
+
+    expect(updates[0]).toMatchObject({ role: 'ADMIN' });
   });
 });

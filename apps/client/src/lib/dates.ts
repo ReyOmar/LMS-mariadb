@@ -1,6 +1,11 @@
 /**
  * Fechas y horas tal y como se leen en el campus: un único idioma neutro y unos pocos
  * formatos con nombre, para que la misma fecha se lea igual en toda la aplicación.
+ *
+ * Se escriben en la hora de la sede, no en la del navegador: una entrega o un plazo se
+ * leen igual desde cualquier equipo, y coinciden con lo que cuenta el servidor (días con
+ * actividad, recordatorios). La zona la fija la configuración de la sede al cargarse
+ * (`ConfigContext`); hasta entonces, o si no es válida, se usa la del navegador.
  */
 
 /** Español neutro: vale para Colombia y para México, y no arrastra formatos de España. */
@@ -8,6 +13,27 @@ const LOCALE = 'es';
 
 /** Lo que se escribe cuando no hay fecha. */
 const NO_DATE = 'Sin fecha';
+
+const MINUTE = 60_000;
+const HOUR = 60 * MINUTE;
+const DAY = 24 * HOUR;
+
+/** Zona horaria IANA de la sede; `undefined` deja la del navegador. */
+let timeZone: string | undefined;
+
+/** Fija la zona horaria de la sede. Una zona que el navegador no reconoce se ignora. */
+export function setTimeZone(zone: string | null | undefined): void {
+  timeZone = zone && isValidTimeZone(zone) ? zone : undefined;
+}
+
+function isValidTimeZone(zone: string): boolean {
+  try {
+    new Intl.DateTimeFormat(LOCALE, { timeZone: zone });
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 /** Acepta lo que llega de la API —cadena o `Date`— y descarta lo que no es una fecha. */
 function asDate(value: string | Date | null | undefined): Date | null {
@@ -19,19 +45,21 @@ function asDate(value: string | Date | null | undefined): Date | null {
 /** 22/09/2026 */
 export function shortDate(value: string | Date | null | undefined): string {
   const date = asDate(value);
-  return date ? date.toLocaleDateString(LOCALE, { day: '2-digit', month: '2-digit', year: 'numeric' }) : NO_DATE;
+  return date
+    ? date.toLocaleDateString(LOCALE, { day: '2-digit', month: '2-digit', year: 'numeric', timeZone })
+    : NO_DATE;
 }
 
 /** 22 de septiembre de 2026 */
 export function longDate(value: string | Date | null | undefined): string {
   const date = asDate(value);
-  return date ? date.toLocaleDateString(LOCALE, { day: 'numeric', month: 'long', year: 'numeric' }) : NO_DATE;
+  return date ? date.toLocaleDateString(LOCALE, { day: 'numeric', month: 'long', year: 'numeric', timeZone }) : NO_DATE;
 }
 
 /** 14:05 */
 export function shortTime(value: string | Date | null | undefined): string {
   const date = asDate(value);
-  return date ? date.toLocaleTimeString(LOCALE, { hour: '2-digit', minute: '2-digit' }) : NO_DATE;
+  return date ? date.toLocaleTimeString(LOCALE, { hour: '2-digit', minute: '2-digit', timeZone }) : NO_DATE;
 }
 
 /** 22/09/2026, 14:05 */
@@ -44,6 +72,7 @@ export function shortDateTime(value: string | Date | null | undefined): string {
         year: 'numeric',
         hour: '2-digit',
         minute: '2-digit',
+        timeZone,
       })
     : NO_DATE;
 }
@@ -59,6 +88,7 @@ export function fullDate(value: string | Date | null | undefined): string {
         year: 'numeric',
         hour: '2-digit',
         minute: '2-digit',
+        timeZone,
       })
     : NO_DATE;
 }
@@ -67,29 +97,49 @@ export function fullDate(value: string | Date | null | undefined): string {
 export function dateTime(value: string | Date | null | undefined): string {
   const date = asDate(value);
   return date
-    ? date.toLocaleString(LOCALE, { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })
+    ? date.toLocaleString(LOCALE, { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', timeZone })
     : NO_DATE;
 }
 
 /**
- * Marca de una conversación: la hora si es de hoy, el día de la semana si es de esta
- * semana, y el día y el mes si es más antigua. Es lo que se espera de un chat.
+ * Día del calendario de la sede en que cae un instante. El mes empieza en 0, como en
+ * `Date`, para usarlo directamente en un calendario.
  */
-export function conversationTimestamp(value: string | Date | null | undefined): string {
+export function calendarDay(value: Date = new Date()): { year: number; month: number; day: number } {
+  const parts = new Intl.DateTimeFormat(LOCALE, {
+    year: 'numeric',
+    month: 'numeric',
+    day: 'numeric',
+    timeZone,
+  }).formatToParts(value);
+  const part = (type: Intl.DateTimeFormatPartTypes) => Number(parts.find((found) => found.type === type)?.value);
+  return { year: part('year'), month: part('month') - 1, day: part('day') };
+}
+
+/** Número de día del calendario de la sede, para contar días enteros entre dos instantes. */
+function dayNumber(value: Date): number {
+  const { year, month, day } = calendarDay(value);
+  return Date.UTC(year, month, day) / DAY;
+}
+
+/**
+ * Marca de una conversación: la hora si es de hoy, «ayer», el día de la semana si es de
+ * esta semana y el día y el mes si es más antigua. Es lo que se espera de un chat.
+ *
+ * Se cuentan días del calendario, no periodos de 24 horas: un mensaje de anoche es de
+ * ayer aunque haya llegado hace menos de un día.
+ */
+export function conversationTimestamp(value: string | Date | null | undefined, now: number = Date.now()): string {
   const date = asDate(value);
   if (!date) return '';
 
-  const elapsed = Date.now() - date.getTime();
-  const ONE_DAY = 86_400_000;
+  const days = dayNumber(new Date(now)) - dayNumber(date);
 
-  if (elapsed < ONE_DAY) return shortTime(date);
-  if (elapsed < 7 * ONE_DAY) return date.toLocaleDateString(LOCALE, { weekday: 'short' });
-  return date.toLocaleDateString(LOCALE, { day: '2-digit', month: 'short' });
+  if (days <= 0) return shortTime(date);
+  if (days === 1) return 'ayer';
+  if (days < 7) return date.toLocaleDateString(LOCALE, { weekday: 'short', timeZone });
+  return date.toLocaleDateString(LOCALE, { day: '2-digit', month: 'short', timeZone });
 }
-
-const MINUTE = 60_000;
-const HOUR = 60 * MINUTE;
-const DAY = 24 * HOUR;
 
 /**
  * Cuánto hace de algo, en palabras: el último acceso de una cuenta, la llegada de un aviso…

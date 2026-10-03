@@ -20,8 +20,10 @@ import {
 } from 'lucide-react';
 import { PageLoader } from '@/components/ui/PageLoader';
 import { useSession } from '@/contexts/SessionContext';
+import { useCountry } from '@/contexts/CountryContext';
 import { useRealtimeEvent } from '@/contexts/RealtimeContext';
 import api, { errorMessage } from '@/lib/api';
+import { formatNumber } from '@/lib/country';
 import { DEFAULT_PASSING_SCORE, MAX_SCORE, scoreColor } from '@/lib/grading';
 import { Donut, BarsByRange, BarsByThreshold, COLOR } from '@/components/ui/charts';
 import { useAlerts } from '@/contexts/AlertContext';
@@ -64,6 +66,7 @@ interface AttemptsResponse {
 export default function QuizResults() {
   const { notify, showAlert, showConfirmation } = useAlerts();
   const { user } = useSession();
+  const { country } = useCountry();
   const [courses, setCourses] = useState<CourseQuizSummary[]>([]);
   const [submissions, setSubmissions] = useState<SubmissionToGrade[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
@@ -182,7 +185,7 @@ export default function QuizResults() {
     const score = getAttemptScore(last);
     const confirmed = await showConfirmation(
       `¿Habilitar otro intento a ${student.student.firstName}?`,
-      `Para liberarle un intento se borra el último que hizo${score !== null ? ` (nota ${score.toFixed(1)})` : ''}. ` +
+      `Para liberarle un intento se borra el último que hizo${score !== null ? ` (nota ${formatNumber(score, country)})` : ''}. ` +
         'Recibirá un aviso para volver a presentarlo.',
       'Habilitar intento',
       'warning',
@@ -288,7 +291,7 @@ export default function QuizResults() {
                 <div className="w-9 h-9 rounded-xl bg-primary/10 flex items-center justify-center">
                   <TrendingUp className="h-4 w-4 text-primary" />
                 </div>
-                <span className="text-2xl font-bold text-primary">{global.average.toFixed(1)}</span>
+                <span className="text-2xl font-bold text-primary">{formatNumber(global.average, country)}</span>
               </div>
               <p className="text-xs text-muted-foreground font-medium">Promedio global (0-100)</p>
             </div>
@@ -394,7 +397,7 @@ export default function QuizResults() {
                         <span
                           className={`font-black text-sm ${isLow ? 'text-red-700 dark:text-red-400' : isExcellent ? 'text-emerald-700 dark:text-emerald-400' : 'text-primary'}`}
                         >
-                          {course.average.toFixed(1)}
+                          {formatNumber(course.average, country)}
                         </span>
                       </div>
                       <div className="flex justify-between text-xs mt-1 pt-1 border-t border-border/50">
@@ -471,7 +474,7 @@ export default function QuizResults() {
               <div className="w-9 h-9 rounded-xl bg-primary/10 flex items-center justify-center">
                 <TrendingUp className="h-4 w-4 text-primary" />
               </div>
-              <span className="text-2xl font-bold text-primary">{chosenCourse.average.toFixed(1)}</span>
+              <span className="text-2xl font-bold text-primary">{formatNumber(chosenCourse.average, country)}</span>
             </div>
             <p className="text-xs text-muted-foreground font-medium">Promedio de notas</p>
           </div>
@@ -559,7 +562,8 @@ export default function QuizResults() {
                   <div className="flex-1 min-w-0">
                     <h2 className="text-lg sm:text-xl font-bold text-foreground truncate">{module.moduleTitle}</h2>
                     <p className="text-xs text-muted-foreground font-medium mt-0.5">
-                      Promedio del módulo: <strong className="text-primary">{module.average}</strong>
+                      Promedio del módulo:{' '}
+                      <strong className="text-primary">{formatNumber(module.average, country)}</strong>
                     </p>
                   </div>
 
@@ -596,7 +600,7 @@ export default function QuizResults() {
 
                             <div className="flex items-center gap-3">
                               <span className="text-xs font-bold bg-muted px-3 py-1 rounded-full text-muted-foreground">
-                                Promedio: {group.average}
+                                Promedio: {formatNumber(group.average, country)}
                               </span>
                               <ChevronDown
                                 className={`h-4 w-4 text-muted-foreground transition-transform duration-300 ${isQuizOpen ? 'rotate-180' : ''}`}
@@ -661,7 +665,7 @@ export default function QuizResults() {
                                             <span
                                               className={`text-lg font-black ${scoreColor(score, chosenCourse.threshold)}`}
                                             >
-                                              {score.toFixed(1)}
+                                              {formatNumber(score, country)}
                                             </span>
                                             <span
                                               className={`text-xs font-bold hidden sm:inline opacity-60 ${scoreColor(score, chosenCourse.threshold)}`}
@@ -710,7 +714,7 @@ export default function QuizResults() {
                                                       <span
                                                         className={`text-sm font-black ${scoreColor(attemptScore, chosenCourse.threshold)}`}
                                                       >
-                                                        {attemptScore.toFixed(1)}
+                                                        {formatNumber(attemptScore, country)}
                                                       </span>
                                                     </div>
                                                   ) : (

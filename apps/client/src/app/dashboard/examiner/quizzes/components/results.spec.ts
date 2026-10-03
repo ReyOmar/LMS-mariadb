@@ -175,7 +175,7 @@ describe('groupByModuleAndQuiz', () => {
     const [module] = groupByModuleAndQuiz(loaded);
 
     // (90 + 50) / 2, y no (40 + 90 + 70 + 50) / 4, que serían 62.5.
-    expect(module.assignments[0].average).toBe('70.0');
+    expect(module.assignments[0].average).toBe(70);
   });
 
   it('no funde dos cuestionarios distintos que se llaman igual', () => {

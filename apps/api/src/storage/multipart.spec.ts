@@ -110,6 +110,24 @@ describe('receiveFile', () => {
     }
   });
 
+  it('recorta un nombre de archivo larguísimo conservando la extensión', async () => {
+    const app = await createApp(TASK_LIMIT);
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/subir',
+        ...multipartBody(`${'informe '.repeat(40)}.pdf`, Buffer.alloc(10)),
+      });
+
+      expect(response.statusCode).toBe(200);
+      const { name } = response.json<{ name: string }>();
+      expect(name).toHaveLength(191);
+      expect(name.endsWith('.pdf')).toBe(true);
+    } finally {
+      await app.close();
+    }
+  });
+
   it('rechaza un archivo vacío', async () => {
     const app = await createApp(TASK_LIMIT);
     try {

@@ -1,4 +1,13 @@
-import { shortDate, longDate, dateTime, shortTime, conversationTimestamp, timeAgo } from './dates';
+import {
+  shortDate,
+  longDate,
+  dateTime,
+  shortTime,
+  conversationTimestamp,
+  timeAgo,
+  setTimeZone,
+  calendarDay,
+} from './dates';
 
 /**
  * Cómo se leen las fechas en el campus.
@@ -47,20 +56,63 @@ describe('fechas del campus', () => {
 });
 
 describe('marca de conversación', () => {
-  it('de hoy enseña la hora', () => {
-    const oneHourAgo = new Date(Date.now() - 3_600_000);
-    expect(conversationTimestamp(oneHourAgo)).toMatch(/^\d{2}:\d{2}$/);
+  // 10:00 del 22 de septiembre en Bogotá.
+  const now = Date.parse('2026-09-22T15:00:00Z');
+
+  beforeEach(() => setTimeZone('America/Bogota'));
+  afterEach(() => setTimeZone(undefined));
+
+  it('de hoy enseña la hora de la sede', () => {
+    expect(conversationTimestamp('2026-09-22T13:30:00Z', now)).toBe('08:30');
+  });
+
+  it('de ayer dice «ayer» aunque no hayan pasado 24 horas', () => {
+    expect(conversationTimestamp('2026-09-21T23:00:00Z', now)).toBe('ayer');
+    // Las 23:00 del 21 en Bogotá, cuando en UTC ya es día 22.
+    expect(conversationTimestamp('2026-09-22T04:00:00Z', now)).toBe('ayer');
   });
 
   it('de esta semana enseña el día de la semana', () => {
-    const threeDaysAgo = new Date(Date.now() - 3 * 86_400_000);
-    expect(conversationTimestamp(threeDaysAgo)).not.toMatch(/^\d{2}:\d{2}$/);
-    expect(conversationTimestamp(threeDaysAgo).length).toBeLessThan(10);
+    const text = conversationTimestamp('2026-09-19T15:00:00Z', now);
+    expect(text).not.toMatch(/^\d{2}:\d{2}$/);
+    expect(text).not.toBe('ayer');
+    expect(text.length).toBeLessThan(10);
   });
 
   it('más antigua enseña el día y el mes', () => {
-    const oneMonthAgo = new Date(Date.now() - 30 * 86_400_000);
-    expect(conversationTimestamp(oneMonthAgo)).toMatch(/\d{2}/);
+    expect(conversationTimestamp('2026-08-23T15:00:00Z', now)).toMatch(/23/);
+  });
+
+  it('cuenta los días en la sede: el mismo instante es hoy en Bogotá y ayer en Ciudad de México', () => {
+    const instant = '2026-09-22T05:30:00Z';
+    expect(conversationTimestamp(instant, now)).toBe('00:30');
+
+    setTimeZone('America/Mexico_City');
+    expect(conversationTimestamp(instant, now)).toBe('ayer');
+  });
+});
+
+describe('zona horaria de la sede', () => {
+  afterEach(() => setTimeZone(undefined));
+
+  it('escribe la hora de la sede, no la del navegador', () => {
+    setTimeZone('America/Bogota');
+    expect(shortTime('2026-09-22T19:05:00Z')).toBe('14:05');
+    expect(shortDate('2026-09-23T03:00:00Z')).toBe('22/09/2026');
+
+    setTimeZone('America/Mexico_City');
+    expect(shortTime('2026-09-22T19:05:00Z')).toBe('13:05');
+  });
+
+  it('una zona que no existe no rompe las fechas: se usa la del navegador', () => {
+    setTimeZone('Marte/Olimpo');
+    // Sin zona en la cadena se lee en la hora del navegador, y en esa misma se escribe.
+    expect(shortTime('2026-09-22T14:05:00')).toBe('14:05');
+  });
+
+  it('el día del calendario es el de la sede', () => {
+    setTimeZone('America/Bogota');
+    expect(calendarDay(new Date('2026-10-01T03:00:00Z'))).toEqual({ year: 2026, month: 8, day: 30 });
   });
 });
 

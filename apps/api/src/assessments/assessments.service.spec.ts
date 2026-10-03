@@ -1,3 +1,4 @@
+import { ForbiddenException } from '@nestjs/common';
 import { AssessmentsService } from './assessments.service';
 import { encodeCursor, MAX_PER_PAGE } from '../common/domain/pagination';
 import { sessionFor } from '../common/testing/test-campus';
@@ -119,6 +120,7 @@ function recordingService(totalCount = 0, rawRows: unknown[] = [], finishedRows:
     prisma as never,
     storage as never,
     access as never,
+    {} as never,
     {} as never,
     {} as never,
     {} as never,
@@ -401,6 +403,19 @@ describe('cifras de los cuestionarios por curso', () => {
 
     expect(rawQueries[0].sql).toContain('mt.activa = 1');
   });
+
+  it('toma la mejor nota de cada cuestionario y aprueba sólo con todos superados', async () => {
+    const { service, rawQueries } = recordingService(0, [courseRow]);
+    await service.summarizeQuizzes(ADMIN);
+
+    const { sql } = rawQueries[0];
+    // La mejor nota sale por alumno **y** cuestionario: la de uno no tapa el suspenso de otro.
+    expect(sql).toContain('GROUP BY m.curso_guid, e.usuario_guid, e.tarea_guid');
+    // Aprobados y tramos con la menor de esas mejores notas; el promedio, con su media.
+    expect(sql).toContain('MIN(q.mejor) AS menor');
+    expect(sql).toContain('SUM(a.menor >= c.nota_aprobacion)');
+    expect(sql).toContain('AVG(a.media)');
+  });
 });
 
 describe('historial de intentos de cuestionario', () => {
@@ -414,7 +429,7 @@ describe('historial de intentos de cuestionario', () => {
     await service.getQuizAttempts(ADMIN, { course: COURSE });
 
     // Primero una página de alumnos…
-    expect(rawQueries[0].sql).toContain('GROUP BY e.usuario_guid');
+    expect(rawQueries[0].sql).toContain('GROUP BY q.userGuid');
     // …y después todos los intentos de esos alumnos, sin `take` que los corte.
     expect(queries[0].where).toMatchObject({ userGuid: { in: expect.any(Array) } });
     expect(queries[0].take).toBeUndefined();
@@ -456,6 +471,22 @@ describe('historial de intentos de cuestionario', () => {
 
     expect(coursesQueried()).toBe(1);
   });
+
+  it('«Reprobados» es quien no alcanza el umbral con su mejor nota en algún cuestionario', async () => {
+    const failed = recordingService(150, students);
+    await failed.service.getQuizAttempts(ADMIN, { course: COURSE, result: 'failed' });
+    const passed = recordingService(150, students);
+    await passed.service.getQuizAttempts(ADMIN, { course: COURSE, result: 'passed' });
+
+    // La mejor nota se calcula por cuestionario y decide la menor de ellas, no la mejor del curso.
+    for (const { sql } of [failed.rawQueries[0], passed.rawQueries[0]]) {
+      expect(sql).toContain('GROUP BY e.usuario_guid, e.tarea_guid');
+      expect(sql).not.toContain('MAX(e.calificacion) <');
+    }
+    expect(failed.rawQueries[0].sql).toContain('MIN(q.best) <');
+    expect(passed.rawQueries[0].sql).toContain('MIN(q.best) >=');
+    expect(failed.rawQueries[0].values).toContain(80);
+  });
 });
 
 /**
@@ -467,11 +498,12 @@ describe('historial de intentos de cuestionario', () => {
  * podría certificarse sin aprobarla.
  */
 describe('calificación de una tarea', () => {
-  function gradingService() {
+  function gradingService({ enrolled = true } = {}) {
     const progress = new Set<string>(['alumno-1|tarea-1']);
     const recounts: unknown[][] = [];
     const prisma = {
-      submission: { update: async () => undefined },
+      enrollment: { findUnique: async () => ({ active: enrolled }) },
+      submission: { update: jest.fn(async () => undefined) },
       $executeRaw: async (_sql: TemplateStringsArray, ...values: unknown[]) => {
         recounts.push(values);
         return 1;
@@ -509,8 +541,9 @@ describe('calificación de una tarea', () => {
       {} as never,
       realtime as never,
       events as never,
+      {} as never,
     );
-    return { service, progress, recounts };
+    return { service, progress, recounts, prisma };
   }
 
   it('aprobar deja la tarea completada', async () => {
@@ -539,6 +572,15 @@ describe('calificación de una tarea', () => {
 
       expect(recounts).toEqual([['alumno-1', COURSE]]);
     }
+  });
+
+  it('no califica la entrega de quien se dio de baja del curso', async () => {
+    const { service, prisma, progress } = gradingService({ enrolled: false });
+
+    await expect(service.gradeSubmission('entrega-1', { score: 40 }, ADMIN)).rejects.toThrow(ForbiddenException);
+    await expect(service.gradeSubmission('entrega-1', { score: 40 }, ADMIN)).rejects.toThrow(/ya no está matriculado/);
+    expect(prisma.submission.update).not.toHaveBeenCalled();
+    expect(progress.has('alumno-1|tarea-1')).toBe(true);
   });
 });
 
@@ -575,18 +617,18 @@ describe('entrega de una tarea: límite de subida', () => {
       submission: { findFirst: async () => previous, create: save, update: save },
     };
 
-    const uploads: { folder: string; maxBytes?: number }[] = [];
+    const uploads: { folder: string; uploader: unknown; maxBytes?: number }[] = [];
     const storage = {
-      uploadFromDisk: async (_path: string, _name: string, folder: string, maxBytes?: number) => {
-        uploads.push({ folder, maxBytes });
+      uploadFromDisk: async (_path: string, _name: string, folder: string, uploader: unknown, maxBytes?: number) => {
+        uploads.push({ folder, uploader, maxBytes });
         return 'entregas/nueva.pdf';
       },
-      downloadUrl: () => '/api/storage/download/entregas/nueva.pdf?exp=1&sig=x',
-      deleteFile: async () => undefined,
+      downloadUrl: jest.fn(() => '/api/storage/download/entregas/nueva.pdf?exp=1&sig=x'),
       deleteFiles: jest.fn(async () => undefined),
     };
+    const files = { deleteUnreferenced: jest.fn(async () => undefined) };
     const access = {
-      ensureResourceAccess: async () => ({ title: 'Manejo defensivo', passingScore: 80, teacherGuid: 'profe-1' }),
+      unlockedResourceAccess: async () => ({ title: 'Manejo defensivo', passingScore: 80, teacherGuid: 'profe-1' }),
     };
     const settings = { getMaxUploadMb: async () => 10 };
     const events = { emit: () => true };
@@ -598,10 +640,11 @@ describe('entrega de una tarea: límite de subida', () => {
       settings as never,
       {} as never,
       events as never,
+      files as never,
     );
     const receive = jest.fn(async (_limit: UploadLimit) => ({ name: 'informe.pdf', filePath: '/tmp/subida' }));
 
-    return { service, receive, uploads, storage };
+    return { service, receive, uploads, storage, files };
   }
 
   it('recibe el archivo con el límite propio de la tarea, aunque supere el general de la sede', async () => {
@@ -612,7 +655,7 @@ describe('entrega de una tarea: límite de subida', () => {
     expect(receive).toHaveBeenCalledWith(
       expect.objectContaining({ bytes: 1024 * MIB, message: 'El archivo supera el límite de 1 GB de esta tarea.' }),
     );
-    expect(uploads).toEqual([{ folder: 'entregas', maxBytes: 1024 * MIB }]);
+    expect(uploads).toEqual([{ folder: 'entregas', uploader: STUDENT, maxBytes: 1024 * MIB }]);
   });
 
   it('sin límite propio aplica el general de la sede', async () => {
@@ -623,7 +666,7 @@ describe('entrega de una tarea: límite de subida', () => {
     expect(receive).toHaveBeenCalledWith(
       expect.objectContaining({ bytes: 10 * MIB, message: 'El archivo supera el límite de 10 MB de esta tarea.' }),
     );
-    expect(uploads).toEqual([{ folder: 'entregas', maxBytes: 10 * MIB }]);
+    expect(uploads).toEqual([{ folder: 'entregas', uploader: STUDENT, maxBytes: 10 * MIB }]);
   });
 
   it('no lee el archivo de una entrega que ya está aprobada', async () => {
@@ -640,5 +683,23 @@ describe('entrega de una tarea: límite de subida', () => {
 
     await expect(service.recordSubmission('tarea-1', receive, STUDENT)).rejects.toThrow('base de datos caída');
     expect(storage.deleteFiles).toHaveBeenCalledWith(['entregas/nueva.pdf']);
+  });
+
+  it('al reenviar retira el archivo anterior sólo si ya no lo usa nadie', async () => {
+    const { service, receive, files } = submissionService({
+      previous: { guid: 'entrega-0', status: 'GRADED', score: 40, attachmentKey: 'entregas/vieja.pdf' },
+    });
+
+    await service.recordSubmission('tarea-1', receive, STUDENT);
+
+    expect(files.deleteUnreferenced).toHaveBeenCalledWith(['entregas/vieja.pdf']);
+  });
+
+  it('el enlace de descarga lleva el nombre original del archivo', async () => {
+    const { service, receive, storage } = submissionService();
+
+    await service.recordSubmission('tarea-1', receive, STUDENT);
+
+    expect(storage.downloadUrl).toHaveBeenCalledWith('entregas/nueva.pdf', 'informe.pdf');
   });
 });

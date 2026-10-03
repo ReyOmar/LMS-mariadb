@@ -1,5 +1,5 @@
 import { AxiosError, AxiosHeaders } from 'axios';
-import { fileUrlFor, isNetworkFailure } from './api';
+import { fileUrlFor, isLogoutReason, isNetworkFailure, loginUrl, safeNextPath } from './api';
 
 /**
  * Cómo se convierte lo que guarda la base en algo que el navegador pueda pedir.
@@ -54,5 +54,54 @@ describe('isNetworkFailure', () => {
 
   it('tampoco lo es un error que no viene de una petición', () => {
     expect(isNetworkFailure(new Error('otra cosa'))).toBe(false);
+  });
+});
+
+/**
+ * Un enlace de un correo abierto sin sesión pasa por el login y debe acabar en la página
+ * que se pidió. El destino viaja por la URL, así que nunca puede llevar fuera del campus.
+ */
+describe('vuelta a la página pedida tras el login', () => {
+  it('acepta las rutas del propio campus, con su consulta', () => {
+    expect(safeNextPath('/courses/abc')).toBe('/courses/abc');
+    expect(safeNextPath('/dashboard/student/certificates?open=xyz')).toBe('/dashboard/student/certificates?open=xyz');
+  });
+
+  it.each([
+    ['otro dominio con dos barras', '//evil.example/robo'],
+    ['otro dominio con barra invertida', '/\\evil.example'],
+    ['una dirección completa', 'https://evil.example/'],
+    ['un esquema javascript', 'javascript:alert(1)'],
+    ['una ruta relativa sin barra', 'courses/abc'],
+    ['el propio login', '/login?reason=expired'],
+    ['vacío', ''],
+    ['nulo', null],
+  ])('rechaza %s', (_case, value) => {
+    expect(safeNextPath(value)).toBeNull();
+  });
+
+  it('compone el login con el motivo y el destino', () => {
+    expect(loginUrl('expired', '/courses/abc')).toBe('/login?reason=expired&next=%2Fcourses%2Fabc');
+    expect(loginUrl(undefined, '/courses/abc')).toBe('/login?next=%2Fcourses%2Fabc');
+    expect(loginUrl('revoked', '//evil.example')).toBe('/login?reason=revoked');
+    expect(loginUrl()).toBe('/login');
+  });
+});
+
+/**
+ * El motivo del cierre de sesión llega por la URL del login, así que puede traer cualquier
+ * cosa: sólo se explica uno que el login sepa contar.
+ */
+describe('isLogoutReason', () => {
+  it('reconoce los motivos que el login explica, también el de contraseña y el de rol', () => {
+    for (const reason of ['expired', 'revoked', 'displaced', 'password', 'role']) {
+      expect(isLogoutReason(reason)).toBe(true);
+    }
+  });
+
+  it('descarta cualquier otro valor', () => {
+    expect(isLogoutReason('password_changed')).toBe(false);
+    expect(isLogoutReason('')).toBe(false);
+    expect(isLogoutReason(null)).toBe(false);
   });
 });
