@@ -256,6 +256,10 @@ export class AuthService {
       await tx.emailVerification.deleteMany({ where: { email: dto.email } });
 
       const data = {
+        // La búsqueda no distingue tildes: una solicitud antigua de `juan@empresá.com`
+        // vuelve como la de `juan@empresa.com`. Se reescribe el correo para que la clave
+        // temporal de la aprobación vaya al buzón verificado, no al de la solicitud antigua.
+        email: dto.email,
         firstName: dto.firstName,
         lastName: dto.lastName,
         requestedRole: dto.requestedRole,
@@ -268,7 +272,7 @@ export class AuthService {
 
       return existing
         ? tx.accessRequest.update({ where: { id: existing.id }, data })
-        : tx.accessRequest.create({ data: { email: dto.email, ...data } });
+        : tx.accessRequest.create({ data });
     });
 
     this.realtime.emitToRole('request:new', { id: accessRequest.id }, dto.country, 'ADMIN');

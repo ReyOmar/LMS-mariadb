@@ -201,10 +201,17 @@
       'calt' 1,
       'tnum' 1;
     letter-spacing: -0.011em;
-    /* Mientras se ve el aviso de almacenamiento, el final de la página queda por encima. */
-    padding-bottom: var(--storage-notice-space, 0px);
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+  }
+  /* En el móvil el aviso de almacenamiento es una franja a todo lo ancho: mientras se ve, el
+     final de la página queda por encima. Desde `sm:` (40rem) es una tarjeta en una esquina, y
+     reservar su alto dejaría una franja vacía bajo toda la página; lo que se fija abajo sí se
+     sigue apartando de ella con `--storage-notice-space`. */
+  @media (width < 40rem) {
+    body {
+      padding-bottom: var(--storage-notice-space, 0px);
+    }
   }
   h1,
   h2,

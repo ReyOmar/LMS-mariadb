@@ -4,7 +4,7 @@ import type { JwtPayload } from '../interfaces/jwt-payload.interface';
 
 const MINUTE_MS = 60_000;
 
-/** Contador de intentos sobre una misma cuenta: el correo escrito en un formulario público. */
+/** Contador de intentos sobre una misma cuenta: el correo que lleva el cuerpo de la petición. */
 const ACCOUNT = 'account';
 
 const RETRY_AFTER = 'Retry-After';
@@ -15,9 +15,13 @@ const RETRY_AFTER = 'Retry-After';
  *  - `default`, lo que pide cada persona. Con sesión se cuenta por usuario y sin ella por
  *    IP: una oficina o un aula navegan tras la misma IP pública, y contarlas como una sola
  *    persona las bloquearía en cuanto unos pocos trabajaran a la vez.
- *  - `account`, los intentos sobre un mismo correo desde una misma IP en los formularios
- *    sin sesión. Es lo que frena adivinar contraseñas o códigos, y permite que el límite
- *    por IP de esos formularios sea holgado para que un aula entera pueda entrar a la vez.
+ *  - `account`, los intentos sobre un mismo correo desde una misma IP —o un mismo usuario,
+ *    con sesión— en las peticiones que lo llevan en el cuerpo: los formularios públicos y
+ *    el alta de cuentas. Es lo que frena adivinar contraseñas o códigos, y permite que el
+ *    límite por IP de esos formularios sea holgado para que un aula entera pueda entrar a
+ *    la vez. Cuenta también con sesión: las rutas públicas aceptan un token válido si viene,
+ *    y saltárselo con él dejaría probar contraseñas ajenas al ritmo del límite general.
+ *    Como va por correo, un administrador que da de alta a varias personas no lo agota.
  */
 export const RATE_LIMITS = {
   throttlers: [
@@ -38,11 +42,9 @@ export const EMAIL_LIMIT = {
 
 type RequestWithUser = Record<string, unknown> & { user?: JwtPayload; body?: unknown };
 
-/** El correo sobre el que actúa una petición sin sesión, normalizado, o `null` si no lleva. */
+/** El correo sobre el que actúa una petición, normalizado, o `null` si no lleva. */
 function attemptedAccount(context: ExecutionContext): string | null {
   const request = context.switchToHttp().getRequest<RequestWithUser>();
-  if (request.user) return null;
-
   const email = (request.body as { email?: unknown } | undefined)?.email;
   return typeof email === 'string' && email.trim() ? email.trim().toLowerCase() : null;
 }

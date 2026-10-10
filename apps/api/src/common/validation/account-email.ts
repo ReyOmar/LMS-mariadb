@@ -4,11 +4,16 @@ import { NormalizeEmail } from './transforms';
 
 const INVALID_EMAIL = 'El correo electrónico no es válido.';
 
+const NON_ASCII_EMAIL = 'El correo electrónico no puede llevar espacios, tildes, eñes ni letras de otros alfabetos.';
+
 /** Lo que cabe en las columnas de correo de la base. */
 const EMAIL_MAX_LENGTH = 191;
 
-/** Caracteres ASCII visibles: ni espacios, ni tildes, ni letras de otros alfabetos. */
-const ASCII_ONLY = /^[\x21-\x7e]+$/;
+/**
+ * Caracteres ASCII visibles: ni espacios, ni tildes, ni letras de otros alfabetos. Admite el
+ * texto vacío para que un correo en blanco reciba sólo el mensaje genérico de `IsEmail`.
+ */
+const ASCII_ONLY = /^[\x21-\x7e]*$/;
 
 /**
  * Correo de una cuenta: normalizado, de longitud que cabe en la base y sólo con caracteres
@@ -22,8 +27,10 @@ const ASCII_ONLY = /^[\x21-\x7e]+$/;
  */
 export const AccountEmail = () =>
   applyDecorators(
-    IsEmail({ allow_utf8_local_part: false }, { message: INVALID_EMAIL }),
-    Matches(ASCII_ONLY, { message: INVALID_EMAIL }),
+    // Las tildes las rechaza `Matches`, con un mensaje que dice qué sobra. `IsEmail` las deja
+    // pasar (con sus opciones por defecto, también antes de la @) para no sumarle el genérico.
+    IsEmail(undefined, { message: INVALID_EMAIL }),
+    Matches(ASCII_ONLY, { message: NON_ASCII_EMAIL }),
     MaxLength(EMAIL_MAX_LENGTH, { message: `El correo no puede superar los ${EMAIL_MAX_LENGTH} caracteres.` }),
     NormalizeEmail(),
   );

@@ -400,6 +400,20 @@ datos.
   Si aparece alguno, cámbialo en la base por su forma ASCII (los dominios internacionales
   se escriben `xn--…`): `UPDATE usuarios SET email = '…' WHERE email = '…';`. La interfaz
   no permite cambiar el correo de una cuenta.
+
+  Comprueba también las solicitudes de acceso:
+
+  ```sql
+  SELECT email, estado FROM lms_solicitudes_acceso WHERE email REGEXP '[^ -~]';
+  ```
+
+  Si sale alguna `PENDIENTE`, cambia su correo por la forma ASCII antes de aprobarla
+  (`UPDATE lms_solicitudes_acceso SET email = '…' WHERE email = '…';`): aprobada tal cual,
+  la cuenta nacería con un correo con el que no se puede entrar. Si las tildes están antes
+  de la @, no hay forma ASCII: recházala y pide a la persona que solicite acceso con otro
+  correo. Las que no estén pendientes pueden quedarse: si la persona vuelve a solicitar
+  acceso, la solicitud toma el correo que escriba entonces.
+
 - **SMTP sin usuario.** `SMTP_HOST` basta para un relé que no pide autenticación;
   `SMTP_USER` y `SMTP_PASS` sólo hacen falta si el servidor los exige, como Brevo.
 

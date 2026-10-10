@@ -150,6 +150,9 @@ export default function CourseAssignmentPage() {
 
   const loadEnrollments = useCallback(
     async (courseGuid: string) => {
+      // Una recarga de un curso que ya no está abierto —un alta que termina después de cambiar de
+      // curso— no pide una lista nueva: invalidaría la carga del curso abierto, que se quedaría vacío.
+      if (currentCourse.current !== courseGuid) return;
       const isCurrent = enrolledList.start();
       setLoadingEnrollments(true);
       try {
@@ -170,6 +173,8 @@ export default function CourseAssignmentPage() {
   /** Alumnos de la sede que aún no están en el curso, según lo que se busque. */
   const loadCandidates = useCallback(
     async (courseGuid: string, search: string) => {
+      // Como en las matrículas: la recarga de otro curso no invalida la del abierto.
+      if (currentCourse.current !== courseGuid) return;
       const isCurrent = candidateList.start();
       try {
         const { data } = await api.get<Candidate[]>(`/enrollments/${courseGuid}/candidates`, {

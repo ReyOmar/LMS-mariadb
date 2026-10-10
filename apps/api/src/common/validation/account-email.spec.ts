@@ -17,6 +17,20 @@ async function validated(email: string): Promise<string | null> {
   }
 }
 
+/** Los mensajes con que la API rechaza el correo, tal como los recibe el usuario. */
+async function rejectionOf(email: string): Promise<string[]> {
+  try {
+    await createValidationPipe().transform({ email }, { type: 'body', metatype: Account });
+  } catch (error) {
+    expect(error).toBeInstanceOf(BadRequestException);
+    return ((error as BadRequestException).getResponse() as { message: string[] }).message;
+  }
+  throw new Error(`Se admitió ${email}`);
+}
+
+const INVALID = 'El correo electrónico no es válido.';
+const NON_ASCII = 'El correo electrónico no puede llevar espacios, tildes, eñes ni letras de otros alfabetos.';
+
 /**
  * La base compara los correos sin distinguir tildes, así que un correo con ellas encontraría
  * otra cuenta. Sólo se admiten en ASCII, y siempre normalizados.
@@ -32,6 +46,21 @@ describe('AccountEmail', () => {
 
   it.each(['ána@empresa.com', 'ana@empresá.com', 'ana@ｅmpresa.com'])('rechaza %s', async (email) => {
     expect(await validated(email)).toBeNull();
+  });
+
+  it.each(['juan@empresá.com', 'juán@empresa.com', '"ana ruiz"@empresa.com'])(
+    '%s recibe un único mensaje, el que dice qué sobra',
+    async (email) => {
+      expect(await rejectionOf(email)).toEqual([NON_ASCII]);
+    },
+  );
+
+  it('con un espacio en medio salen el genérico y el que dice qué sobra, sin repetirse', async () => {
+    expect(await rejectionOf('ana ruiz@empresa.com')).toEqual([INVALID, NON_ASCII]);
+  });
+
+  it.each(['no-es-correo', '', '   '])('a %p, que no es un correo, le basta el mensaje genérico', async (email) => {
+    expect(await rejectionOf(email)).toEqual([INVALID]);
   });
 
   it('rechaza lo que no cabe en la columna de la base', async () => {

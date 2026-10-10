@@ -5,7 +5,6 @@ import {
   gradedPercent,
   statusBreakdown,
   countryTotals,
-  mergeFirstPage,
   gradingStart,
   type CourseSummary,
 } from './grouping';
@@ -211,17 +210,5 @@ describe('gradingStart', () => {
       feedback: '',
       previous: null,
     });
-  });
-});
-
-describe('mergeFirstPage', () => {
-  const rows = (...guids: string[]) => guids.map((guid) => ({ guid }));
-
-  it('pone delante lo nuevo y conserva las páginas ya cargadas', () => {
-    expect(mergeFirstPage(rows('n', 'a', 'b'), rows('a', 'b', 'c', 'd'))).toEqual(rows('n', 'a', 'b', 'c', 'd'));
-  });
-
-  it('no repite una fila que ya venía en la página nueva', () => {
-    expect(mergeFirstPage(rows('c', 'a'), rows('a', 'b', 'c', 'd'))).toEqual(rows('c', 'a', 'b', 'd'));
   });
 });
