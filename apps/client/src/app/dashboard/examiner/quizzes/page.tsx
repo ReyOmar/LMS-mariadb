@@ -43,6 +43,7 @@ import {
 import { dateTime } from '@/lib/dates';
 import { initials, matchesSearch, plural } from '@/lib/text';
 import { useCurrentList } from '@/hooks/useCurrentList';
+import { appendPage, mergeFirstPage } from '@/lib/pagination';
 import { LoadMoreButton } from '@/components/ui/LoadMoreButton';
 
 /** Cuántos caracteres del título caben en una etiqueta de la gráfica. */
@@ -53,6 +54,12 @@ interface AttemptsResponse {
   cursor: string | null;
   submissions: SubmissionToGrade[];
 }
+
+/**
+ * Las páginas se juntan por alumno y no por intento, que es como avanza la página: lo que
+ * llega de un alumno es todo su historial y sustituye al cargado.
+ */
+const byStudent = (attempt: SubmissionToGrade) => attempt.student?.guid ?? attempt.guid;
 
 /**
  * Analítica de los cuestionarios, que se corrigen solos.
@@ -143,7 +150,8 @@ export default function QuizResults() {
   /**
    * Trae la siguiente tanda de alumnos sin perder lo que ya está en pantalla.
    * Se pide desde la marca del último recibido, no desde un número de filas: el coste no
-   * crece según se baja y nadie se repite ni se cuela si entretanto llega otro intento.
+   * crece según se baja y nadie se cuela si entretanto llega otro intento. Sólo vuelve a
+   * llegar quien bajó de sitio porque se le borró un intento, y entonces no se repite.
    */
   const loadMore = async () => {
     if (!cursor || loadingMore) return;
@@ -152,7 +160,7 @@ export default function QuizResults() {
     try {
       const { data } = await fetchAttempts(cursor);
       if (!isCurrent()) return;
-      setSubmissions((prev) => [...prev, ...(data.submissions ?? [])]);
+      setSubmissions((prev) => appendPage(prev, data.submissions ?? [], byStudent));
       setCursor(data.cursor);
     } catch (error) {
       notify.error('No se pudieron cargar más intentos', errorMessage(error));
@@ -161,7 +169,15 @@ export default function QuizResults() {
     }
   };
 
-  /** Vuelve a pedir las cifras y la primera página, sin el indicador de carga. */
+  /**
+   * Vuelve a pedir las cifras y la primera página, sin el indicador de carga.
+   *
+   * La primera página se funde con lo cargado en lugar de reemplazarlo: llega con cada
+   * intento calificado y, si no, se llevaría las tandas traídas con «Ver más». El cursor se
+   * deja como estaba, porque quien sube a la primera página no vuelve a caer detrás de él.
+   * Si no hay más páginas, la primera es la lista entera y la reemplaza: así sale también
+   * quien ya no cumple el filtro, que la fusión dejaría con sus datos de antes.
+   */
   const reloadSilently = useCallback(() => {
     void loadSummary();
     if (!openCourse) return;
@@ -171,8 +187,13 @@ export default function QuizResults() {
     void fetchAttempts()
       .then(({ data }) => {
         if (!isCurrent()) return;
-        setSubmissions(data.submissions ?? []);
-        setCursor(data.cursor);
+        const fresh = data.submissions ?? [];
+        if (data.cursor === null) {
+          setSubmissions(fresh);
+          setCursor(null);
+        } else {
+          setSubmissions((loaded) => mergeFirstPage(fresh, loaded, byStudent));
+        }
       })
       .catch(() => undefined);
   }, [loadSummary, openCourse, fetchAttempts, list]);
@@ -213,6 +234,9 @@ export default function QuizResults() {
     try {
       await api.post(`/assessments/quiz/${quiz}/students/${student.student.guid}/new-attempt`);
       notify.success('Intento habilitado', `${student.student.firstName} ya puede volver a presentar el cuestionario.`);
+      // El intento borrado se quita aquí: si el alumno llegó con «Ver más», la primera página
+      // no lo trae y la fusión conservaría su historial de antes.
+      setSubmissions((loaded) => loaded.filter((attempt) => attempt.guid !== last.guid));
       reloadSilently();
     } catch (error) {
       showAlert.error('No se pudo habilitar el intento', errorMessage(error));

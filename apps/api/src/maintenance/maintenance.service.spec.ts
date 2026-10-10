@@ -142,7 +142,8 @@ function keysetPage<T extends { guid: string }>(
  * La tarea corre cada hora sobre las mismas entregas mientras sigan sin calificar, así que
  * lo que hay que sostener es que **no repita** —quien ya fue desbloqueado no puede recibir
  * el aviso una y otra vez— y que **no deje a nadie atrás** por muchas entregas que haya
- * delante. Tampoco desbloquea a quien se dio de baja del curso.
+ * delante. Tampoco desbloquea a quien se dio de baja del curso, aunque sea mientras corre
+ * la tanda.
  */
 describe('MaintenanceService — desbloqueo por espera', () => {
   /** Una entrega sin calificar de hace más tiempo del que se tolera. */
@@ -156,23 +157,63 @@ describe('MaintenanceService — desbloqueo por espera', () => {
     };
   }
 
+  /** Cuándo se enviaron las entregas que esperan: bastante antes del corte de 48 h. */
+  const LONG_AGO = new Date('2020-01-01T00:00:00Z');
+
+  /** Lo que la tarea pide al releer una entrega. */
+  type SubmissionFilter = { guid: string; status?: { in: string[] }; submittedAt?: { lt: Date } };
+
+  /**
+   * Base con las entregas `pending` esperando calificación.
+   *
+   * `unenrolled` ya se había dado de baja al preparar la tanda. Lo demás ocurre entre que
+   * se prepara la tanda y se bloquea la matrícula: `unenrolledMeanwhile` se da de baja,
+   * `gradedMeanwhile` recibe su nota y `resubmittedMeanwhile` se reenvía, lo que reinicia
+   * la espera.
+   */
   function baseWithWaits(
     pending: ReturnType<typeof submission>[],
     alreadyDone: { u: string; r: string }[],
-    unenrolled: string[] = [],
-    gradedMeanwhile: string[] = [],
+    {
+      unenrolled = [] as string[],
+      unenrolledMeanwhile = [] as string[],
+      gradedMeanwhile = [] as string[],
+      resubmittedMeanwhile = [] as string[],
+    } = {},
   ) {
     const created: { userGuid: string; resourceGuid: string }[] = [];
     let progressQueries = 0;
+    let transactions = 0;
+
+    /** La entrega tal como está al releerla con la matrícula ya bloqueada. */
+    const current = (guid: string) => {
+      if (gradedMeanwhile.includes(guid)) return { status: 'GRADED', submittedAt: LONG_AGO };
+      // Sigue sin nota, pero la fecha de envío es la del reenvío.
+      if (resubmittedMeanwhile.includes(guid)) return { status: 'IN_REVIEW', submittedAt: new Date() };
+      return { status: 'SUBMITTED', submittedAt: LONG_AGO };
+    };
 
     const base = {
       $executeRaw: async () => 1,
-      // La matrícula bloqueada: activa salvo que el alumno se haya dado de baja.
-      $queryRaw: async () => [{ active: 1, completedAt: null }],
-      $transaction: async (work: (tx: unknown) => Promise<unknown>) => work(base),
+      // El bloqueo de la matrícula: inactiva para quien se dio de baja, antes o durante la tanda.
+      $queryRaw: async (_sql: TemplateStringsArray, userGuid: string) => [
+        { active: unenrolled.includes(userGuid) || unenrolledMeanwhile.includes(userGuid) ? 0 : 1, completedAt: null },
+      ],
+      // Cada transacción es una entrega que pasó el filtro de la tanda y se relee con la matrícula bloqueada.
+      $transaction: async (work: (tx: unknown) => Promise<unknown>) => {
+        transactions++;
+        return work(base);
+      },
       submission: {
         findMany: async (query: { where?: { guid?: { gt: string } }; take?: number }) => keysetPage(pending, query),
-        count: async ({ where }: { where: { guid: string } }) => (gradedMeanwhile.includes(where.guid) ? 0 : 1),
+        // Aplica a la entrega actual los filtros que pida la consulta, como haría la base.
+        count: async ({ where }: { where: SubmissionFilter }) => {
+          const row = current(where.guid);
+          const matches =
+            (!where.status || where.status.in.includes(row.status)) &&
+            (!where.submittedAt || row.submittedAt < where.submittedAt.lt);
+          return matches ? 1 : 0;
+        },
       },
       enrollment: {
         findMany: async () =>
@@ -192,7 +233,7 @@ describe('MaintenanceService — desbloqueo por espera', () => {
       },
     };
 
-    return { base, created, queries: () => progressQueries };
+    return { base, created, queries: () => progressQueries, transactions: () => transactions };
   }
 
   function serviceWith(base: unknown, notified: string[]) {
@@ -265,11 +306,23 @@ describe('MaintenanceService — desbloqueo por espera', () => {
 
   it('no desbloquea a quien se dio de baja del curso', async () => {
     const notified: string[] = [];
-    const { base, created } = baseWithWaits(
-      [submission('ana', 'tarea-1'), submission('beto', 'tarea-1')],
-      [],
-      ['beto'],
-    );
+    const pending = [submission('ana', 'tarea-1'), submission('beto', 'tarea-1')];
+    const { base, created, transactions } = baseWithWaits(pending, [], { unenrolled: ['beto'] });
+
+    await serviceWith(base, notified).unlockLongWaits();
+
+    expect(created.map((row) => row.userGuid)).toEqual(['ana']);
+    expect(notified).toEqual(['ana']);
+    // La baja ya se ve al preparar la tanda: ni siquiera se bloquea su matrícula.
+    expect(transactions()).toBe(1);
+  });
+
+  it('no desbloquea a quien se dio de baja mientras se preparaba la tanda', async () => {
+    const notified: string[] = [];
+    // Los dos estaban matriculados al leer la tanda; al bloquear la matrícula, Beto ya no.
+    const { base, created } = baseWithWaits([submission('ana', 'tarea-1'), submission('beto', 'tarea-1')], [], {
+      unenrolledMeanwhile: ['beto'],
+    });
 
     await serviceWith(base, notified).unlockLongWaits();
 
@@ -280,7 +333,19 @@ describe('MaintenanceService — desbloqueo por espera', () => {
   it('no devuelve el avance de una entrega que se calificó mientras se preparaba la tanda', async () => {
     const notified: string[] = [];
     const ana = submission('ana', 'tarea-1');
-    const { base, created } = baseWithWaits([ana], [], [], [ana.guid]);
+    const { base, created } = baseWithWaits([ana], [], { gradedMeanwhile: [ana.guid] });
+
+    await serviceWith(base, notified).unlockLongWaits();
+
+    expect(created).toEqual([]);
+    expect(notified).toEqual([]);
+  });
+
+  it('no desbloquea una entrega que se reenvió mientras se preparaba la tanda', async () => {
+    const notified: string[] = [];
+    // Sigue sin calificar, pero el reenvío es de ahora: la espera vuelve a empezar.
+    const ana = submission('ana', 'tarea-1');
+    const { base, created } = baseWithWaits([ana], [], { resubmittedMeanwhile: [ana.guid] });
 
     await serviceWith(base, notified).unlockLongWaits();
 

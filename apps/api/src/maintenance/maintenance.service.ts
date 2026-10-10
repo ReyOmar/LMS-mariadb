@@ -211,6 +211,7 @@ export class MaintenanceService {
                 submission.userGuid,
                 submission.assignmentGuid,
                 courseGuid,
+                cutoff,
               ))
             ) {
               continue;
@@ -237,21 +238,24 @@ export class MaintenanceService {
 
   /**
    * Da el avance de una entrega con la matrícula bloqueada, como hace la calificación. Lo
-   * leído al preparar la tanda puede haber cambiado: si el examinador la acaba de suspender
-   * o el alumno se dio de baja, no se le devuelve un avance que ya no le corresponde.
+   * leído al preparar la tanda puede haber cambiado: si el examinador la acaba de suspender,
+   * el alumno la reenvió después —el reenvío reinicia la espera— o se dio de baja, no se le
+   * devuelve un avance que ya no le corresponde. Por eso la entrega se vuelve a leer con la
+   * misma condición que la tanda: sin calificar y enviada antes de `cutoff`.
    */
   private unlockIfStillPending(
     submissionGuid: string,
     userGuid: string,
     assignmentGuid: string,
     courseGuid: string,
+    cutoff: Date,
   ): Promise<boolean> {
     return this.prisma.$transaction(async (tx) => {
       const enrollment = await lockEnrollment(tx, userGuid, courseGuid);
       if (!enrollment?.active) return false;
 
       const stillPending = await tx.submission.count({
-        where: { guid: submissionGuid, status: { in: AWAITING_GRADE } },
+        where: { guid: submissionGuid, status: { in: AWAITING_GRADE }, submittedAt: { lt: cutoff } },
       });
       if (!stillPending) return false;
 

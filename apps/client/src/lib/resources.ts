@@ -62,11 +62,33 @@ export function isImage(url: string | null | undefined): boolean {
 }
 
 /**
+ * Ruta dentro del campus: una página (`/cursos/…`) o la URL firmada de un archivo (`/api/…`).
+ * Se usa tal cual: no es una dirección escrita a mano a la que falte el esquema, ni una de
+ * protocolo relativo (`//host/…`), que ya apunta a otro sitio.
+ */
+export function isCampusPath(url: string): boolean {
+  return url.startsWith('/') && !url.startsWith('//');
+}
+
+/**
+ * Ruta que sirve la API, como la URL firmada de un archivo. La API puede estar en otro
+ * origen (`api-lms.…`), así que hay que pedírsela a ella; el resto de rutas del campus son
+ * páginas del propio sitio.
+ */
+export function isApiPath(url: string): boolean {
+  return url.startsWith('/api/');
+}
+
+/**
  * Qué hay realmente detrás de un recurso `LINK`.
  *
  * El constructor guarda la dirección en `contentHtml`. Los bloques antiguos la tienen en
  * `fileUrl`, a veces como imagen incrustada (`data:image/…`) y a veces como archivo del
  * almacenamiento, que sólo se abre con la URL firmada que manda la API (`fileDownloadUrl`).
+ *
+ * En `link`, `url` es una dirección completa (`https://…`, `//host/…`) o una ruta del campus
+ * que empieza por `/` (`isCampusPath`); si es de la API (`isApiPath`), quien la pinte debe
+ * pedírsela a su origen.
  */
 export type LinkTarget =
   | { kind: 'empty' }
@@ -74,8 +96,24 @@ export type LinkTarget =
   | { kind: 'video'; url: string; video: string }
   | { kind: 'link'; url: string };
 
-export function linkTarget(resource: Pick<Resource, 'contentHtml' | 'fileUrl' | 'fileDownloadUrl'>): LinkTarget {
-  const url = (resource.contentHtml || resource.fileDownloadUrl || resource.fileUrl || '').trim();
+type LinkSource = Pick<Resource, 'contentHtml' | 'fileUrl' | 'fileDownloadUrl'>;
+
+/**
+ * Adónde apunta el bloque, antes de interpretarlo.
+ *
+ * Manda `contentHtml`, salvo que esté vacío o repita la clave de `fileUrl`, como hacen los
+ * bloques antiguos (`recursos/vieja.png` en los dos campos): esa clave no se abre sin firma,
+ * así que vale la URL firmada y, a falta de ella, la propia clave.
+ */
+function destinationOf(resource: LinkSource): string {
+  const content = resource.contentHtml?.trim() ?? '';
+  const file = resource.fileUrl?.trim() ?? '';
+  if (content && content !== file) return content;
+  return resource.fileDownloadUrl?.trim() || file;
+}
+
+export function linkTarget(resource: LinkSource): LinkTarget {
+  const url = destinationOf(resource);
   if (!url) return { kind: 'empty' };
 
   if (isImage(url)) return { kind: 'image', url };
@@ -83,5 +121,6 @@ export function linkTarget(resource: Pick<Resource, 'contentHtml' | 'fileUrl' | 
   const video = youtubeVideoId(url);
   if (video) return { kind: 'video', url, video };
 
-  return { kind: 'link', url: externalUrl(url) };
+  // Una ruta del campus no lleva esquema: con él quedaría en `https:///api/…`.
+  return { kind: 'link', url: isCampusPath(url) ? url : externalUrl(url) };
 }

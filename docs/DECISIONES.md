@@ -56,7 +56,10 @@ por usuario; sin ella no hay otra cosa que la IP.
 En los formularios sin sesión que comprueban una contraseña o un código hay dos topes: uno
 holgado por IP (30 por minuto, para que un aula pueda entrar a la vez) y otro estricto por
 cuenta (5 intentos por minuto sobre un mismo correo desde una misma IP), que es el que
-frena a quien intenta adivinar una contraseña. Las descargas no cuentan: su acceso lo
+frena a quien intenta adivinar una contraseña. El tope por cuenta se aplica también si la
+petición trae una sesión válida (contado por usuario): si no, bastaría un token propio para
+probar contraseñas ajenas. Como va por correo, un administrador que da de alta a varias
+personas no lo agota. Las descargas no cuentan: su acceso lo
 controla la firma del enlace. Esta política está en `apps/api/src/common/guards/rate-limit.guard.ts`;
 algunas rutas, como las subidas de archivos, estrechan además su límite con su propio `@Throttle`.
 

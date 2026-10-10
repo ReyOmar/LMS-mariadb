@@ -24,7 +24,6 @@ import type { SubmissionToGrade } from '@/types/models';
 
 import {
   groupByModuleAndAssignment,
-  mergeFirstPage,
   scoreDistribution,
   statusBreakdown,
   type SubmissionFilter,
@@ -35,6 +34,7 @@ import { Panel, StatCard } from './components/Widgets';
 import { SubmissionList } from './components/SubmissionList';
 import { CourseSelector } from './components/CourseSelector';
 import { useCurrentList } from '@/hooks/useCurrentList';
+import { mergeFirstPage } from '@/lib/pagination';
 import { LoadMoreButton } from '@/components/ui/LoadMoreButton';
 
 /**

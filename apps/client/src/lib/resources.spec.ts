@@ -1,4 +1,13 @@
-import { linkTarget, isQuiz, isImage, displayTitle, externalUrl, youtubeVideoId } from './resources';
+import {
+  linkTarget,
+  isQuiz,
+  isImage,
+  isCampusPath,
+  isApiPath,
+  displayTitle,
+  externalUrl,
+  youtubeVideoId,
+} from './resources';
 import type { Resource } from '@/types/models';
 
 /**
@@ -63,6 +72,27 @@ describe('externalUrl', () => {
   });
 });
 
+describe('isCampusPath', () => {
+  it('reconoce una ruta del campus', () => {
+    expect(isCampusPath('/api/storage/download/recursos/manual.pdf?exp=1&sig=abc')).toBe(true);
+  });
+
+  it('no confunde una dirección de otro sitio', () => {
+    expect(isCampusPath('//ejemplo.com/manual.pdf')).toBe(false);
+    expect(isCampusPath('https://ejemplo.com/manual.pdf')).toBe(false);
+    expect(isCampusPath('www.ejemplo.com')).toBe(false);
+    expect(isCampusPath('')).toBe(false);
+  });
+});
+
+describe('isApiPath', () => {
+  it('distingue lo que sirve la API de una página del propio sitio', () => {
+    expect(isApiPath('/api/storage/download/recursos/manual.pdf?exp=1&sig=abc')).toBe(true);
+    expect(isApiPath('/cursos/abc')).toBe(false);
+    expect(isApiPath('https://ejemplo.com/api/manual.pdf')).toBe(false);
+  });
+});
+
 describe('youtubeVideoId', () => {
   it('saca el identificador de las dos formas de enlace', () => {
     expect(youtubeVideoId('https://www.youtube.com/watch?v=dQw4w9WgXcQ')).toBe('dQw4w9WgXcQ');
@@ -119,6 +149,58 @@ describe('linkTarget', () => {
     expect(linkTarget(resource({ contentHtml: null, fileUrl: 'recursos/vieja.png', fileDownloadUrl: signed }))).toEqual(
       { kind: 'image', url: signed },
     );
+  });
+
+  it('el bloque antiguo que repite la clave en `contentHtml` también usa la URL firmada', () => {
+    const signed = '/api/storage/download/recursos/vieja.png?exp=1&sig=abc';
+    const old = resource({ contentHtml: 'recursos/vieja.png', fileUrl: 'recursos/vieja.png', fileDownloadUrl: signed });
+    expect(linkTarget(old)).toEqual({ kind: 'image', url: signed });
+  });
+
+  it('reconoce la clave repetida aunque lleve espacios alrededor', () => {
+    const signed = '/api/storage/download/recursos/vieja.png?exp=1&sig=abc';
+    const old = resource({
+      contentHtml: ' recursos/vieja.png\n',
+      fileUrl: 'recursos/vieja.png',
+      fileDownloadUrl: signed,
+    });
+    expect(linkTarget(old)).toEqual({ kind: 'image', url: signed });
+  });
+
+  it('un contenido de sólo espacios no tapa el archivo antiguo', () => {
+    const signed = '/api/storage/download/recursos/vieja.png?exp=1&sig=abc';
+    const old = resource({ contentHtml: '   ', fileUrl: 'recursos/vieja.png', fileDownloadUrl: signed });
+    expect(linkTarget(old)).toEqual({ kind: 'image', url: signed });
+  });
+
+  it('un documento antiguo se enlaza con la URL firmada, sin inventarle un esquema', () => {
+    const signed = '/api/storage/download/recursos/manual.pdf?exp=1&sig=abc';
+    const old = resource({
+      contentHtml: 'recursos/manual.pdf',
+      fileUrl: 'recursos/manual.pdf',
+      fileDownloadUrl: signed,
+    });
+    expect(linkTarget(old)).toEqual({ kind: 'link', url: signed });
+  });
+
+  it('una página del propio campus se enlaza tal cual', () => {
+    expect(linkTarget(resource({ contentHtml: '/cursos/abc' }))).toEqual({ kind: 'link', url: '/cursos/abc' });
+  });
+
+  it('una dirección de protocolo relativo se respeta tal cual', () => {
+    expect(linkTarget(resource({ contentHtml: '//ejemplo.com/manual.pdf' }))).toEqual({
+      kind: 'link',
+      url: '//ejemplo.com/manual.pdf',
+    });
+  });
+
+  it('la dirección que escribe el constructor manda sobre el archivo antiguo', () => {
+    const old = resource({
+      contentHtml: 'https://youtu.be/abc123',
+      fileUrl: 'recursos/vieja.png',
+      fileDownloadUrl: '/api/storage/download/recursos/vieja.png?exp=1&sig=abc',
+    });
+    expect(linkTarget(old)).toEqual({ kind: 'video', url: 'https://youtu.be/abc123', video: 'abc123' });
   });
 
   it('una imagen antigua incrustada sigue siendo una imagen', () => {

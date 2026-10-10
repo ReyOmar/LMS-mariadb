@@ -22,6 +22,7 @@ import { ModuleSettings } from './components/ModuleSettings';
 import { CourseOutline, type Selection } from './components/CourseOutline';
 import { ResourcePreview } from './components/ResourcePreview';
 import { newResource, type ResourceKind } from './components/resources';
+import { staysInCourse } from './components/exit';
 import { useLeaveGuard } from '@/hooks/useLeaveGuard';
 
 const NONE: Selection = { type: 'NONE' };
@@ -195,8 +196,9 @@ function CourseBuilder() {
   useLeaveGuard(activeCourse?.status === 'DRAFT', {
     warning: 'El curso sigue en Borrador y los alumnos no lo verán. ¿Salir igualmente?',
     onLeave: (to) => setPendingExit({ to }),
-    // Moverse dentro del constructor o descargar un archivo no es salir.
-    stays: (to) => to.includes('/dashboard/course-builder') || to.includes('/storage/download/'),
+    // Moverse por este mismo curso o descargar un archivo no es salir. El constructor sin curso,
+    // como el enlace «Gestión de cursos» del menú, sí: cierra el borrador.
+    stays: (to) => !!activeCourse && staysInCourse(to, activeCourse.guid),
   });
 
   // ── Permiso de edición ───────────────────────────────────────────────────
@@ -572,10 +574,12 @@ function CourseBuilder() {
               )}
             </div>
 
+            {/* Sube por encima del aviso de almacenamiento mientras se ve: en el móvil ocupa el borde
+                de abajo y en la tableta, la esquina donde va este botón. */}
             <button
               type="button"
               onClick={() => setOutlineVisible((visible) => !visible)}
-              className="lg:hidden fixed bottom-20 right-6 z-30 h-14 w-14 bg-primary text-primary-foreground rounded-full shadow-xl flex items-center justify-center hover:bg-primary/90 transition-all active:scale-95"
+              className="lg:hidden fixed bottom-[calc(5rem+var(--storage-notice-space,0px))] right-6 z-30 h-14 w-14 bg-primary text-primary-foreground rounded-full shadow-xl flex items-center justify-center hover:bg-primary/90 transition-all active:scale-95"
               title="Temario del curso"
             >
               <Layers className="h-6 w-6" />

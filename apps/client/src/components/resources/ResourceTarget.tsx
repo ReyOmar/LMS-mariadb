@@ -3,13 +3,13 @@
 import type { ReactNode } from 'react';
 import { ExternalLink, PlayCircle } from 'lucide-react';
 import { fileUrlFor } from '@/lib/api';
-import { linkTarget, isQuiz } from '@/lib/resources';
+import { linkTarget, isQuiz, isApiPath } from '@/lib/resources';
 import type { Resource } from '@/types/models';
 
 /**
- * Lo que el alumno ve dentro de un recurso de tipo `LINK`: una imagen, un vídeo de YouTube
- * o una página externa, según adónde apunte. La vista previa del constructor usa esta misma
- * pieza, así que el examinador ve exactamente lo que verá el alumno.
+ * Lo que el alumno ve dentro de un recurso de tipo `LINK`: una imagen, un vídeo de YouTube,
+ * un archivo del campus o una página externa, según adónde apunte. La vista previa del
+ * constructor usa esta misma pieza, así que el examinador ve exactamente lo que verá el alumno.
  *
  * @param empty Lo que se enseña mientras el enlace no apunta a nada.
  */
@@ -36,9 +36,13 @@ export function ResourceTarget({ resource, empty }: { resource: Resource; empty?
   }
 
   if (target.kind === 'link') {
+    // Un archivo lo sirve la API, que puede estar en otro origen; su URL firmada no se
+    // enseña, igual que en los adjuntos de una tarea.
+    const file = isApiPath(target.url);
+    const href = file ? (fileUrlFor(target.url) ?? target.url) : target.url;
     return (
       <a
-        href={target.url}
+        href={href}
         target="_blank"
         rel="noopener noreferrer"
         className="flex items-center gap-4 p-6 bg-card border border-border rounded-2xl hover:border-primary hover:bg-primary/5 transition-colors"
@@ -46,7 +50,7 @@ export function ResourceTarget({ resource, empty }: { resource: Resource; empty?
         <ExternalLink className="h-7 w-7 text-primary shrink-0" />
         <div className="min-w-0">
           <p className="font-bold truncate">{resource.title}</p>
-          <p className="text-xs text-muted-foreground truncate">{target.url}</p>
+          <p className="text-xs text-muted-foreground truncate">{file ? 'Descargar documento' : target.url}</p>
         </div>
       </a>
     );

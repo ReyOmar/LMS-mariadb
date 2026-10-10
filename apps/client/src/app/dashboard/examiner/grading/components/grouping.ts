@@ -189,14 +189,3 @@ export function countryTotals(courses: CourseSummary[]): { total: number; pendin
     { total: 0, pending: 0, graded: 0 },
   );
 }
-
-/**
- * Pone delante la primera página recién pedida y conserva lo que ya estaba cargado.
- *
- * Al llegar una entrega nueva se vuelve a pedir la primera página; si el examinador había
- * cargado más, reemplazar la lista entera le haría perder lo que estaba revisando.
- */
-export function mergeFirstPage<T extends { guid: string }>(fresh: T[], loaded: T[]): T[] {
-  const freshGuids = new Set(fresh.map((item) => item.guid));
-  return [...fresh, ...loaded.filter((item) => !freshGuids.has(item.guid))];
-}

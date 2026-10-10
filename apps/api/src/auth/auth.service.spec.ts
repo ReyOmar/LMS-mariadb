@@ -183,6 +183,73 @@ describe('AuthService · lo que se revela sin la contraseña', () => {
   });
 });
 
+/**
+ * Enviar una solicitud de acceso.
+ *
+ * La base compara los correos sin distinguir tildes: quien escribe `juan@empresa.com`
+ * reutiliza la solicitud rechazada de `juan@empresá.com`. Si ésta conservara el correo
+ * antiguo, la clave temporal de la aprobación saldría hacia un buzón ajeno.
+ */
+describe('AuthService · enviar una solicitud de acceso', () => {
+  function requestService(previous: { id: number; email: string; status: string } | null) {
+    const updates: { where: unknown; data: Record<string, unknown> }[] = [];
+    const created: Record<string, unknown>[] = [];
+    const tx = {
+      emailVerification: { deleteMany: async () => ({ count: 1 }) },
+      accessRequest: {
+        update: async (args: { where: unknown; data: Record<string, unknown> }) => (
+          updates.push(args),
+          { id: 3, ...args.data }
+        ),
+        create: async ({ data }: { data: Record<string, unknown> }) => (created.push(data), { id: 4, ...data }),
+      },
+    };
+    const prisma = {
+      user: { findUnique: async () => null, findMany: async () => [] },
+      emailVerification: { findFirst: async () => ({ id: 1, verified: true }) },
+      accessRequest: { findUnique: async () => previous },
+      $transaction: async (fn: (client: typeof tx) => unknown) => fn(tx),
+    };
+    const service = new AuthService(
+      prisma as never,
+      {} as never,
+      {} as never,
+      { emitToRole: () => undefined } as never,
+      { legalVersion: async () => '2026-09-25' } as never,
+    );
+    return { service, updates, created };
+  }
+
+  const DTO = {
+    email: 'juan@empresa.com',
+    firstName: 'Juan',
+    lastName: 'Pérez',
+    requestedRole: 'STUDENT',
+    country: 'COLOMBIA',
+    acceptsDataPolicy: true,
+  };
+
+  it('al reutilizar una solicitud antigua guarda el correo verificado, no el que tenía', async () => {
+    const { service, updates, created } = requestService({ id: 3, email: 'juan@empresá.com', status: 'REJECTED' });
+
+    await service.requestAccess(DTO as never);
+
+    expect(created).toEqual([]);
+    expect(updates).toEqual([
+      { where: { id: 3 }, data: expect.objectContaining({ email: 'juan@empresa.com', status: 'PENDING' }) },
+    ]);
+  });
+
+  it('sin solicitud anterior la crea con el correo escrito', async () => {
+    const { service, updates, created } = requestService(null);
+
+    await service.requestAccess(DTO as never);
+
+    expect(updates).toEqual([]);
+    expect(created).toEqual([expect.objectContaining({ email: 'juan@empresa.com', status: 'PENDING' })]);
+  });
+});
+
 describe('AuthService · aprobar una solicitud de acceso', () => {
   /** `resolvedMeanwhile`: otro administrador la resolvió entre la carga y la decisión. */
   function approvalService({ resolvedMeanwhile = false } = {}) {

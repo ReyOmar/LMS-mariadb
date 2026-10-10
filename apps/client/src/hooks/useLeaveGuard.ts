@@ -10,10 +10,15 @@ interface LeaveGuard {
 }
 
 /**
- * Avisa antes de abandonar una pantalla con algo pendiente, por las dos salidas posibles:
- * cerrar o recargar la pestaña, donde sólo cabe el aviso del navegador, y pulsar un enlace,
+ * Avisa antes de abandonar una pantalla con algo pendiente al cerrar o recargar la pestaña o
+ * irse a otro sitio, donde sólo cabe el aviso del navegador, y al pulsar un enlace del campus,
  * que se detiene y se entrega a `onLeave`. Los enlaces se interceptan en captura porque los
  * del menú lateral son de Next y no pasan por la pantalla.
+ *
+ * No cubre los botones Atrás y Adelante del navegador mientras se mueven dentro del campus, que
+ * cambian de pantalla sin recargar ni pulsar ningún enlace, ni lo que navega por código con
+ * `router.push`, como abrir una notificación: por ahí se sale sin aviso. Si Atrás lleva fuera
+ * del campus, como a la web desde la que se llegó, sí avisa el navegador.
  */
 export function useLeaveGuard(active: boolean, { warning, onLeave, stays }: LeaveGuard): void {
   const handlers = useRef({ onLeave, stays });
