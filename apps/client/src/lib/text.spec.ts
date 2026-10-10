@@ -1,14 +1,23 @@
-import { initials, plural, searchable } from './text';
+import { initials, matchesSearch, plural } from './text';
 
-describe('searchable', () => {
+describe('matchesSearch', () => {
   it('compara sin tildes ni mayúsculas', () => {
-    expect(searchable('Darío Muñoz')).toBe('dario munoz');
-    expect(searchable('JOSÉ')).toBe(searchable('jose'));
+    expect(matchesSearch('Darío Muñoz', 'dario munoz')).toBe(true);
+    expect(matchesSearch('jose', 'JOSÉ')).toBe(true);
   });
 
   it('una búsqueda con tilde encuentra el nombre escrito sin ella, y al revés', () => {
-    expect(searchable('Maria Lopez').includes(searchable('maría'))).toBe(true);
-    expect(searchable('María López').includes(searchable('lopez'))).toBe(true);
+    expect(matchesSearch('Maria Lopez', 'maría')).toBe(true);
+    expect(matchesSearch('María López', 'lopez')).toBe(true);
+  });
+
+  it('ignora los espacios de los extremos y una búsqueda vacía lo encuentra todo', () => {
+    expect(matchesSearch('Normativa básica', '  BASICA ')).toBe(true);
+    expect(matchesSearch('Normativa básica', '')).toBe(true);
+  });
+
+  it('no encuentra lo que no está', () => {
+    expect(matchesSearch('Normativa básica', 'señales')).toBe(false);
   });
 });
 

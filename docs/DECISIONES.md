@@ -37,9 +37,28 @@ cualquiera en el acceso se puede saber si alguien pidió entrar y si se le recha
 quien solicitó acceso tiene una forma de consultar en qué punto está su solicitud sin
 cuenta, sin otro canal y sin escribir a la administración. El riesgo es bajo: no revela la
 sede, ni si existe una cuenta, ni ningún dato de la persona, y la ruta tiene el mismo
-límite de intentos por minuto que cualquier acceso. Si un día pesa más la privacidad de
-quien solicita, basta con quitar esos dos mensajes en `AuthService.login`: el correo de
-aprobación o de rechazo ya le comunica la decisión.
+límite de intentos por minuto que cualquier acceso.
+
+El primer paso de la solicitud de acceso dice lo mismo cuando ya hay una pendiente, para no
+hacer verificar el correo a quien no puede pedir otra. No revela nada que el login no diga.
+
+Si un día pesa más la privacidad de quien solicita, hay que quitar esos mensajes en los dos
+sitios, `AuthService.login` y `AuthService.requestVerificationCode`: el correo de aprobación
+o de rechazo ya le comunica la decisión.
+
+### ¿Por qué el límite de peticiones cuenta por usuario y no por IP?
+
+Porque una oficina o un aula salen a internet por la misma IP. Contando por IP, unas pocas
+personas trabajando a la vez agotaban el cupo de todas, y una sola persona que avanzaba por
+un vídeo (una petición por tramo) podía dejar sin imágenes al resto. Con sesión se cuenta
+por usuario; sin ella no hay otra cosa que la IP.
+
+En los formularios sin sesión que comprueban una contraseña o un código hay dos topes: uno
+holgado por IP (30 por minuto, para que un aula pueda entrar a la vez) y otro estricto por
+cuenta (5 intentos por minuto sobre un mismo correo desde una misma IP), que es el que
+frena a quien intenta adivinar una contraseña. Las descargas no cuentan: su acceso lo
+controla la firma del enlace. Esta política está en `apps/api/src/common/guards/rate-limit.guard.ts`;
+algunas rutas, como las subidas de archivos, estrechan además su límite con su propio `@Throttle`.
 
 ### ¿Por qué los administradores también están atados a una sede?
 
@@ -160,9 +179,10 @@ de un texto, una base restaurada de una copia, otro entorno que comparta el buck
 llevarse algo en uso. El precio es que puede quedar algún archivo sin uso, como una portada
 subida y no guardada.
 
-La única consecuencia indirecta es **volver a matricular a quien ya se certificó**: la nueva
-vuelta empieza de cero, así que se retiran sus entregas anteriores de ese curso con sus
-archivos. El certificado emitido se conserva.
+Tampoco los borra **volver a matricular a quien ya se certificó**: la nueva vuelta empieza
+de cero, pero sus entregas anteriores de ese curso no se borran, pasan a
+`lms_entregas_archivadas` con sus archivos, que son la evidencia de la formación ya
+acreditada. El certificado emitido también se conserva.
 
 ---
 

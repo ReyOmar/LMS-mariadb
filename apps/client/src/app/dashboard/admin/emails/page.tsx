@@ -10,7 +10,7 @@ import type { EmailEvent, EmailTemplate } from '@/types/models';
 import TemplateEditor, { SubjectWithVariables, VariableLabel } from './components/TemplateEditor';
 import { CATEGORIES, eventCategory, groupByCategory } from './components/categories';
 import { parseVariables } from './components/preview';
-import { plural } from '@/lib/text';
+import { matchesSearch, plural } from '@/lib/text';
 
 export default function EmailTemplatesPage() {
   const [events, setEvents] = useState<EmailEvent[]>([]);
@@ -70,18 +70,11 @@ export default function EmailTemplatesPage() {
   };
 
   // ── Valores calculados ──
-  const text = search.toLowerCase();
-  const filteredEvents = events.filter((event) => {
-    const matchesSearch =
-      !text ||
-      event.displayName.toLowerCase().includes(text) ||
-      event.key.toLowerCase().includes(text) ||
-      event.description.toLowerCase().includes(text);
-
-    const matchesCategory = !filteredCategory || eventCategory(event.key).key === filteredCategory;
-
-    return matchesSearch && matchesCategory;
-  });
+  const filteredEvents = events.filter(
+    (event) =>
+      [event.displayName, event.key, event.description].some((text) => matchesSearch(text, search)) &&
+      (!filteredCategory || eventCategory(event.key).key === filteredCategory),
+  );
 
   const eventCount = events.length;
   const templates = events.flatMap((event) => event.templates);

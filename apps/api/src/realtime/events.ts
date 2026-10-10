@@ -11,6 +11,7 @@ import { UserRole } from '../common/interfaces/jwt-payload.interface';
 export const REALTIME_EVENTS = [
   // Sesión
   'session:revoked',
+  'stream:superseded',
   // Usuarios
   'user:created',
   'user:updated',
@@ -26,10 +27,11 @@ export const REALTIME_EVENTS = [
   'course:editing',
   'course:editing-released',
   'course:editing-sync',
-  // Matrículas y entregas
+  // Matrículas, entregas y cuestionarios
   'enrollment:changed',
   'submission:new',
   'submission:graded',
+  'quiz:attempt-enabled',
   // Plataforma
   'config:updated',
   'presence:update',

@@ -135,6 +135,8 @@ export function NotificationCenter() {
   };
 
   const togglePanel = () => {
+    // El cierre retrasado de «Limpiar» no puede cerrar el panel que se vuelve a abrir.
+    if (closeTimer.current) clearTimeout(closeTimer.current);
     const opening = !open;
     const bell = panelContainer.current?.getBoundingClientRect();
     if (opening && bell) setAnchor({ top: bell.top, left: bell.left });

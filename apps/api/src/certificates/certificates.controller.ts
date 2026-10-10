@@ -23,12 +23,6 @@ export class CertificatesController {
     return this.certificates.coursesAwaitingGrading(user.sub);
   }
 
-  /** Requisitos que faltan para obtener el certificado de un curso. */
-  @Get('/completion/:courseGuid')
-  checkCompletion(@CurrentUser() user: JwtPayload, @Param('courseGuid') courseGuid: string) {
-    return this.certificates.checkCompletion(courseGuid, user.sub);
-  }
-
   /**
    * Verificación pública de autenticidad por código.
    * Es la única ruta abierta del módulo y devuelve datos mínimos.

@@ -4,7 +4,15 @@ import { FormEvent, Suspense, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { CheckCircle2, Eye, EyeOff, GraduationCap, Home, Lock, Mail, ShieldCheck, User } from 'lucide-react';
-import api, { errorMessage, fileUrlFor, isLogoutReason, loginUrl, safeNextPath, type LogoutReason } from '@/lib/api';
+import api, {
+  errorMessage,
+  fileUrlFor,
+  isLogoutReason,
+  loginUrl,
+  retryAfterSeconds,
+  safeNextPath,
+  type LogoutReason,
+} from '@/lib/api';
 import { COUNTRY_INFO, isCountry } from '@/lib/country';
 import { PASSWORD_HINT, passwordProblem } from '@/lib/password';
 import { CountryFlag } from '@/components/ui/CountryFlag';
@@ -13,6 +21,7 @@ import { useCountry } from '@/contexts/CountryContext';
 import { useSession, SessionUser } from '@/contexts/SessionContext';
 import { useConfig } from '@/contexts/ConfigContext';
 import { PageLoader } from '@/components/ui/PageLoader';
+import { useCountdown } from '@/hooks/useCountdown';
 import { DashboardShell } from '@/components/layout/DashboardShell';
 import { SessionAlert } from './components/SessionAlert';
 import { AccessRequestForm } from './components/AccessRequestForm';
@@ -64,6 +73,9 @@ function LoginContent() {
   const [error, setError] = useState('');
   /** Explicación del servidor de por qué hay que crear la contraseña antes de entrar. */
   const [setupMessage, setSetupMessage] = useState('');
+  // Cada formulario tiene su propio límite de intentos en el servidor, y su propia espera.
+  const loginWait = useCountdown();
+  const setupWait = useCountdown();
 
   // Lo que llega por la URL: el motivo por el que el usuario acabó aquí sin pedirlo y la
   // sede de su cuenta, que trae el enlace del correo de bienvenida. Se limpia de la URL para
@@ -106,6 +118,7 @@ function LoginContent() {
 
       completeLogin(data);
     } catch (failure) {
+      loginWait.start(retryAfterSeconds(failure));
       setError(errorMessage(failure, 'No se pudo iniciar sesión.'));
     } finally {
       setSubmitting(false);
@@ -130,6 +143,7 @@ function LoginContent() {
       });
       completeLogin(data);
     } catch (failure) {
+      setupWait.start(retryAfterSeconds(failure));
       setError(errorMessage(failure, 'No se pudo establecer la contraseña.'));
     } finally {
       setSubmitting(false);
@@ -285,10 +299,10 @@ function LoginContent() {
 
             <button
               type="submit"
-              disabled={submitting}
+              disabled={submitting || loginWait.waiting}
               className="h-12 w-full rounded-xl bg-primary text-sm font-bold text-primary-foreground shadow transition-all hover:bg-primary/90 disabled:opacity-60"
             >
-              {submitting ? 'Comprobando…' : 'Entrar'}
+              {submitting ? 'Comprobando…' : loginWait.label('Entrar')}
             </button>
           </form>
         )}
@@ -332,10 +346,10 @@ function LoginContent() {
               </button>
               <button
                 type="submit"
-                disabled={submitting}
+                disabled={submitting || setupWait.waiting}
                 className="flex-1 h-12 rounded-xl bg-primary text-sm font-bold text-primary-foreground hover:bg-primary/90 disabled:opacity-60 transition-colors"
               >
-                {submitting ? 'Guardando…' : 'Guardar y entrar'}
+                {submitting ? 'Guardando…' : setupWait.label('Guardar y entrar')}
               </button>
             </div>
           </form>

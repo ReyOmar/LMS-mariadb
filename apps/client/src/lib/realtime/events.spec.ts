@@ -1,4 +1,4 @@
-import { batchKey } from './events';
+import { batchKey, withPresence } from './events';
 
 /**
  * Las ráfagas de avisos se agrupan antes de repartirse. Lo que no puede pasar es que un
@@ -22,5 +22,28 @@ describe('agrupación de avisos en tiempo real', () => {
   it('el resto se agrupa sólo por evento, aunque traiga un guid de otra cosa', () => {
     expect(batchKey('user:created', { guid: 'usuario-1' })).toBe(batchKey('user:created', { guid: 'usuario-2' }));
     expect(batchKey('request:new', null)).toBe('request:new');
+  });
+});
+
+/**
+ * El servidor manda la lista de conectados una vez, al abrir el flujo, y después sólo
+ * quién entra y quién sale.
+ */
+describe('withPresence', () => {
+  const online: ReadonlySet<string> = new Set(['ana']);
+
+  it('suma a quien entra y quita a quien sale', () => {
+    expect([...withPresence(online, { guid: 'luis', status: 'online' })]).toEqual(['ana', 'luis']);
+    expect([...withPresence(online, { guid: 'ana', status: 'offline' })]).toEqual([]);
+  });
+
+  it('sin cambio real devuelve el mismo conjunto, para no repintar', () => {
+    expect(withPresence(online, { guid: 'ana', status: 'online' })).toBe(online);
+    expect(withPresence(online, { guid: 'luis', status: 'offline' })).toBe(online);
+  });
+
+  it('no modifica el conjunto anterior', () => {
+    withPresence(online, { guid: 'luis', status: 'online' });
+    expect([...online]).toEqual(['ana']);
   });
 });

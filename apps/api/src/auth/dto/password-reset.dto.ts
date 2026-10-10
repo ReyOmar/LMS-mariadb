@@ -1,11 +1,9 @@
-import { IsEmail, IsNotEmpty, IsString, MaxLength } from 'class-validator';
+import { IsNotEmpty, IsString, MaxLength } from 'class-validator';
 import { MAX_PASSWORD_LENGTH } from '../../common/domain/password';
-import { NormalizeEmail } from '../../common/validation/transforms';
+import { AccountEmail } from '../../common/validation/account-email';
 
 export class RequestPasswordResetDto {
-  @IsEmail({}, { message: 'El correo electrónico no es válido.' })
-  @MaxLength(255)
-  @NormalizeEmail()
+  @AccountEmail()
   email: string;
 }
 

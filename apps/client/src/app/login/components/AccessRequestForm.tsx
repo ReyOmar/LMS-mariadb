@@ -1,8 +1,9 @@
 'use client';
 
-import { FormEvent, useEffect, useState } from 'react';
+import { FormEvent, useState } from 'react';
 import { CheckCircle2, Loader2, Mail, Send } from 'lucide-react';
-import api, { errorMessage } from '@/lib/api';
+import api, { errorMessage, retryAfterSeconds } from '@/lib/api';
+import { useCountdown } from '@/hooks/useCountdown';
 import type { Country } from '@/lib/country';
 import type { UserRole } from '@/types/models';
 import Link from 'next/link';
@@ -30,8 +31,6 @@ const ROLES: { value: UserRole; label: string }[] = [
   { value: 'TEACHER', label: 'Examinador (imparto y califico)' },
 ];
 
-const RESEND_SECONDS = 60;
-
 export function AccessRequestForm({
   country,
   onEmailVerified,
@@ -54,13 +53,15 @@ export function AccessRequestForm({
 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const [countdown, setCountdown] = useState(0);
+  /** Hasta que el servidor admita otro código para este correo. */
+  const resend = useCountdown();
+  /** Hasta que el servidor vuelva a aceptar intentos tras exceder su límite. */
+  const rateLimit = useCountdown();
 
-  useEffect(() => {
-    if (countdown <= 0) return;
-    const timer = setTimeout(() => setCountdown((value) => value - 1), 1000);
-    return () => clearTimeout(timer);
-  }, [countdown]);
+  const showFailure = (failure: unknown, fallback: string) => {
+    rateLimit.start(retryAfterSeconds(failure));
+    setError(errorMessage(failure, fallback));
+  };
 
   const sendCode = async () => {
     if (!email.includes('@')) {
@@ -71,11 +72,13 @@ export function AccessRequestForm({
     setBusy(true);
     setError('');
     try {
-      await api.post('/auth/verify-email', { email, country });
+      // Si ya se le envió uno hace poco, el servidor no manda otro: dice cuánto falta para
+      // poder pedirlo y se sigue con el que ya está en su bandeja.
+      const { data } = await api.post<{ resendInSeconds: number }>('/auth/verify-email', { email, country });
       setStep('code');
-      setCountdown(RESEND_SECONDS);
+      resend.start(data.resendInSeconds);
     } catch (failure) {
-      setError(errorMessage(failure, 'No se pudo enviar el código.'));
+      showFailure(failure, 'No se pudo enviar el código.');
     } finally {
       setBusy(false);
     }
@@ -89,7 +92,7 @@ export function AccessRequestForm({
       setStep('details');
       onEmailVerified();
     } catch (failure) {
-      setError(errorMessage(failure, 'El código no es correcto.'));
+      showFailure(failure, 'El código no es correcto.');
     } finally {
       setBusy(false);
     }
@@ -110,10 +113,16 @@ export function AccessRequestForm({
       });
       onSubmitted();
     } catch (failure) {
-      setError(errorMessage(failure, 'No se pudo enviar la solicitud.'));
+      showFailure(failure, 'No se pudo enviar la solicitud.');
     } finally {
       setBusy(false);
     }
+  };
+
+  /** Cada paso es un formulario: Intro lo envía igual que el botón principal. */
+  const submitStep = (action: () => Promise<void>) => (event: FormEvent) => {
+    event.preventDefault();
+    void action();
   };
 
   const currentIndex = STEPS.findIndex((item) => item.id === step);
@@ -153,7 +162,8 @@ export function AccessRequestForm({
       )}
 
       {step === 'email' && (
-        <div className="space-y-4">
+        // Sin validación del navegador: el aviso de correo no válido es el de arriba.
+        <form onSubmit={submitStep(sendCode)} noValidate className="space-y-4">
           <div className="space-y-1.5">
             <label htmlFor="request-email" className="text-sm font-medium">
               Correo electrónico
@@ -173,15 +183,15 @@ export function AccessRequestForm({
           </div>
           <div className="flex gap-2">
             <SecondaryButton onClick={onCancel}>Volver</SecondaryButton>
-            <PrimaryButton onClick={sendCode} busy={busy} icon={Send}>
-              Enviar código
+            <PrimaryButton busy={busy} disabled={rateLimit.waiting} icon={Send}>
+              {rateLimit.label('Enviar código')}
             </PrimaryButton>
           </div>
-        </div>
+        </form>
       )}
 
       {step === 'code' && (
-        <div className="space-y-4">
+        <form onSubmit={submitStep(confirmCode)} className="space-y-4">
           <p className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 px-4 py-3 text-xs text-emerald-700 dark:text-emerald-400">
             Enviamos un código de 6 dígitos a <strong>{email}</strong>. Revisa también la carpeta de spam.
           </p>
@@ -210,25 +220,25 @@ export function AccessRequestForm({
             >
               Cambiar correo
             </SecondaryButton>
-            <PrimaryButton onClick={confirmCode} busy={busy} disabled={code.length !== 6} icon={CheckCircle2}>
-              Confirmar
+            <PrimaryButton busy={busy} disabled={code.length !== 6 || rateLimit.waiting} icon={CheckCircle2}>
+              {rateLimit.label('Confirmar')}
             </PrimaryButton>
           </div>
           <div className="text-center">
-            {countdown > 0 ? (
-              <span className="text-xs text-muted-foreground">Podrás pedir otro código en {countdown}s</span>
+            {resend.waiting ? (
+              <span className="text-xs text-muted-foreground">Podrás pedir otro código en {resend.secondsLeft} s</span>
             ) : (
               <button
                 type="button"
                 onClick={sendCode}
-                disabled={busy}
+                disabled={busy || rateLimit.waiting}
                 className="text-xs font-bold text-primary hover:underline disabled:opacity-60"
               >
                 Reenviar código
               </button>
             )}
           </div>
-        </div>
+        </form>
       )}
 
       {step === 'details' && (
@@ -299,11 +309,10 @@ export function AccessRequestForm({
           <div className="flex gap-2 pt-2">
             <SecondaryButton onClick={onCancel}>Cancelar</SecondaryButton>
             <PrimaryButton
-              type="submit"
               busy={busy}
-              disabled={!firstName.trim() || !lastName.trim() || !acceptsDataPolicy}
+              disabled={!firstName.trim() || !lastName.trim() || !acceptsDataPolicy || rateLimit.waiting}
             >
-              Enviar solicitud
+              {rateLimit.label('Enviar solicitud')}
             </PrimaryButton>
           </div>
         </form>
@@ -352,25 +361,21 @@ function SecondaryButton({ onClick, children }: { onClick: () => void; children:
   );
 }
 
+/** El botón que envía el paso en curso. */
 function PrimaryButton({
-  onClick,
   busy,
   disabled,
   icon: Icon,
-  type = 'button',
   children,
 }: {
-  onClick?: () => void;
   busy: boolean;
   disabled?: boolean;
   icon?: typeof Send;
-  type?: 'button' | 'submit';
   children: React.ReactNode;
 }) {
   return (
     <button
-      type={type}
-      onClick={onClick}
+      type="submit"
       disabled={busy || disabled}
       className="flex-1 h-12 rounded-xl bg-primary text-sm font-bold text-primary-foreground hover:bg-primary/90 disabled:opacity-60 flex items-center justify-center gap-2 transition-colors"
     >

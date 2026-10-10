@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { fileUrlFor } from '@/lib/api';
 import { useDebounce } from '@/hooks/useDebounce';
+import { matchesSearch } from '@/lib/text';
 import { Donut, GroupedBars, COLOR, type GroupedSeries } from '@/components/ui/charts';
 import { Panel, StatCard } from './Widgets';
 import { gradedPercent, statusBreakdown, countryTotals, type CourseSummary } from './grouping';
@@ -39,10 +40,10 @@ export function CourseSelector({ courses, onPick }: Props) {
 
   const totals = useMemo(() => countryTotals(courses), [courses]);
 
-  const visibleItems = useMemo(() => {
-    const text = debouncedSearch.trim().toLowerCase();
-    return courses.filter((c) => c.title.toLowerCase().includes(text));
-  }, [courses, debouncedSearch]);
+  const visibleItems = useMemo(
+    () => courses.filter((c) => matchesSearch(c.title, debouncedSearch)),
+    [courses, debouncedSearch],
+  );
 
   const bars: GroupedSeries[] = useMemo(
     () =>

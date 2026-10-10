@@ -14,6 +14,13 @@ const HEARTBEAT_INTERVAL_MS = 25_000;
 /** Conexiones simultáneas permitidas por usuario (pestañas abiertas). */
 const MAX_CONNECTIONS_PER_USER = 5;
 
+/**
+ * Lo que se deja acumulado para un cliente que no lee (equipo suspendido, red caída sin
+ * aviso) antes de cortarle el flujo. Sin tope crecería en memoria sin límite; al reconectar,
+ * el cliente recupera el estado y vuelve a pedir sus datos.
+ */
+const MAX_UNSENT_BYTES = 1024 * 1024;
+
 interface Connection {
   readonly id: number;
   readonly guid: string;
@@ -111,7 +118,8 @@ export class RealtimeService implements OnModuleDestroy {
 
   /**
    * Evita que una pestaña dejada abierta con recargas continuas acumule flujos muertos.
-   * Cierra las más antiguas cuando se supera el límite.
+   * Cierra las más antiguas cuando se supera el límite, avisándolas para que no vuelvan a
+   * conectarse solas: cada una echaría a otra y las pestañas se turnarían sin fin.
    */
   private limitConnectionsFor(guid: string): void {
     const ownConnections = this.connectionsOf(guid);
@@ -119,9 +127,19 @@ export class RealtimeService implements OnModuleDestroy {
 
     const excess = ownConnections.slice(0, ownConnections.length - MAX_CONNECTIONS_PER_USER + 1);
     for (const connection of excess) {
-      this.connections.delete(connection.id);
-      this.close(connection);
+      this.sendTo(connection, { event: 'stream:superseded', data: null, ts: Date.now() });
+      this.disconnect(connection);
     }
+  }
+
+  /**
+   * Cierra un flujo desde el servidor. Pasa por `removeConnection` como un cierre del cliente,
+   * para que al irse la última conexión se anuncie la desconexión y se liberen sus avisos de
+   * edición: si no, la persona seguiría «en línea» y sus cursos «en edición» para siempre.
+   */
+  private disconnect(connection: Connection): void {
+    this.removeConnection(connection);
+    this.close(connection);
   }
 
   private connectionsOf(guid: string): Connection[] {
@@ -189,8 +207,7 @@ export class RealtimeService implements OnModuleDestroy {
   revokeSession(guid: string, reason: RevocationReason): void {
     for (const connection of this.connectionsOf(guid)) {
       this.sendTo(connection, { event: 'session:revoked', data: { reason }, ts: Date.now() });
-      this.connections.delete(connection.id);
-      this.close(connection);
+      this.disconnect(connection);
     }
   }
 
@@ -205,8 +222,9 @@ export class RealtimeService implements OnModuleDestroy {
     return [...guids];
   }
 
+  /** Sólo el cambio: la lista completa llega una vez, en `presence:sync`, al conectar. */
   private announcePresence(country: Country, guid: string, status: 'online' | 'offline'): void {
-    this.emitToCountry('presence:update', { guid, status, onlineUsers: this.onlineUsers(country) }, country);
+    this.emitToCountry('presence:update', { guid, status }, country);
   }
 
   // ── Bloqueo de edición de cursos ─────────────────────────────────────────
@@ -250,29 +268,26 @@ export class RealtimeService implements OnModuleDestroy {
   // ── Escritura en el flujo ────────────────────────────────────────────────
 
   private sendTo(connection: Connection, message: EventMessage): void {
-    try {
-      if (connection.res.writableEnded) {
-        this.removeConnection(connection);
-        return;
-      }
-      connection.res.write(`event: ${message.event}\ndata: ${JSON.stringify(message)}\n\n`);
-    } catch (error) {
-      this.logger.debug(`Flujo SSE de ${connection.guid} no escribible: ${(error as Error)?.message}`);
-      this.removeConnection(connection);
-    }
+    this.write(connection, `event: ${message.event}\ndata: ${JSON.stringify(message)}\n\n`);
   }
 
   private emitHeartbeat(): void {
     for (const connection of this.connections.values()) {
-      try {
-        if (connection.res.writableEnded) {
-          this.removeConnection(connection);
-          continue;
-        }
-        connection.res.write(': ping\n\n');
-      } catch {
-        this.removeConnection(connection);
-      }
+      this.write(connection, ': ping\n\n');
+    }
+  }
+
+  private write(connection: Connection, chunk: string): void {
+    const { res } = connection;
+    if (res.writableEnded || res.writableLength > MAX_UNSENT_BYTES) {
+      this.disconnect(connection);
+      return;
+    }
+    try {
+      res.write(chunk);
+    } catch (error) {
+      this.logger.debug(`Flujo SSE de ${connection.guid} no escribible: ${(error as Error)?.message}`);
+      this.disconnect(connection);
     }
   }
 

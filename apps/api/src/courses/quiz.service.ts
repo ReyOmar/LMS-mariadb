@@ -1,10 +1,10 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
-import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CourseAccessInfo, CourseAccessService } from './course-access.service';
-import { QuizConfig, parseQuizConfig, correctAnswers, withoutAnswers } from './quiz-config';
+import { QuizConfig, parseQuizConfig, correctAnswers, withoutAnswers, quizDisplayTitle } from './quiz-config';
 import { recordCompletion, refreshCompletedResources } from './resource-progress';
+import { AFTER_LOCK, lockEnrollment } from '../enrollments/enrollment-lock';
 import { isPassing, quizScore, passingThreshold } from '../common/domain/grading';
 import { JwtPayload } from '../common/interfaces/jwt-payload.interface';
 import { emitEvent } from '../common/domain/domain-events';
@@ -45,19 +45,6 @@ function attemptsExhausted(config: QuizConfig, used: number): boolean {
 function allowedAttemptsLabel(allowed: number): string {
   return allowed === 1 ? 'el único intento disponible' : `los ${allowed} intentos disponibles`;
 }
-
-/**
- * Pone en fila las operaciones de un alumno sobre los cuestionarios de un curso: bloquea su
- * matrícula hasta que termina la transacción. Sin ello, dos aperturas simultáneas contarían
- * los mismos intentos previos y abrirían uno por encima del límite.
- */
-async function lockEnrollment(tx: Prisma.TransactionClient, userGuid: string, courseGuid: string): Promise<void> {
-  await tx.$queryRaw`
-    SELECT id FROM lms_matriculas WHERE usuario_guid = ${userGuid} AND curso_guid = ${courseGuid} FOR UPDATE`;
-}
-
-/** Tras el bloqueo, cada lectura ve lo último confirmado y no la foto del inicio de la transacción. */
-const AFTER_LOCK = { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted };
 
 /** Para qué se carga un cuestionario: consultarlo, responder el intento abierto o abrir uno. */
 type QuizUse = 'consult' | 'answer' | 'start';
@@ -116,6 +103,8 @@ export class QuizService {
     const { config, course } = await this.loadQuiz(resourceGuid, user, 'start');
 
     return this.prisma.$transaction(async (tx) => {
+      // Con la matrícula bloqueada, dos aperturas simultáneas no cuentan los mismos intentos
+      // previos ni abren uno por encima del límite.
       await lockEnrollment(tx, user.sub, course.guid);
 
       const inProgress = await tx.submission.findFirst({
@@ -365,8 +354,8 @@ export class QuizService {
       config: parseQuizConfig(resource.quizConfig),
       course,
       moduleGuid: resource.moduleGuid,
-      // Sin la marca interna: es el nombre que verá el alumno en su aviso y en su correo.
-      title: resource.title.replace(/^\[QUIZ\]\s*/, ''),
+      // Es el nombre que verá el alumno en su aviso y en su correo.
+      title: quizDisplayTitle(resource.title),
     };
   }
 

@@ -9,6 +9,7 @@ import { shortDate } from '@/lib/dates';
 import { clickable } from '@/lib/clickable';
 import { formatNumber } from '@/lib/country';
 import { useCountry } from '@/contexts/CountryContext';
+import { LoadMoreButton } from '@/components/ui/LoadMoreButton';
 
 interface Props {
   users: User[];
@@ -20,6 +21,8 @@ interface Props {
   total: number;
   /** Lo dice el servidor: hay marca mientras queden cuentas por traer. */
   canLoadMore: boolean;
+  /** La siguiente tanda está en camino: el botón espera para no pedirla dos veces. */
+  loadingMore: boolean;
   onLoadMore: () => void;
   onTabChange: (tab: Tab) => void;
   onSearch: (text: string) => void;
@@ -47,6 +50,7 @@ export function AccountList({
   counts,
   total,
   canLoadMore,
+  loadingMore,
   onLoadMore,
   onTabChange,
   onSearch,
@@ -185,13 +189,9 @@ export function AccountList({
 
         {canLoadMore && (
           <div className="border-t border-border/30 p-4 text-center">
-            <button
-              type="button"
-              onClick={onLoadMore}
-              className="rounded-xl border border-border px-5 py-2 text-sm font-bold hover:bg-muted transition-colors"
-            >
-              Ver más ({formatNumber(users.length, country)} de {formatNumber(total, country)})
-            </button>
+            <LoadMoreButton loading={loadingMore} onClick={onLoadMore} className="px-5 py-2 text-sm">
+              {`Ver más (${formatNumber(users.length, country)} de ${formatNumber(total, country)})`}
+            </LoadMoreButton>
           </div>
         )}
       </div>

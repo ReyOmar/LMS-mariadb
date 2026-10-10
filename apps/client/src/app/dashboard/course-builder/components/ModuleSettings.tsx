@@ -2,6 +2,7 @@
 
 import { Layers } from 'lucide-react';
 import type { CourseModule } from '@/types/models';
+import { saveNameOnBlur } from './names';
 
 interface Props {
   module: CourseModule;
@@ -24,7 +25,7 @@ export function ModuleSettings({ module, readOnly, onRename }: Props) {
         type="text"
         defaultValue={module.title}
         readOnly={readOnly}
-        onBlur={(e) => onRename(e.target.value)}
+        onBlur={saveNameOnBlur(module.title, onRename)}
         className={`w-full bg-muted border border-border rounded-xl px-4 py-3 font-medium focus:outline-none focus:ring-2 focus:ring-primary/50 text-lg ${readOnly ? 'opacity-60 cursor-not-allowed' : ''}`}
       />
       <p className="text-sm text-muted-foreground mt-4">

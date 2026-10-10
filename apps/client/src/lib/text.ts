@@ -16,12 +16,18 @@ export function plural(count: number, singular: string, pluralForm: string): str
 /** Marcas diacríticas combinables (tildes, diéresis, la virgulilla de la ñ…). */
 const COMBINING_MARKS = /[̀-ͯ]/g;
 
-/**
- * Texto listo para comparar en una búsqueda: en minúsculas y sin tildes, para que «Díaz»,
- * «diaz» y «DIAZ» coincidan, igual que en las búsquedas del servidor.
- */
-export function searchable(text: string): string {
+/** Texto en minúsculas y sin tildes, que es como se comparan las búsquedas. */
+function searchable(text: string): string {
   return text.normalize('NFD').replace(COMBINING_MARKS, '').toLowerCase();
+}
+
+/**
+ * ¿Aparece lo buscado dentro del texto? Sin distinguir tildes ni mayúsculas, para que
+ * «Díaz», «diaz» y «DIAZ» coincidan igual que en las búsquedas del servidor. Los espacios
+ * de los extremos no cuentan y una búsqueda vacía lo encuentra todo.
+ */
+export function matchesSearch(text: string, query: string): boolean {
+  return searchable(text).includes(searchable(query.trim()));
 }
 
 /** Iniciales para el avatar de una persona: siempre en mayúscula, o `?` si no hay nombre. */

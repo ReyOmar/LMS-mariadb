@@ -13,7 +13,6 @@ import {
   LineChart,
   Pie,
   PieChart,
-  ResponsiveContainer,
   Tooltip,
   XAxis,
   YAxis,
@@ -60,6 +59,13 @@ const AXIS = {
   tick: { fill: 'currentColor', fontSize: 12 },
   className: 'text-muted-foreground',
 };
+
+/**
+ * Cada gráfica ocupa su tarjeta y se redimensiona con ella. Se usa `responsive` del propio
+ * gráfico y no `ResponsiveContainer`, que pinta un primer render sin medir y avisa en la
+ * consola de un tamaño negativo en cada montaje.
+ */
+const FILL = { responsive: true, width: '100%', height: '100%' } as const;
 
 const GRID = {
   strokeDasharray: '3 3',
@@ -130,40 +136,40 @@ export function Donut({
   const format = useNumberFormat();
   if (data.length === 0) return <NoData message={empty ?? 'Todavía no hay datos.'} />;
 
+  // Con una sola porción visible no hay nada que separar: el hueco deja el anillo sin
+  // dibujar y el borde, una muesca en el punto donde empieza.
+  const separated = data.filter((slice) => slice.value > 0).length > 1;
+
   return (
-    <ResponsiveContainer width="100%" height="100%">
-      <PieChart>
-        <Pie
-          data={data}
-          cx="50%"
-          cy="50%"
-          innerRadius={55}
-          outerRadius={80}
-          // Con una sola porción el hueco de separación no tiene contra qué separar y deja
-          // el anillo sin dibujar.
-          paddingAngle={data.length > 1 ? 4 : 0}
-          dataKey="value"
-          stroke="hsl(var(--card))"
-          strokeWidth={3}
-          isAnimationActive={false}
-        >
-          {data.map((slice) => (
-            <Cell key={slice.name} fill={slice.color} style={{ outline: 'none' }} />
-          ))}
-        </Pie>
-        <Tooltip {...TOOLTIP} formatter={format} />
-        {legend && (
-          <Legend
-            verticalAlign="middle"
-            align="right"
-            layout="vertical"
-            iconType="circle"
-            iconSize={8}
-            wrapperStyle={{ fontSize: '13px', fontWeight: 500, paddingLeft: 20 }}
-          />
-        )}
-      </PieChart>
-    </ResponsiveContainer>
+    <PieChart {...FILL}>
+      <Pie
+        data={data}
+        cx="50%"
+        cy="50%"
+        innerRadius={55}
+        outerRadius={80}
+        paddingAngle={separated ? 4 : 0}
+        dataKey="value"
+        stroke={separated ? 'hsl(var(--card))' : 'none'}
+        strokeWidth={3}
+        isAnimationActive={false}
+      >
+        {data.map((slice) => (
+          <Cell key={slice.name} fill={slice.color} style={{ outline: 'none' }} />
+        ))}
+      </Pie>
+      <Tooltip {...TOOLTIP} formatter={format} />
+      {legend && (
+        <Legend
+          verticalAlign="middle"
+          align="right"
+          layout="vertical"
+          iconType="circle"
+          iconSize={8}
+          wrapperStyle={{ fontSize: '13px', fontWeight: 500, paddingLeft: 20 }}
+        />
+      )}
+    </PieChart>
   );
 }
 
@@ -185,19 +191,17 @@ export function BarsByRange({
   }
 
   return (
-    <ResponsiveContainer width="100%" height="100%">
-      <BarChart data={ranges} margin={{ top: 10, right: 20, left: -10, bottom: 15 }}>
-        <CartesianGrid {...GRID} />
-        <XAxis dataKey="name" {...AXIS} tick={{ ...AXIS.tick, fontWeight: 600 }} dy={8} interval={0} />
-        <YAxis allowDecimals={false} {...AXIS} tickFormatter={format} />
-        <Tooltip {...TOOLTIP} formatter={(value) => [`${format(value)} ${unit}`, 'Cantidad']} />
-        <Bar dataKey="count" radius={[6, 6, 0, 0]} maxBarSize={60} isAnimationActive={false}>
-          {ranges.map((range) => (
-            <Cell key={range.name} fill={range.fill} />
-          ))}
-        </Bar>
-      </BarChart>
-    </ResponsiveContainer>
+    <BarChart {...FILL} data={ranges} margin={{ top: 10, right: 20, left: -10, bottom: 15 }}>
+      <CartesianGrid {...GRID} />
+      <XAxis dataKey="name" {...AXIS} tick={{ ...AXIS.tick, fontWeight: 600 }} dy={8} interval={0} />
+      <YAxis allowDecimals={false} {...AXIS} tickFormatter={format} />
+      <Tooltip {...TOOLTIP} formatter={(value) => [`${format(value)} ${unit}`, 'Cantidad']} />
+      <Bar dataKey="count" radius={[6, 6, 0, 0]} maxBarSize={60} isAnimationActive={false}>
+        {ranges.map((range) => (
+          <Cell key={range.name} fill={range.fill} />
+        ))}
+      </Bar>
+    </BarChart>
   );
 }
 
@@ -220,55 +224,57 @@ export function GroupedBars({
   if (data.length === 0) return <NoData message={empty ?? 'Todavía no hay datos.'} />;
 
   return (
-    <ResponsiveContainer width="100%" height="100%">
-      <BarChart
-        data={data}
-        margin={{ top: 10, right: 10, left: -20, bottom: 0 }}
-        style={onPick ? { cursor: 'pointer' } : undefined}
-        onClick={(status) => {
-          if (!onPick) return;
-          // Recharts no tipa `activePayload`, pero lo entrega: es la única forma de saber
-          // qué barra se pulsó.
-          const clicked = status as { activePayload?: { payload?: GroupedSeries }[] };
-          const guid = clicked?.activePayload?.[0]?.payload?.guid;
-          if (guid) onPick(guid);
-        }}
-      >
-        <CartesianGrid {...GRID} />
-        <XAxis dataKey="name" {...AXIS} tick={{ ...AXIS.tick, fontWeight: 600 }} dy={8} />
-        <YAxis allowDecimals={false} {...AXIS} tickFormatter={format} />
-        <Tooltip {...TOOLTIP} formatter={format} />
-        <Legend wrapperStyle={{ fontSize: 12, paddingTop: 10 }} />
-        {series.map((item) => (
-          <Bar
-            key={item.dataKey}
-            dataKey={item.dataKey}
-            name={item.label}
-            fill={item.color}
-            radius={[6, 6, 0, 0]}
-            maxBarSize={60}
-            isAnimationActive={false}
-          />
-        ))}
-      </BarChart>
-    </ResponsiveContainer>
+    <BarChart
+      {...FILL}
+      data={data}
+      margin={{ top: 10, right: 10, left: -20, bottom: 0 }}
+      style={onPick ? { cursor: 'pointer' } : undefined}
+      onClick={(status) => {
+        if (!onPick) return;
+        // Recharts no tipa `activePayload`, pero lo entrega: es la única forma de saber
+        // qué barra se pulsó.
+        const clicked = status as { activePayload?: { payload?: GroupedSeries }[] };
+        const guid = clicked?.activePayload?.[0]?.payload?.guid;
+        if (guid) onPick(guid);
+      }}
+    >
+      <CartesianGrid {...GRID} />
+      <XAxis dataKey="name" {...AXIS} tick={{ ...AXIS.tick, fontWeight: 600 }} dy={8} />
+      <YAxis allowDecimals={false} {...AXIS} tickFormatter={format} />
+      <Tooltip {...TOOLTIP} formatter={format} />
+      <Legend wrapperStyle={{ fontSize: 12, paddingTop: 10 }} />
+      {series.map((item) => (
+        <Bar
+          key={item.dataKey}
+          dataKey={item.dataKey}
+          name={item.label}
+          fill={item.color}
+          radius={[6, 6, 0, 0]}
+          maxBarSize={60}
+          isAnimationActive={false}
+        />
+      ))}
+    </BarChart>
   );
 }
 
-/** Barras cuyo color depende de si el valor llega al umbral. */
+/** Una fila con el umbral que debe alcanzar: cada curso puede exigir una nota distinta. */
+interface ThresholdRow extends GroupedSeries {
+  threshold: number;
+}
+
+/** Barras cuyo color depende de si el valor llega al umbral de su propia fila. */
 export function BarsByThreshold({
   data,
   dataKey,
   label,
-  threshold,
   unit = 'puntos',
   empty,
 }: {
-  data: GroupedSeries[];
+  data: ThresholdRow[];
   dataKey: string;
   /** Nombre del dato en el tooltip. */
   label: string;
-  threshold: number;
   unit?: string;
   empty?: string;
 }) {
@@ -276,19 +282,20 @@ export function BarsByThreshold({
   if (data.length === 0) return <NoData message={empty ?? 'Todavía no hay datos.'} />;
 
   return (
-    <ResponsiveContainer width="100%" height="100%">
-      <BarChart data={data} margin={{ top: 10, right: 20, left: -10, bottom: 15 }}>
-        <CartesianGrid {...GRID} />
-        <XAxis dataKey="name" {...AXIS} tick={{ ...AXIS.tick, fontWeight: 600 }} dy={8} />
-        <YAxis allowDecimals={false} {...AXIS} tickFormatter={format} />
-        <Tooltip {...TOOLTIP} formatter={(value) => [`${format(value)} ${unit}`, label]} />
-        <Bar dataKey={dataKey} radius={[6, 6, 0, 0]} maxBarSize={60} isAnimationActive={false}>
-          {data.map((row, i) => (
-            <Cell key={row.guid ?? `${row.name}-${i}`} fill={colorByThreshold(Number(row[dataKey] ?? 0), threshold)} />
-          ))}
-        </Bar>
-      </BarChart>
-    </ResponsiveContainer>
+    <BarChart {...FILL} data={data} margin={{ top: 10, right: 20, left: -10, bottom: 15 }}>
+      <CartesianGrid {...GRID} />
+      <XAxis dataKey="name" {...AXIS} tick={{ ...AXIS.tick, fontWeight: 600 }} dy={8} />
+      <YAxis allowDecimals={false} {...AXIS} tickFormatter={format} />
+      <Tooltip {...TOOLTIP} formatter={(value) => [`${format(value)} ${unit}`, label]} />
+      <Bar dataKey={dataKey} radius={[6, 6, 0, 0]} maxBarSize={60} isAnimationActive={false}>
+        {data.map((row, i) => (
+          <Cell
+            key={row.guid ?? `${row.name}-${i}`}
+            fill={colorByThreshold(Number(row[dataKey] ?? 0), row.threshold)}
+          />
+        ))}
+      </Bar>
+    </BarChart>
   );
 }
 
@@ -296,34 +303,32 @@ export function BarsByThreshold({
 export function ActivityAreas({ data, series }: { data: GroupedSeries[]; series: ChartSeries[] }) {
   const format = useNumberFormat();
   return (
-    <ResponsiveContainer width="100%" height="100%">
-      <AreaChart data={data} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-        <defs>
-          {series.map((item) => (
-            <linearGradient key={item.dataKey} id={`gradient-${item.dataKey}`} x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor={item.color} stopOpacity={0.3} />
-              <stop offset="100%" stopColor={item.color} stopOpacity={0} />
-            </linearGradient>
-          ))}
-        </defs>
-        <CartesianGrid {...GRID} />
-        <XAxis dataKey="name" {...AXIS} dy={8} />
-        <YAxis allowDecimals={false} {...AXIS} tickFormatter={format} />
-        <Tooltip {...TOOLTIP} formatter={format} />
+    <AreaChart {...FILL} data={data} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+      <defs>
         {series.map((item) => (
-          <Area
-            key={item.dataKey}
-            type="monotone"
-            dataKey={item.dataKey}
-            name={item.label}
-            stroke={item.color}
-            strokeWidth={2}
-            fill={`url(#gradient-${item.dataKey})`}
-            isAnimationActive={false}
-          />
+          <linearGradient key={item.dataKey} id={`gradient-${item.dataKey}`} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={item.color} stopOpacity={0.3} />
+            <stop offset="100%" stopColor={item.color} stopOpacity={0} />
+          </linearGradient>
         ))}
-      </AreaChart>
-    </ResponsiveContainer>
+      </defs>
+      <CartesianGrid {...GRID} />
+      <XAxis dataKey="name" {...AXIS} dy={8} />
+      <YAxis allowDecimals={false} {...AXIS} tickFormatter={format} />
+      <Tooltip {...TOOLTIP} formatter={format} />
+      {series.map((item) => (
+        <Area
+          key={item.dataKey}
+          type="monotone"
+          dataKey={item.dataKey}
+          name={item.label}
+          stroke={item.color}
+          strokeWidth={2}
+          fill={`url(#gradient-${item.dataKey})`}
+          isAnimationActive={false}
+        />
+      ))}
+    </AreaChart>
   );
 }
 
@@ -346,22 +351,20 @@ export function ProgressLine({
   if (data.length === 0) return <NoData message={empty ?? 'Todavía no hay avance registrado.'} />;
 
   return (
-    <ResponsiveContainer width="100%" height="100%">
-      <LineChart data={data} margin={{ top: 10, right: 20, left: -10, bottom: 10 }}>
-        <CartesianGrid {...GRID} />
-        <XAxis dataKey="name" {...AXIS} dy={8} />
-        <YAxis allowDecimals={false} {...AXIS} tickFormatter={format} />
-        <Tooltip {...TOOLTIP} formatter={(value) => [`${format(value)}${unit}`, label]} />
-        <Line
-          type="monotone"
-          dataKey={dataKey}
-          stroke={COLOR.activity}
-          strokeWidth={3}
-          dot={{ r: 5, fill: COLOR.activity, strokeWidth: 2, stroke: 'hsl(var(--card))' }}
-          activeDot={{ r: 7, fill: COLOR.activity, stroke: 'hsl(var(--card))', strokeWidth: 2 }}
-          isAnimationActive={false}
-        />
-      </LineChart>
-    </ResponsiveContainer>
+    <LineChart {...FILL} data={data} margin={{ top: 10, right: 20, left: -10, bottom: 10 }}>
+      <CartesianGrid {...GRID} />
+      <XAxis dataKey="name" {...AXIS} dy={8} />
+      <YAxis allowDecimals={false} {...AXIS} tickFormatter={format} />
+      <Tooltip {...TOOLTIP} formatter={(value) => [`${format(value)}${unit}`, label]} />
+      <Line
+        type="monotone"
+        dataKey={dataKey}
+        stroke={COLOR.activity}
+        strokeWidth={3}
+        dot={{ r: 5, fill: COLOR.activity, strokeWidth: 2, stroke: 'hsl(var(--card))' }}
+        activeDot={{ r: 7, fill: COLOR.activity, stroke: 'hsl(var(--card))', strokeWidth: 2 }}
+        isAnimationActive={false}
+      />
+    </LineChart>
   );
 }

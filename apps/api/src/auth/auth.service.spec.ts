@@ -47,6 +47,35 @@ describe('AuthService · restablecer contraseña', () => {
 });
 
 /**
+ * La base compara los correos sin distinguir tildes: `alumna@pesv.tést` encuentra la cuenta
+ * de `alumna@pesv.test`. Si el enlace saliera hacia lo escrito, quien controle ese otro
+ * dominio recibiría la llave de una cuenta ajena.
+ */
+describe('AuthService · pedir un enlace de recuperación', () => {
+  it('lo envía al correo guardado en la cuenta, no al escrito en el formulario', async () => {
+    const created: { email: string }[] = [];
+    const prisma = {
+      user: { findUnique: async () => USER },
+      passwordReset: {
+        updateMany: async () => ({ count: 0 }),
+        create: async ({ data }: { data: { email: string } }) => {
+          created.push(data);
+          return data;
+        },
+      },
+      $transaction: async (operations: Promise<unknown>[]) => Promise.all(operations),
+    };
+    const mail = { sendPasswordReset: jest.fn(async () => true) };
+    const service = new AuthService(prisma as never, {} as never, mail as never, {} as never, {} as never);
+
+    await service.requestPasswordReset('alumna@pesv.tést');
+
+    expect(mail.sendPasswordReset).toHaveBeenCalledWith(USER.email, expect.any(String), USER.firstName, USER.country);
+    expect(created).toEqual([expect.objectContaining({ email: USER.email })]);
+  });
+});
+
+/**
  * Lo que el acceso deja averiguar a quien no tiene la contraseña.
  *
  * Las rutas de acceso son públicas. Si responden distinto según exista o no la cuenta,
@@ -155,7 +184,8 @@ describe('AuthService · lo que se revela sin la contraseña', () => {
 });
 
 describe('AuthService · aprobar una solicitud de acceso', () => {
-  function approvalService() {
+  /** `resolvedMeanwhile`: otro administrador la resolvió entre la carga y la decisión. */
+  function approvalService({ resolvedMeanwhile = false } = {}) {
     const created: Record<string, unknown>[] = [];
     const welcomePasswords: string[] = [];
     const request = {
@@ -174,7 +204,7 @@ describe('AuthService · aprobar una solicitud de acceso', () => {
         findUnique: async () => null,
         create: async ({ data }: { data: Record<string, unknown> }) => (created.push(data), { guid: 'g', ...data }),
       },
-      accessRequest: { update: async () => request },
+      accessRequest: { updateMany: async () => ({ count: resolvedMeanwhile ? 0 : 1 }) },
     };
     const prisma = {
       accessRequest: { findFirst: async () => request },
@@ -217,10 +247,18 @@ describe('AuthService · aprobar una solicitud de acceso', () => {
       dataConsentVersion: '2026-09-25',
     });
   });
+
+  it('si otro administrador la resolvió a la vez, no crea la cuenta ni envía la bienvenida', async () => {
+    const { service, created, welcomePasswords } = approvalService({ resolvedMeanwhile: true });
+
+    await expect(service.approveAccessRequest(7, 'COLOMBIA')).rejects.toThrow('Esta solicitud ya fue procesada.');
+    expect(created).toEqual([]);
+    expect(welcomePasswords).toEqual([]);
+  });
 });
 
 describe('AuthService · rechazar una solicitud de acceso', () => {
-  function rejectionService() {
+  function rejectionService({ resolvedMeanwhile = false } = {}) {
     const updates: Record<string, unknown>[] = [];
     const notices: unknown[][] = [];
     const prisma = {
@@ -232,7 +270,11 @@ describe('AuthService · rechazar una solicitud de acceso', () => {
           country: 'MEXICO',
           status: 'PENDING',
         }),
-        update: async ({ data }: { data: Record<string, unknown> }) => updates.push(data),
+        updateMany: async ({ data }: { data: Record<string, unknown> }) => {
+          if (resolvedMeanwhile) return { count: 0 };
+          updates.push(data);
+          return { count: 1 };
+        },
       },
     };
     const mail = {
@@ -266,5 +308,150 @@ describe('AuthService · rechazar una solicitud de acceso', () => {
     await service.rejectAccessRequest(9, 'MEXICO', '   ');
 
     expect(notices).toEqual([['rechazada@pesv.test', 'Rita', null, 'MEXICO']]);
+  });
+
+  it('si otro administrador la aprobó a la vez, no la rechaza ni avisa del rechazo', async () => {
+    const { service, updates, notices } = rejectionService({ resolvedMeanwhile: true });
+
+    await expect(service.rejectAccessRequest(9, 'MEXICO', 'Duplicada')).rejects.toThrow(
+      'Esta solicitud ya fue procesada.',
+    );
+    expect(updates).toEqual([]);
+    expect(notices).toEqual([]);
+  });
+});
+
+/**
+ * Código de verificación del correo.
+ *
+ * Seis dígitos se adivinan si se pueden probar sin límite. El límite de intentos tiene que
+ * aguantar también muchas peticiones a la vez, que es como se intentaría saltar.
+ */
+describe('AuthService · confirmar el código de verificación', () => {
+  function verificationService(code = '123456') {
+    const stored = {
+      id: 1,
+      email: 'nueva@pesv.test',
+      code,
+      verified: false,
+      attempts: 0,
+      expiresAt: new Date(Date.now() + 60_000),
+      createdAt: new Date(),
+    };
+    const prisma = {
+      emailVerification: {
+        // Cada petición lee el registro antes de que ninguna haya sumado su intento.
+        findFirst: async () => ({ ...stored, attempts: 0 }),
+        updateMany: async ({
+          where,
+          data,
+        }: {
+          where: { attempts?: { lt: number } };
+          data: Record<string, unknown>;
+        }) => {
+          if (where.attempts && stored.attempts >= where.attempts.lt) return { count: 0 };
+          if (data.attempts) stored.attempts++;
+          return { count: 1 };
+        },
+        update: async ({ data }: { data: { verified: boolean } }) => Object.assign(stored, data),
+      },
+    };
+    const service = new AuthService(prisma as never, {} as never, {} as never, {} as never, {} as never);
+    return { service, stored };
+  }
+
+  it('acepta el código correcto', async () => {
+    const { service, stored } = verificationService();
+
+    await expect(service.confirmEmailVerification('nueva@pesv.test', '123456')).resolves.toMatchObject({
+      verified: true,
+    });
+    expect(stored.verified).toBe(true);
+  });
+
+  it('un fallo dice cuántos intentos quedan', async () => {
+    const { service } = verificationService();
+
+    await expect(service.confirmEmailVerification('nueva@pesv.test', '000000')).rejects.toThrow(
+      'El código no es correcto. Te quedan 4 intentos.',
+    );
+  });
+
+  it('muchas peticiones a la vez no prueban más códigos de los permitidos', async () => {
+    const { service, stored } = verificationService();
+    const guesses = ['000001', '000002', '000003', '000004', '000005', '123456'];
+
+    const results = await Promise.allSettled(
+      guesses.map((guess) => service.confirmEmailVerification('nueva@pesv.test', guess)),
+    );
+
+    // El sexto, aunque sea el correcto, llega con los cinco intentos ya gastados.
+    expect(results[5]).toMatchObject({ status: 'rejected', reason: { message: expect.stringMatching(/agotado/) } });
+    expect(stored.verified).toBe(false);
+    expect(stored.attempts).toBe(5);
+  });
+});
+
+/**
+ * Pedir el código de verificación.
+ *
+ * Quien recarga la página o vuelve atrás pide otro código antes de que pase el minuto de
+ * espera. Ya tiene uno válido en su bandeja: no se le envía otro, pero tampoco se le cierra
+ * el paso a escribirlo.
+ */
+describe('AuthService · pedir el código de verificación', () => {
+  function codeService(recent: { createdAt: Date } | null, request: { status: string } | null = null) {
+    const created: unknown[] = [];
+    const prisma = {
+      user: { findUnique: async () => null },
+      accessRequest: { findUnique: async () => request },
+      emailVerification: {
+        findFirst: async () => recent,
+        deleteMany: async () => ({ count: 0 }),
+        create: async ({ data }: { data: unknown }) => {
+          created.push(data);
+          return data;
+        },
+      },
+      $transaction: async (operations: Promise<unknown>[]) => Promise.all(operations),
+    };
+    const mail = { sendVerificationCode: jest.fn().mockResolvedValue(true) };
+    const service = new AuthService(prisma as never, {} as never, mail as never, {} as never, {} as never);
+    return { service, created, mail };
+  }
+
+  it('envía un código nuevo y dice cuándo se podrá pedir otro', async () => {
+    const { service, created, mail } = codeService(null);
+
+    await expect(service.requestVerificationCode('nueva@pesv.test', 'COLOMBIA')).resolves.toMatchObject({
+      resendInSeconds: 60,
+    });
+    expect(created).toHaveLength(1);
+    expect(mail.sendVerificationCode).toHaveBeenCalledTimes(1);
+  });
+
+  it('con un código enviado hace poco no envía otro, pero deja seguir con el que ya tiene', async () => {
+    const { service, created, mail } = codeService({ createdAt: new Date(Date.now() - 20_000) });
+
+    const response = await service.requestVerificationCode('nueva@pesv.test', 'COLOMBIA');
+
+    expect(response.resendInSeconds).toBeGreaterThanOrEqual(39);
+    expect(response.resendInSeconds).toBeLessThanOrEqual(40);
+    expect(created).toHaveLength(0);
+    expect(mail.sendVerificationCode).not.toHaveBeenCalled();
+  });
+
+  it('con una solicitud pendiente lo dice antes de enviar ningún código', async () => {
+    const { service, mail } = codeService(null, { status: 'PENDING' });
+
+    await expect(service.requestVerificationCode('nueva@pesv.test', 'COLOMBIA')).rejects.toThrow(/pendiente/);
+    expect(mail.sendVerificationCode).not.toHaveBeenCalled();
+  });
+
+  it('tras un rechazo se puede volver a solicitar', async () => {
+    const { service, mail } = codeService(null, { status: 'REJECTED' });
+
+    await service.requestVerificationCode('nueva@pesv.test', 'COLOMBIA');
+    expect(mail.sendVerificationCode).toHaveBeenCalledTimes(1);
   });
 });

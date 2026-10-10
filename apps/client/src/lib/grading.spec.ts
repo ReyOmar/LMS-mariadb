@@ -3,6 +3,7 @@ import {
   scoreColor,
   isPassing,
   formatScore,
+  formatScoreValue,
   formatPoints,
   DEFAULT_PASSING_SCORE,
   percent,
@@ -87,6 +88,13 @@ describe('formateo', () => {
     expect(formatScore(85, 'MEXICO')).toBe('85 / 100');
     expect(formatScore(83.2, 'COLOMBIA')).toBe('83,2 / 100');
     expect(formatScore(83.2, 'MEXICO')).toBe('83.2 / 100');
+  });
+
+  it('la cifra sola lleva los decimales de la sede y un guion si no hay nota', () => {
+    expect(formatScoreValue('83.2', 'COLOMBIA')).toBe('83,2');
+    expect(formatScoreValue(83.2, 'MEXICO')).toBe('83.2');
+    expect(formatScoreValue(0, 'COLOMBIA')).toBe('0');
+    expect(formatScoreValue(null, 'COLOMBIA')).toBe('—');
   });
 });
 

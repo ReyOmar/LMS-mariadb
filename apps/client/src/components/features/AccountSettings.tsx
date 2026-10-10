@@ -8,12 +8,12 @@ import { useAlerts } from '@/contexts/AlertContext';
 import { COUNTRY_INFO } from '@/lib/country';
 import { initials } from '@/lib/text';
 import { PASSWORD_HINT, passwordProblem } from '@/lib/password';
+import { uploadLimit } from '@/lib/upload-limits';
 import { CountryFlag } from '@/components/ui/CountryFlag';
 import { useDialog } from '@/hooks/useDialog';
 
 /** Imágenes admitidas para la foto de perfil. */
 const IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
-const MAX_PHOTO_MB = 5;
 
 interface Feedback {
   type: 'success' | 'error';
@@ -102,27 +102,24 @@ function AccountSettingsDialog({ user, onClose }: { user: SessionUser; onClose: 
 
   const uploadPhoto = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
+    // Se vacía para que volver a elegir el mismo archivo, ya corregido, dispare el cambio otra vez.
+    event.target.value = '';
     if (!file) return;
 
     if (!IMAGE_TYPES.includes(file.type)) {
       setFeedback({ type: 'error', text: 'La foto debe ser una imagen JPG, PNG, WebP o GIF.' });
       return;
     }
-    if (file.size > MAX_PHOTO_MB * 1024 * 1024) {
-      setFeedback({ type: 'error', text: `La imagen no puede superar los ${MAX_PHOTO_MB} MB.` });
-      return;
-    }
 
     setUploadingPhoto(true);
     try {
-      await uploadFile('/auth/me/photo', file);
+      await uploadFile('/auth/me/photo', file, { limit: uploadLimit('avatars') });
       await refreshUser();
       setFeedback({ type: 'success', text: 'Foto de perfil actualizada.' });
     } catch (error) {
       setFeedback({ type: 'error', text: errorMessage(error, 'No se pudo subir la foto.') });
     } finally {
       setUploadingPhoto(false);
-      if (photoInput.current) photoInput.current.value = '';
     }
   };
 

@@ -41,6 +41,12 @@ export function formatScore(score: unknown, country: Country): string {
   return `${formatNumber(num, country)} / ${MAX_SCORE}`;
 }
 
+/** Sólo la cifra, con los decimales de la sede: `87,5` en Colombia, `—` si no hay nota. */
+export function formatScoreValue(score: unknown, country: Country): string {
+  const num = toScore(score);
+  return num === null ? '—' : formatNumber(num, country);
+}
+
 /**
  * Media de las notas que existen, o `null` si no hay ninguna.
  *

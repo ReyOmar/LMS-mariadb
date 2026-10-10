@@ -8,6 +8,7 @@ import {
   validateQuizConfig,
   serializeQuizConfig,
   quizConfigForEditor,
+  quizDisplayTitle,
 } from './quiz-config';
 
 const VALID_CONFIG: QuizConfig = {
@@ -107,6 +108,17 @@ describe('configuración de cuestionarios', () => {
     it('guarda con el formato de la base, de modo que lo viejo y lo nuevo se leen igual', () => {
       expect(JSON.parse(serializeQuizConfig(VALID_CONFIG))).toEqual(JSON.parse(STORED));
       expect(parseQuizConfig(serializeQuizConfig(VALID_CONFIG))).toEqual(VALID_CONFIG);
+    });
+  });
+
+  describe('quizDisplayTitle', () => {
+    it('quita la marca interna con la que se guarda el título de un cuestionario', () => {
+      expect(quizDisplayTitle('[QUIZ] Evaluación del módulo 1')).toBe('Evaluación del módulo 1');
+    });
+
+    it('deja igual un título sin marca y no toca una marca que no esté al principio', () => {
+      expect(quizDisplayTitle('Evaluación final')).toBe('Evaluación final');
+      expect(quizDisplayTitle('Repaso [QUIZ] previo')).toBe('Repaso [QUIZ] previo');
     });
   });
 

@@ -2,7 +2,7 @@ import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { JwtModule } from '@nestjs/jwt';
 import { APP_GUARD } from '@nestjs/core';
-import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
+import { ThrottlerModule } from '@nestjs/throttler';
 import { EventEmitterModule } from '@nestjs/event-emitter';
 
 import { PrismaModule } from './prisma/prisma.module';
@@ -24,6 +24,7 @@ import { ListenersModule } from './common/listeners/listeners.module';
 
 import { JwtGuard } from './common/guards/jwt.guard';
 import { RolesGuard } from './common/guards/roles.guard';
+import { RATE_LIMITS, RateLimitGuard } from './common/guards/rate-limit.guard';
 
 const TOKEN_VALIDITY = '24h';
 
@@ -46,15 +47,12 @@ const TOKEN_VALIDITY = '24h';
       }),
     }),
 
-    // Límite general por IP. Los flujos sensibles (acceso, correo, subidas) lo estrechan
-    // con su propio @Throttle, y el latido del visor de curso lo omite con @SkipThrottle.
+    // Límite de peticiones por usuario o, sin sesión, por IP (ver `RateLimitGuard`). Los
+    // flujos sensibles lo estrechan con su propio @Throttle.
     //
-    // Que sea por IP y no del sitio entero depende de `trustProxy` (ver `main.ts`): tras
-    // el proxy de cPanel, sin eso todas las peticiones parecerían venir de la misma.
-    ThrottlerModule.forRoot({
-      throttlers: [{ ttl: 60_000, limit: 120 }],
-      errorMessage: 'Has hecho demasiadas peticiones seguidas. Espera un minuto e inténtalo de nuevo.',
-    }),
+    // Que la IP sea la del visitante depende de `trustProxy` (ver `main.ts`): tras el proxy
+    // de cPanel, sin eso todas las peticiones parecerían venir de la misma.
+    ThrottlerModule.forRoot(RATE_LIMITS),
 
     EventEmitterModule.forRoot(),
 
@@ -85,7 +83,8 @@ const TOKEN_VALIDITY = '24h';
     { provide: APP_GUARD, useClass: JwtGuard },
     // Y, cuando la ruta declara @Roles(), también el rol adecuado.
     { provide: APP_GUARD, useClass: RolesGuard },
-    { provide: APP_GUARD, useClass: ThrottlerGuard },
+    // Después de JwtGuard, que es quien identifica al usuario por el que se cuenta.
+    { provide: APP_GUARD, useClass: RateLimitGuard },
   ],
 })
 export class AppModule {}

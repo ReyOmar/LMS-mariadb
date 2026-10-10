@@ -195,7 +195,11 @@ describe('StudentsService · días con actividad', () => {
  * no basta: si alguna tarea espera calificación, sigue siendo formación en curso.
  */
 describe('StudentsService · cursos completados', () => {
-  function metricsService(enrollments: { courseGuid: string; completedAt: Date | null }[]) {
+  function metricsService(
+    enrollments: { courseGuid: string; completedAt: Date | null }[],
+    bestScores: { assignmentGuid: string; _max: { score: number } }[] = [],
+  ) {
+    const scoreQueries: unknown[] = [];
     const prisma = {
       enrollment: { findMany: async () => enrollments },
       resource: { findMany: async () => [{ guid: 'r1' }, { guid: 'r2' }, { guid: 'r3' }] },
@@ -203,13 +207,18 @@ describe('StudentsService · cursos completados', () => {
         findMany: async () => [{ resourceGuid: 'r1' }, { resourceGuid: 'r2' }, { resourceGuid: 'r3' }],
       },
       studySession: { aggregate: async () => ({ _sum: { durationSeconds: 0 } }) },
-      submission: { findMany: async () => [] },
+      submission: {
+        groupBy: async (query: unknown) => {
+          scoreQueries.push(query);
+          return bestScores;
+        },
+      },
     };
-    return createService(prisma);
+    return { service: createService(prisma), scoreQueries };
   }
 
   it('cuenta como completados los cursos con la vuelta actual certificada', async () => {
-    const service = metricsService([
+    const { service } = metricsService([
       { courseGuid: 'c1', completedAt: new Date('2026-02-01T00:00:00Z') },
       { courseGuid: 'c2', completedAt: null },
     ]);
@@ -221,11 +230,27 @@ describe('StudentsService · cursos completados', () => {
   });
 
   it('todos los recursos hechos con una tarea sin calificar no cuentan como curso completado', async () => {
-    const service = metricsService([{ courseGuid: 'c1', completedAt: null }]);
+    const { service } = metricsService([{ courseGuid: 'c1', completedAt: null }]);
 
     const metrics = await service.getMetrics(STUDENT);
 
     expect(metrics.completedResources).toBe(3);
     expect(metrics.completedCourses).toBe(0);
+  });
+
+  it('el promedio toma la mejor nota de cada evaluación, como el certificado', async () => {
+    // Suspendió un cuestionario dos veces (0 y 40) antes de sacar 100; la tarea, 80.
+    const { service, scoreQueries } = metricsService(
+      [{ courseGuid: 'c1', completedAt: null }],
+      [
+        { assignmentGuid: 'quiz-1', _max: { score: 100 } },
+        { assignmentGuid: 'tarea-1', _max: { score: 80 } },
+      ],
+    );
+
+    const metrics = await service.getMetrics(STUDENT);
+
+    expect(scoreQueries).toEqual([expect.objectContaining({ by: ['assignmentGuid'], _max: { score: true } })]);
+    expect(metrics.overallAverage).toBe(90);
   });
 });

@@ -313,6 +313,9 @@ model Submission {
   @@index([submittedAt])
   // Promedio de la sede: la nota y el alumno salen del índice sin leer las filas (1 s → 0,1 s).
   @@index([status, userGuid, score])
+  // Antes de borrar un archivo sustituido se comprueba que ninguna fila lo use: sin él, cada
+  // reenvío, foto o portada nuevos recorrían todas las entregas de la historia.
+  @@index([attachmentKey])
   @@map("lms_entregas")
 }
 
@@ -724,6 +727,8 @@ model ArchivedSubmission {
 
   @@index([userGuid, courseGuid])
   @@index([courseGuid])
+  // El mismo motivo que en `lms_entregas`: comprobar si un archivo sigue en uso.
+  @@index([attachmentKey])
   @@map("lms_entregas_archivadas")
 }
 

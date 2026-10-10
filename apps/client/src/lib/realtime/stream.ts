@@ -33,8 +33,9 @@ export async function connectStream(options: StreamOptions): Promise<void> {
   let delay = INITIAL_DELAY_MS;
 
   while (!options.signal.aborted) {
+    let ending: StreamEnding = 'closed';
     try {
-      await readStream(options);
+      ending = await readStream(options);
       // Un cierre limpio del servidor se reintenta enseguida: suele ser un reinicio.
       delay = INITIAL_DELAY_MS;
     } catch (error) {
@@ -48,13 +49,20 @@ export async function connectStream(options: StreamOptions): Promise<void> {
 
     options.onConnectionChange(false);
     if (options.signal.aborted) return;
-    await sleep(delay, options.signal);
+
+    // Otra pestaña ocupó su sitio. Volver sola la echaría a ella y se turnarían sin fin: se
+    // vuelve cuando la persona usa ésta, y así el tiempo real lo tiene la que tiene delante.
+    if (ending === 'superseded') await nextUse(options.signal);
+    else await sleep(spread(delay), options.signal);
   }
 }
 
+/** Cómo terminó un flujo sin error: lo cerró el servidor, o lo cedió a otra pestaña. */
+type StreamEnding = 'closed' | 'superseded';
+
 class AuthorizationError extends Error {}
 
-async function readStream(options: StreamOptions): Promise<void> {
+async function readStream(options: StreamOptions): Promise<StreamEnding> {
   const response = await fetch(options.url, {
     headers: { Authorization: `Bearer ${options.token}`, Accept: 'text/event-stream' },
     signal: options.signal,
@@ -78,7 +86,7 @@ async function readStream(options: StreamOptions): Promise<void> {
   try {
     for (;;) {
       const { done, value } = await reader.read();
-      if (done) return;
+      if (done) return 'closed';
 
       buffer += decoder.decode(value, { stream: true });
 
@@ -89,6 +97,7 @@ async function readStream(options: StreamOptions): Promise<void> {
 
       for (const frame of frames) {
         const message = parseFrame(frame);
+        if (message?.event === 'stream:superseded') return 'superseded';
         if (message) options.onMessage(message);
       }
     }
@@ -117,6 +126,39 @@ function parseFrame(frame: string): RealtimeMessage | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * Reparte la espera al azar entre la mitad y el total: si la API se reinicia, los navegadores
+ * no vuelven todos en el mismo instante, cada uno pidiendo además los datos de su pantalla.
+ */
+export function spread(delay: number, random: () => number = Math.random): number {
+  return delay / 2 + random() * (delay / 2);
+}
+
+/** Gestos con los que la persona usa la pestaña que tiene delante. */
+const USE_EVENTS = ['pointerdown', 'keydown'] as const;
+
+/**
+ * Espera a que la persona use esta pestaña: que vuelva a ella, o que pulse o escriba en ella
+ * si ya la tenía delante. Termina también si se aborta la señal.
+ */
+function nextUse(signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    const finish = () => {
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+      USE_EVENTS.forEach((event) => document.removeEventListener(event, finish, true));
+      signal.removeEventListener('abort', finish);
+      resolve();
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') finish();
+    };
+
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    USE_EVENTS.forEach((event) => document.addEventListener(event, finish, true));
+    signal.addEventListener('abort', finish, { once: true });
+  });
 }
 
 /** Espera cortable: si se aborta la señal, resuelve de inmediato y no deja temporizadores. */

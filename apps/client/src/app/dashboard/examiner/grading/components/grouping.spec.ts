@@ -177,6 +177,15 @@ describe('normalizeTypedScore', () => {
   it('quita las letras en vez de dejar escribir algo que luego no vale', () => {
     expect(normalizeTypedScore('8a7')).toBe('87');
   });
+
+  it('entiende la coma decimal en lugar de pegar los dígitos', () => {
+    expect(normalizeTypedScore('85,5')).toBe('85.5');
+    expect(normalizeTypedScore('7,5')).toBe('7.5');
+  });
+
+  it('con la coma recién escrita deja seguir tecleando el decimal', () => {
+    expect(normalizeTypedScore('85,')).toBe('85.');
+  });
 });
 
 describe('gradingStart', () => {

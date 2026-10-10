@@ -14,9 +14,7 @@ import { plural } from '@/lib/text';
  * Es la misma tira que ve el alumno, así que el examinador comprueba aquí lo que va a
  * publicar sin tener que matricularse en su propio curso.
  */
-export function ResourceExtras({ resource }: { resource: Resource | null | undefined }) {
-  if (!resource) return null;
-
+export function ResourceExtras({ resource }: { resource: Resource }) {
   const quiz = quizSummary(resource.quizConfig);
   const uploadLimit = resource.maxUploadMb && resource.type === 'ASSIGNMENT' && !isQuiz(resource);
   const attachment = resource.attachmentName && resource.attachmentKey;

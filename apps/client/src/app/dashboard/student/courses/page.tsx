@@ -5,7 +5,7 @@ import { BookOpen, ArrowRight, AlertTriangle, CheckCircle2, TrendingUp } from 'l
 import { PageLoader } from '@/components/ui/PageLoader';
 import { useRouter } from 'next/navigation';
 import { useSession } from '@/contexts/SessionContext';
-import { useRealtimeEvent, useRealtime, useRealtimeReconnect } from '@/contexts/RealtimeContext';
+import { useRealtimeEvent, useRealtimeReconnect } from '@/contexts/RealtimeContext';
 import api, { errorMessage, fileUrlFor } from '@/lib/api';
 import type { Course } from '@/types/models';
 import { useAlerts } from '@/contexts/AlertContext';
@@ -21,7 +21,6 @@ export default function StudentCoursesPage() {
   const router = useRouter();
   const [courses, setCourses] = useState<Course[]>([]);
   const [loading, setLoading] = useState(true);
-  const { coursesUnderMaintenance } = useRealtime();
 
   const loadCourses = useCallback(async () => {
     try {
@@ -73,7 +72,7 @@ export default function StudentCoursesPage() {
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {courses.map((course) => {
-            const underMaintenance = !!coursesUnderMaintenance[course.guid] || course.status === 'DRAFT';
+            const underMaintenance = course.status === 'DRAFT';
             const percent = course.percent;
             return (
               <div

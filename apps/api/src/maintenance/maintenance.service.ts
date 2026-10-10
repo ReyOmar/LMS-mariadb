@@ -1,12 +1,13 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
-import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
-import { MailService } from '../mail/mail.service';
-import { recordCompletion } from '../courses/resource-progress';
-import { AUTO_UNLOCK_HOURS } from '../courses/progression';
+import { MAIL_CONCURRENCY, MailService } from '../mail/mail.service';
+import { recordCompletion, refreshCompletedResourcesOf } from '../courses/resource-progress';
+import { AUTO_UNLOCK_HOURS, AWAITING_GRADE } from '../courses/progression';
+import { AFTER_LOCK, lockEnrollment } from '../enrollments/enrollment-lock';
 import { Country } from '../common/domain/country';
+import { countRejected, settleWithConcurrency } from '../common/domain/concurrency';
 import { plural } from '../common/domain/text';
 
 /** Días sin entrar tras los cuales se envía un recordatorio. */
@@ -14,9 +15,6 @@ const INACTIVITY_DAYS = 3;
 
 /** Filas que se leen de una vez al recorrer una tabla entera. */
 const BATCH_SIZE = 500;
-
-/** Recordatorios que se envían a la vez: acota las conexiones y el ritmo contra el correo. */
-const REMINDER_CONCURRENCY = 5;
 
 /**
  * Zona en la que se leen las horas de las tareas programadas, sea cual sea la del servidor.
@@ -123,15 +121,10 @@ export class MaintenanceService {
         async (students) => {
           // De pocos en pocos: uno a uno la tarea duraría horas con miles de alumnos, y todos
           // a la vez agotarían las conexiones y saturarían el servidor de correo.
-          for (let i = 0; i < students.length; i += REMINDER_CONCURRENCY) {
-            const results = await Promise.allSettled(
-              students.slice(i, i + REMINDER_CONCURRENCY).map((student) => this.remind(student)),
-            );
-            for (const result of results) {
-              if (result.status === 'fulfilled') sent++;
-              else failed++;
-            }
-          }
+          const results = await settleWithConcurrency(students, MAIL_CONCURRENCY, (student) => this.remind(student));
+          const batchFailures = countRejected(results);
+          failed += batchFailures;
+          sent += results.length - batchFailures;
         },
       );
 
@@ -184,7 +177,7 @@ export class MaintenanceService {
           this.prisma.submission.findMany({
             where: {
               ...(after ? { guid: { gt: after } } : {}),
-              status: { in: ['SUBMITTED', 'IN_REVIEW'] },
+              status: { in: AWAITING_GRADE },
               submittedAt: { lt: cutoff },
               assignmentGuid: { not: null },
             },
@@ -212,7 +205,16 @@ export class MaintenanceService {
             if (alreadyUnlocked.has(`${submission.userGuid}|${submission.assignmentGuid}`)) continue;
             if (!enrolled.has(`${submission.userGuid}|${courseGuid}`)) continue;
 
-            await recordCompletion(this.prisma, submission.userGuid, submission.assignmentGuid, courseGuid);
+            if (
+              !(await this.unlockIfStillPending(
+                submission.guid,
+                submission.userGuid,
+                submission.assignmentGuid,
+                courseGuid,
+              ))
+            ) {
+              continue;
+            }
             unlocked++;
 
             await this.notifications.create({
@@ -231,6 +233,31 @@ export class MaintenanceService {
 
       return `${unlocked} recurso(s) desbloqueados`;
     });
+  }
+
+  /**
+   * Da el avance de una entrega con la matrícula bloqueada, como hace la calificación. Lo
+   * leído al preparar la tanda puede haber cambiado: si el examinador la acaba de suspender
+   * o el alumno se dio de baja, no se le devuelve un avance que ya no le corresponde.
+   */
+  private unlockIfStillPending(
+    submissionGuid: string,
+    userGuid: string,
+    assignmentGuid: string,
+    courseGuid: string,
+  ): Promise<boolean> {
+    return this.prisma.$transaction(async (tx) => {
+      const enrollment = await lockEnrollment(tx, userGuid, courseGuid);
+      if (!enrollment?.active) return false;
+
+      const stillPending = await tx.submission.count({
+        where: { guid: submissionGuid, status: { in: AWAITING_GRADE } },
+      });
+      if (!stillPending) return false;
+
+      await recordCompletion(tx, userGuid, assignmentGuid, courseGuid);
+      return true;
+    }, AFTER_LOCK);
   }
 
   /**
@@ -299,16 +326,7 @@ export class MaintenanceService {
         if (batch.length === 0) break;
 
         const ids = batch.map((enrollment) => enrollment.id);
-        await this.prisma.$executeRaw`
-          UPDATE lms_matriculas m
-          SET m.recursos_completados = (
-            SELECT COUNT(*)
-            FROM lms_progreso_recurso p
-            JOIN lms_recursos r ON r.guid = p.recurso_guid
-            JOIN lms_modulos mo ON mo.guid = r.modulo_guid
-            WHERE p.usuario_guid = m.usuario_guid AND mo.curso_guid = m.curso_guid
-          )
-          WHERE m.id IN (${Prisma.join(ids)})`;
+        await refreshCompletedResourcesOf(this.prisma, ids);
 
         reviewed += batch.length;
         if (batch.length < BATCH_SIZE) break;

@@ -8,6 +8,9 @@ import { RealtimeService } from '../realtime/realtime.service';
 import { SettingsService } from '../settings/settings.service';
 import { CourseAccessService } from '../courses/course-access.service';
 import { recordCompletion, refreshCompletedResources } from '../courses/resource-progress';
+import { AWAITING_GRADE } from '../courses/progression';
+import { quizDisplayTitle } from '../courses/quiz-config';
+import { AFTER_LOCK, lockEnrollment } from '../enrollments/enrollment-lock';
 import { toScore, isPassing, formatScore, normalizeScore, passingThreshold } from '../common/domain/grading';
 import { JwtPayload } from '../common/interfaces/jwt-payload.interface';
 import { FileReceiver } from '../storage/multipart';
@@ -91,7 +94,7 @@ interface AttemptsByCourseRow extends CourseRow {
 
 /** Qué entra en la cola. Un borrador es un intento a medias, no trabajo por corregir. */
 function queueStatusFilter(status?: QueueStatus): Prisma.SubmissionWhereInput['status'] {
-  if (status === 'pending') return { in: ['SUBMITTED', 'IN_REVIEW'] };
+  if (status === 'pending') return { in: AWAITING_GRADE };
   if (status === 'graded') return 'GRADED';
   return { not: 'DRAFT' };
 }
@@ -125,6 +128,25 @@ function rangesOf(row: CourseRow) {
 
 function tallyOf(row: SubmissionsByCourseRow): SubmissionTally {
   return { total: Number(row.total), graded: Number(row.graded), ...rangesOf(row) };
+}
+
+/** Lo que se mira de la entrega anterior de un alumno al recibir otra. */
+const OWN_SUBMISSION_SELECT = {
+  guid: true,
+  status: true,
+  score: true,
+  attachmentKey: true,
+} satisfies Prisma.SubmissionSelect;
+
+type OwnSubmission = Prisma.SubmissionGetPayload<{ select: typeof OWN_SUBMISSION_SELECT }>;
+
+/** Una entrega aprobada no se sustituye: respalda una nota ya dada. */
+function ensureReplaceable(previous: OwnSubmission | null, threshold: number): void {
+  if (previous?.status === 'GRADED' && isPassing(previous.score, threshold)) {
+    throw new BadRequestException(
+      `Tu entrega ya fue aprobada con ${formatScore(previous.score)}. No necesitas volver a enviarla.`,
+    );
+  }
 }
 
 /**
@@ -183,54 +205,49 @@ export class AssessmentsService {
       throw new BadRequestException('Este recurso es un cuestionario: se resuelve en línea, no se sube archivo.');
     }
 
-    const existing = await this.prisma.submission.findFirst({
-      where: { assignmentGuid, userGuid: user.sub },
-      select: { guid: true, status: true, score: true, attachmentKey: true },
-    });
-
-    if (existing?.status === 'GRADED' && isPassing(existing.score, threshold)) {
-      throw new BadRequestException(
-        `Tu entrega ya fue aprobada con ${formatScore(existing.score)}. No necesitas volver a enviarla.`,
-      );
-    }
+    // Antes de recibir el archivo, para no aceptar en balde uno que puede pesar varios GB.
+    ensureReplaceable(await this.ownSubmission(this.prisma, assignmentGuid, user.sub), threshold);
 
     const limit = uploadLimit('entregas', assignment.maxUploadMb ?? (await this.settings.getMaxUploadMb(user.country)));
     const file = await receive(limit);
     const key = await this.storage.uploadFromDisk(file.filePath, file.name, 'entregas', user, limit.bytes);
 
-    const isResubmission = existing?.status === 'GRADED';
-    let submission: Submission;
+    let saved: { submission: Submission; previous: OwnSubmission | null };
     try {
-      submission = existing
-        ? await this.prisma.submission.update({
-            where: { guid: existing.guid },
-            data: {
-              attachmentKey: key,
-              attachmentName: file.name,
-              status: isResubmission ? 'IN_REVIEW' : 'SUBMITTED',
-              submittedAt: new Date(),
-              filePurged: false,
-            },
-          })
-        : await this.prisma.submission.create({
-            data: {
-              assignmentGuid,
-              userGuid: user.sub,
-              attachmentKey: key,
-              attachmentName: file.name,
-              status: 'SUBMITTED',
-              submittedAt: new Date(),
-            },
-          });
+      // Con la matrícula bloqueada: dos envíos a la vez —un doble clic, dos pestañas— se
+      // ponen en fila y el segundo sustituye al primero en lugar de abrir otra entrega.
+      saved = await this.prisma.$transaction(async (tx) => {
+        await lockEnrollment(tx, user.sub, course.guid);
+        const previous = await this.ownSubmission(tx, assignmentGuid, user.sub);
+        ensureReplaceable(previous, threshold);
+
+        const delivery = { attachmentKey: key, attachmentName: file.name, submittedAt: new Date() };
+        const submission = previous
+          ? await tx.submission.update({
+              where: { guid: previous.guid },
+              // Una versión corregida tras una nota insuficiente sigue siendo un reenvío
+              // aunque se sustituya antes de que la califiquen.
+              data: {
+                ...delivery,
+                status: previous.status === 'SUBMITTED' ? 'SUBMITTED' : 'IN_REVIEW',
+                filePurged: false,
+              },
+            })
+          : await tx.submission.create({
+              data: { ...delivery, assignmentGuid, userGuid: user.sub, status: 'SUBMITTED' },
+            });
+        return { submission, previous };
+      }, AFTER_LOCK);
     } catch (error) {
       // Sin fila que lo referencie, el archivo recién guardado quedaría huérfano —y puede
       // pesar varios GB—: nada lo retiraría después.
       await this.storage.deleteFiles([key]);
       throw error;
     }
+    const { submission, previous } = saved;
 
     // El archivo anterior se retira una vez guardada la referencia al nuevo.
-    void this.files.deleteUnreferenced([existing?.attachmentKey]);
+    void this.files.deleteUnreferenced([previous?.attachmentKey]);
 
     emitEvent(this.events, 'submission.received', {
       submissionGuid: submission.guid,
@@ -239,11 +256,16 @@ export class AssessmentsService {
       assignmentTitle: assignment.title,
       courseTitle: course.title,
       teacherGuid: course.teacherGuid,
-      isResubmission,
-      previousScore: toScore(existing?.score),
+      isResubmission: submission.status === 'IN_REVIEW',
+      previousScore: toScore(previous?.score),
     });
 
     return this.forStudent(submission);
+  }
+
+  /** La entrega del alumno en una tarea, si ya la tiene: cada tarea admite una por alumno. */
+  private ownSubmission(db: Prisma.TransactionClient, assignmentGuid: string, userGuid: string) {
+    return db.submission.findFirst({ where: { assignmentGuid, userGuid }, select: OWN_SUBMISSION_SELECT });
   }
 
   /** Entrega del alumno en sesión para una tarea concreta. */
@@ -609,34 +631,35 @@ export class AssessmentsService {
       throw new BadRequestException('Este intento todavía está en curso y no puede calificarse.');
     }
 
-    const enrollment = await this.prisma.enrollment.findUnique({
-      where: { userGuid_courseGuid: { userGuid: submission.userGuid, courseGuid: course.guid } },
-      select: { active: true },
-    });
-    if (!enrollment?.active) {
-      throw new ForbiddenException('Este alumno ya no está matriculado en el curso: no puedes calificar su entrega.');
-    }
-
     const threshold = passingThreshold(course.passingScore);
     const score = normalizeScore(dto.score);
     const passed = score >= threshold;
     const feedback = dto.feedback?.trim() || null;
 
-    await this.prisma.submission.update({
-      where: { guid: submissionGuid },
-      data: { status: 'GRADED', score, feedback },
-    });
+    // Con la matrícula bloqueada: dos calificaciones a la vez se aplican una detrás de otra,
+    // y la nota y el avance de la tarea quedan los dos de acuerdo con la última. Por
+    // separado, la nota podía ser un suspenso con el avance de un aprobado.
+    await this.prisma.$transaction(async (tx) => {
+      const enrollment = await lockEnrollment(tx, submission.userGuid, course.guid);
+      if (!enrollment?.active) {
+        throw new ForbiddenException('Este alumno ya no está matriculado en el curso: no puedes calificar su entrega.');
+      }
 
-    if (submission.assignmentGuid) {
+      await tx.submission.update({
+        where: { guid: submissionGuid },
+        data: { status: 'GRADED', score, feedback },
+      });
+
+      if (!submission.assignmentGuid) return;
       if (passed) {
-        await recordCompletion(this.prisma, submission.userGuid, submission.assignmentGuid, course.guid);
+        await recordCompletion(tx, submission.userGuid, submission.assignmentGuid, course.guid);
       } else {
-        await this.prisma.resourceProgress.deleteMany({
+        await tx.resourceProgress.deleteMany({
           where: { userGuid: submission.userGuid, resourceGuid: submission.assignmentGuid },
         });
-        await refreshCompletedResources(this.prisma, submission.userGuid, course.guid);
+        await refreshCompletedResources(tx, submission.userGuid, course.guid);
       }
-    }
+    }, AFTER_LOCK);
 
     const graded = { submissionGuid, assignmentGuid: submission.assignmentGuid, score, passed };
     this.realtime.emitToUsers('submission:graded', graded, user.country, [submission.userGuid]);
@@ -695,14 +718,20 @@ export class AssessmentsService {
     });
     await refreshCompletedResources(this.prisma, studentGuid, course.guid);
 
-    this.logger.log(`${user.email} habilitó un nuevo intento de "${resource.title}" a ${studentGuid}`);
+    const quizTitle = quizDisplayTitle(resource.title);
+    this.logger.log(`${user.email} habilitó un nuevo intento de "${quizTitle}" a ${studentGuid}`);
 
+    // Si tiene el cuestionario abierto, el «has agotado tus intentos» se cambia por el botón
+    // de empezar sin que tenga que recargar.
+    this.realtime.emitToUsers('quiz:attempt-enabled', { resourceGuid, courseGuid: course.guid }, user.country, [
+      studentGuid,
+    ]);
     emitEvent(this.events, 'quiz.attempt_enabled', {
       userGuid: studentGuid,
       country: user.country,
       resourceGuid,
       courseGuid: course.guid,
-      quizTitle: resource.title,
+      quizTitle,
     });
 
     return { message: 'El alumno puede volver a realizar el cuestionario.' };

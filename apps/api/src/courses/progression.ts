@@ -1,3 +1,5 @@
+import type { SubmissionStatus } from '@prisma/client';
+
 /**
  * Orden en que el alumno recorre un curso con orden estricto.
  *
@@ -18,6 +20,9 @@
  * corrección, y el certificado sigue exigiendo que todas las tareas estén calificadas.
  */
 export const AUTO_UNLOCK_HOURS = 48;
+
+/** Estados de una entrega ya enviada que todavía espera su nota. */
+export const AWAITING_GRADE: SubmissionStatus[] = ['SUBMITTED', 'IN_REVIEW'];
 
 /** Un módulo tal y como lo necesita el recorrido: sólo su lista ordenada de recursos. */
 export interface PathModule {

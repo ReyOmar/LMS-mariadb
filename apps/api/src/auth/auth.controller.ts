@@ -19,12 +19,7 @@ import { ConfirmCodeDto, RequestCodeDto } from './dto/email-verification.dto';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { RejectAccessRequestDto } from './dto/reject-access-request.dto';
-
-/** Límite estricto para los flujos que pueden usarse para adivinar credenciales. */
-const CREDENTIALS_RATE_LIMIT = { default: { ttl: 60_000, limit: 5 } };
-
-/** Límite para los flujos que disparan el envío de un correo. */
-const EMAIL_RATE_LIMIT = { default: { ttl: 60_000, limit: 3 } };
+import { CREDENTIALS_LIMIT, EMAIL_LIMIT } from '../common/guards/rate-limit.guard';
 
 @Controller('auth')
 export class AuthController {
@@ -36,49 +31,49 @@ export class AuthController {
   // ── Acceso público ───────────────────────────────────────────────────────
 
   @Public()
-  @Throttle(CREDENTIALS_RATE_LIMIT)
+  @Throttle(CREDENTIALS_LIMIT)
   @Post('login')
   login(@Body() dto: LoginDto) {
     return this.auth.login(dto.email, dto.password, dto.country);
   }
 
   @Public()
-  @Throttle(CREDENTIALS_RATE_LIMIT)
+  @Throttle(CREDENTIALS_LIMIT)
   @Post('set-password')
   setInitialPassword(@Body() dto: SetPasswordDto) {
     return this.auth.setInitialPassword(dto.email, dto.temporaryPassword, dto.newPassword);
   }
 
   @Public()
-  @Throttle(EMAIL_RATE_LIMIT)
+  @Throttle(EMAIL_LIMIT)
   @Post('access-requests')
   requestAccess(@Body() dto: RequestAccessDto) {
     return this.auth.requestAccess(dto);
   }
 
   @Public()
-  @Throttle(EMAIL_RATE_LIMIT)
+  @Throttle(EMAIL_LIMIT)
   @Post('verify-email')
   requestCode(@Body() dto: RequestCodeDto) {
     return this.auth.requestVerificationCode(dto.email, dto.country);
   }
 
   @Public()
-  @Throttle({ default: { ttl: 60_000, limit: 10 } })
+  @Throttle(CREDENTIALS_LIMIT)
   @Post('confirm-email')
   confirmCode(@Body() dto: ConfirmCodeDto) {
     return this.auth.confirmEmailVerification(dto.email, dto.code);
   }
 
   @Public()
-  @Throttle(EMAIL_RATE_LIMIT)
+  @Throttle(EMAIL_LIMIT)
   @Post('forgot-password')
   requestPasswordReset(@Body() dto: RequestPasswordResetDto) {
     return this.auth.requestPasswordReset(dto.email);
   }
 
   @Public()
-  @Throttle(CREDENTIALS_RATE_LIMIT)
+  @Throttle(CREDENTIALS_LIMIT)
   @Post('reset-password')
   resetPassword(@Body() dto: ResetPasswordDto) {
     return this.auth.resetPassword(dto.token, dto.newPassword);

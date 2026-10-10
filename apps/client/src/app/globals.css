@@ -1,5 +1,11 @@
 @import 'tailwindcss';
 @plugin "tailwindcss-animate";
+/* Da forma (títulos, listas, enlaces, citas) al HTML que escriben los docentes: `prose`. */
+@plugin "@tailwindcss/typography";
+
+/* El tema lo elige la persona con el conmutador, que pone la clase `.dark` en <html>.
+   Sin esto, `dark:` seguiría la preferencia del sistema y no la elegida. */
+@custom-variant dark (&:where(.dark, .dark *));
 
 /* ═══════════════════════════════════════════════════════════
    SISTEMA DE DISEÑO — «Asfalto y Señalización»
@@ -195,6 +201,8 @@
       'calt' 1,
       'tnum' 1;
     letter-spacing: -0.011em;
+    /* Mientras se ve el aviso de almacenamiento, el final de la página queda por encima. */
+    padding-bottom: var(--storage-notice-space, 0px);
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
   }
@@ -237,17 +245,8 @@
   }
 }
 
-/* Barra de cuenta atrás de los avisos que se cierran solos */
+/* Barra de cuenta atrás de los avisos y mensajes que se cierran solos */
 @keyframes shrink {
-  from {
-    width: 100%;
-  }
-  to {
-    width: 0%;
-  }
-}
-
-@keyframes toast-shrink {
   from {
     width: 100%;
   }

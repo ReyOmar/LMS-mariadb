@@ -10,6 +10,9 @@ import type { Resource } from '@/types/models';
 /** Un cuestionario no tiene tipo propio: es un `ASSIGNMENT` cuyo título lleva esta marca. */
 const QUIZ_MARKER = '[QUIZ]';
 
+/** La marca al principio del título con lo que la separa de él; la API la quita igual. */
+const LEADING_QUIZ_MARKER = /^\[QUIZ\]\s*/;
+
 type IdentifiableResource = Pick<Resource, 'type' | 'title'>;
 
 export function isQuiz(resource?: IdentifiableResource | null): boolean {
@@ -23,7 +26,7 @@ export function quizTitleOf(title: string): string {
 
 /** Título sin la marca interna: es el que se enseña en pantalla. */
 export function displayTitle(resource: IdentifiableResource): string {
-  return isQuiz(resource) ? resource.title.replace(`${QUIZ_MARKER} `, '') : resource.title;
+  return isQuiz(resource) ? resource.title.replace(LEADING_QUIZ_MARKER, '') : resource.title;
 }
 
 /**
@@ -61,8 +64,9 @@ export function isImage(url: string | null | undefined): boolean {
 /**
  * Qué hay realmente detrás de un recurso `LINK`.
  *
- * El constructor guarda la dirección en `contentHtml` y, cuando el archivo es nuestro,
- * la repite en `fileUrl`. Se leen las dos porque hay bloques antiguos con una sola.
+ * El constructor guarda la dirección en `contentHtml`. Los bloques antiguos la tienen en
+ * `fileUrl`, a veces como imagen incrustada (`data:image/…`) y a veces como archivo del
+ * almacenamiento, que sólo se abre con la URL firmada que manda la API (`fileDownloadUrl`).
  */
 export type LinkTarget =
   | { kind: 'empty' }
@@ -70,8 +74,8 @@ export type LinkTarget =
   | { kind: 'video'; url: string; video: string }
   | { kind: 'link'; url: string };
 
-export function linkTarget(resource: Pick<Resource, 'contentHtml' | 'fileUrl'>): LinkTarget {
-  const url = (resource.contentHtml || resource.fileUrl || '').trim();
+export function linkTarget(resource: Pick<Resource, 'contentHtml' | 'fileUrl' | 'fileDownloadUrl'>): LinkTarget {
+  const url = (resource.contentHtml || resource.fileDownloadUrl || resource.fileUrl || '').trim();
   if (!url) return { kind: 'empty' };
 
   if (isImage(url)) return { kind: 'image', url };

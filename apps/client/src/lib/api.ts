@@ -172,6 +172,19 @@ export function isNetworkFailure(error: unknown): boolean {
   return axios.isAxiosError(error) && !error.response;
 }
 
+/** Lo que dura el límite de intentos del servidor cuando no dice cuánto queda. */
+const DEFAULT_RETRY_AFTER_SECONDS = 60;
+
+/**
+ * Segundos que hay que esperar antes de repetir una petición rechazada por exceso de
+ * intentos (429), según la cabecera `Retry-After` del servidor. Cero si el error es otro.
+ */
+export function retryAfterSeconds(error: unknown): number {
+  if (!axios.isAxiosError(error) || error.response?.status !== 429) return 0;
+  const seconds = Number(error.response.headers?.['retry-after']);
+  return Number.isFinite(seconds) && seconds > 0 ? Math.ceil(seconds) : DEFAULT_RETRY_AFTER_SECONDS;
+}
+
 /**
  * Mensaje presentable de un error de red o de la API.
  *
@@ -298,10 +311,13 @@ export async function uploadFile<T = { filename: string; url: string }>(
  *  - Una **clave de almacenamiento** como `avatars/1790-ab.png`, que es lo que guardan las
  *    columnas de marca (foto de perfil, logotipo, favicon, fondo del acceso, portada de
  *    curso). Nunca empieza por `/`, y hay que dirigirla a la ruta de descarga.
+ *
+ * Una dirección completa (`https://…`) o una imagen incrustada (`data:image/…`, como las de
+ * algunos bloques antiguos) ya se pueden pedir tal cual.
  */
 export function fileUrlFor(pathOrKey: string | null | undefined): string | null {
   if (!pathOrKey) return null;
-  if (pathOrKey.startsWith('http://') || pathOrKey.startsWith('https://')) return pathOrKey;
+  if (/^(https?:\/\/|data:image\/)/.test(pathOrKey)) return pathOrKey;
   if (pathOrKey.startsWith('/')) return absoluteUrl(pathOrKey);
   return absoluteUrl(`/api/storage/download/${pathOrKey}`);
 }

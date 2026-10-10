@@ -126,9 +126,12 @@ export function groupByModuleAndAssignment(submissions: SubmissionToGrade[]): Mo
  *
  * Acepta enteros y un solo decimal dentro de 0–{@link MAX_SCORE}. Lo que no encaja no
  * llega a escribirse: el error se evita en lugar de tener que explicarlo después de enviar.
+ *
+ * La coma vale como separador decimal: es el de Colombia y el que ofrece el teclado numérico
+ * del móvil en español. Descartarla convertía «85,5» en 855 y la nota quedaba en 100.
  */
 export function normalizeTypedScore(value: string): string {
-  let cleaned = value.replace(/[^0-9.]/g, '');
+  let cleaned = value.replace(/,/g, '.').replace(/[^0-9.]/g, '');
 
   const parts = cleaned.split('.');
   if (parts.length > 2) cleaned = `${parts[0]}.${parts.slice(1).join('')}`;

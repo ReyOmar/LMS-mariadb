@@ -25,7 +25,7 @@ import {
 import { PageLoader } from '@/components/ui/PageLoader';
 import Link from 'next/link';
 import api, { errorMessage, fileUrlFor, loginUrl } from '@/lib/api';
-import { useRealtimeEvent, useRealtime, useRealtimeReconnect } from '@/contexts/RealtimeContext';
+import { useRealtimeEvent, useRealtimeReconnect } from '@/contexts/RealtimeContext';
 import { useStudyTime } from '@/hooks/useStudyTime';
 import { useAlerts } from '@/contexts/AlertContext';
 import { useSession } from '@/contexts/SessionContext';
@@ -36,9 +36,10 @@ import { clearQuizDraft } from '@/components/quiz/quiz-draft';
 import AssignmentViewer from '@/components/assignments/AssignmentViewer';
 import { isModuleOpen, whereToResume, isResourceOpen, lastResource } from './components/progression';
 import { linkTarget, isQuiz, displayTitle, externalUrl } from '@/lib/resources';
-import { ResourceTarget, resourceLabel } from './components/ResourceTarget';
+import { ResourceTarget, resourceLabel } from '@/components/resources/ResourceTarget';
 import { Celebration, CourseUnderMaintenance, CourseAlreadyEnded, UngradedAssignments } from './components/Notices';
 import type { Certificate, Course, CourseModule, CourseProgress, Resource } from '@/types/models';
+import { useInFlight } from '@/hooks/useInFlight';
 
 /** Recuerda si el temario se dejó abierto. */
 const SIDEBAR_KEY = 'lms_sidebar_open';
@@ -112,7 +113,6 @@ function CourseViewer() {
   const progressChecked = useRef(false);
   const [leaving, setLeaving] = useState(false);
   const leftRef = useRef(false);
-  const { coursesUnderMaintenance } = useRealtime();
   const { showAlert, notify } = useAlerts();
 
   // Lo necesita `leaveCourse`, que se llama desde cargas memorizadas: con el estado a secas
@@ -163,13 +163,11 @@ function CourseViewer() {
       const isNarrow = window.innerWidth < 1024;
       setIsMobile(isNarrow);
       // Al estrecharse se pliega el temario: si no, tapa el contenido.
-      if (isNarrow && sidebarOpen) {
-        setSidebarOpen(false);
-      }
+      if (isNarrow) setSidebarOpen(false);
     };
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
-  }, [sidebarOpen]);
+  }, []);
 
   // La preferencia sólo se recuerda en escritorio: en móvil siempre conviene plegado.
   const toggleSidebar = () => {
@@ -343,11 +341,6 @@ function CourseViewer() {
     }
   }, [showCelebration]);
 
-  // Aviso de mantenimiento de este curso concreto; sólo le importa al alumno.
-  useEffect(() => {
-    if (coursesUnderMaintenance[courseId]) setUnderMaintenance(true);
-  }, [coursesUnderMaintenance, courseId]);
-
   // Un administrador puede pasar el curso a mantenimiento con el alumno dentro.
   useRealtimeEvent('course:maintenance', (data) => {
     if ((data as { courseGuid?: string })?.courseGuid === courseId) setUnderMaintenance(true);
@@ -365,18 +358,23 @@ function CourseViewer() {
   // tiene la pestaña abierta: la diferencia está explicada en el propio hook.
   useStudyTime(studentGuid && courseId && !leaving ? courseId : null, !readOnly);
 
+  /** Recursos que se están marcando: cada botón espera para no enviar el aviso dos veces. */
+  const marking = useInFlight<string>();
+  const runMarking = marking.run;
+
   const markCompleted = useCallback(
-    async (resourceGuid: string) => {
-      if (!studentGuid || completed.includes(resourceGuid)) return;
-      try {
-        await api.post('/students/complete-resource', { resourceGuid });
-        setCompleted((prev) => [...prev, resourceGuid]);
-      } catch (error) {
-        const title = 'No se pudo marcar como completado';
-        if (!handleAccessError(error, title)) showAlert.error(title, errorMessage(error));
-      }
-    },
-    [studentGuid, completed, showAlert, handleAccessError],
+    (resourceGuid: string) =>
+      runMarking(resourceGuid, async () => {
+        if (!studentGuid || completed.includes(resourceGuid)) return;
+        try {
+          await api.post('/students/complete-resource', { resourceGuid });
+          setCompleted((prev) => [...prev, resourceGuid]);
+        } catch (error) {
+          const title = 'No se pudo marcar como completado';
+          if (!handleAccessError(error, title)) showAlert.error(title, errorMessage(error));
+        }
+      }),
+    [runMarking, studentGuid, completed, showAlert, handleAccessError],
   );
 
   const modules = course?.modules || [];
@@ -627,6 +625,7 @@ function CourseViewer() {
                         {resources.map((r: Resource, ri: number) => {
                           const rUnlocked = isResourceUnlocked(mi, ri);
                           const rCompleted = isResourceCompleted(r.guid);
+                          const awaitingGrade = isResourceAwaitingGrade(r.guid);
                           const isSelected = currentResource?.guid === r.guid;
                           const title = displayTitle(r);
 
@@ -644,12 +643,12 @@ function CourseViewer() {
                             >
                               {resourceIcon(r, rCompleted, !rUnlocked)}
                               <span
-                                className={`truncate flex-1 ${rCompleted && !isResourceAwaitingGrade(r.guid) ? 'italic line-through text-muted-foreground' : ''}`}
+                                className={`truncate flex-1 ${rCompleted && !awaitingGrade ? 'italic line-through text-muted-foreground' : ''}`}
                               >
                                 {title}
                               </span>
-                              {rCompleted && isResourceAwaitingGrade(r.guid) ? (
-                                <span title="Pendiente de calificación">
+                              {awaitingGrade ? (
+                                <span title="Entregada, pendiente de calificación">
                                   <Clock className="h-3 w-3 text-amber-500 shrink-0" />
                                 </span>
                               ) : rCompleted ? (
@@ -715,7 +714,10 @@ function CourseViewer() {
                   )}
 
                   {!readOnly && !isResourceCompleted(currentResource.guid) && (
-                    <MarkCompletedButton onClick={() => markCompleted(currentResource.guid)} />
+                    <MarkCompletedButton
+                      onClick={() => markCompleted(currentResource.guid)}
+                      busy={marking.has(currentResource.guid)}
+                    />
                   )}
                 </div>
               )}
@@ -726,7 +728,10 @@ function CourseViewer() {
                   <ResourceTarget resource={currentResource} />
 
                   {!readOnly && !isResourceCompleted(currentResource.guid) && (
-                    <MarkCompletedButton onClick={() => markCompleted(currentResource.guid)} />
+                    <MarkCompletedButton
+                      onClick={() => markCompleted(currentResource.guid)}
+                      busy={marking.has(currentResource.guid)}
+                    />
                   )}
                 </div>
               )}
@@ -820,12 +825,14 @@ function CourseViewer() {
   );
 }
 
-function MarkCompletedButton({ onClick }: { onClick: () => void }) {
+function MarkCompletedButton({ onClick, busy }: { onClick: () => void; busy: boolean }) {
   return (
     <div className="mt-8 pt-6 border-t border-border flex justify-center animate-in fade-in duration-500">
       <button
+        type="button"
         onClick={onClick}
-        className="bg-primary hover:bg-primary/90 text-primary-foreground px-8 py-4 rounded-2xl font-black shadow-lg shadow-primary/20 transition-all hover:scale-105 active:scale-95 flex items-center gap-3 text-lg"
+        disabled={busy}
+        className="bg-primary hover:bg-primary/90 text-primary-foreground px-8 py-4 rounded-2xl font-black shadow-lg shadow-primary/20 transition-all hover:scale-105 active:scale-95 flex items-center gap-3 text-lg disabled:opacity-60 disabled:hover:scale-100"
       >
         <CheckCircle className="h-6 w-6" /> Marcar como Completado
       </button>

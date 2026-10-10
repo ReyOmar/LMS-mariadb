@@ -13,10 +13,10 @@ import {
   XCircle,
 } from 'lucide-react';
 import api, { errorMessage, fileUrlFor } from '@/lib/api';
-import { MAX_SCORE, toScore } from '@/lib/grading';
-import { formatNumber } from '@/lib/country';
+import { MAX_SCORE, formatScoreValue } from '@/lib/grading';
 import { useAlerts } from '@/contexts/AlertContext';
 import { useCountry } from '@/contexts/CountryContext';
+import { useRealtimeEvent, useRealtimeReconnect } from '@/contexts/RealtimeContext';
 import { useDialog } from '@/hooks/useDialog';
 import { sanitizeHTML } from '@/lib/sanitize';
 import { externalUrl } from '@/lib/resources';
@@ -89,11 +89,7 @@ export default function QuizViewer({
     if (!onAccessErrorRef.current?.(failure, title)) showAlert.error(title, errorMessage(failure));
   };
 
-  /** Nota como se escribe en la sede (83,2 en Colombia); «—» si no hay. */
-  const points = (score: unknown) => {
-    const value = toScore(score);
-    return value === null ? '—' : formatNumber(value, country);
-  };
+  const points = (score: unknown) => formatScoreValue(score, country);
 
   const [status, setStatus] = useState<QuizState | null>(null);
   const [questions, setQuestions] = useState<QuizQuestion[]>([]);
@@ -142,6 +138,17 @@ export default function QuizViewer({
     // `loadState`, y repetirlo en cada render reabriría el intento una y otra vez.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loadState]);
+
+  // El examinador puede conceder otro intento mientras el alumno mira el «has agotado tus
+  // intentos», y el aviso se pierde si el tiempo real estaba cortado. Con un intento o su
+  // resultado en pantalla no se recarga: se taparían con el indicador de carga.
+  const refreshIdleState = () => {
+    if (!inProgress && !result) void loadState();
+  };
+  useRealtimeEvent('quiz:attempt-enabled', (data) => {
+    if ((data as { resourceGuid?: string })?.resourceGuid === resourceGuid) refreshIdleState();
+  });
+  useRealtimeReconnect(refreshIdleState);
 
   /** Abre el intento o, si ya había uno, lo devuelve tal cual: mismas preguntas y mismo inicio. */
   const requestAttempt = () => api.post<StartedAttempt>(`/courses/quiz/${resourceGuid}/start`);

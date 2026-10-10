@@ -134,19 +134,20 @@ export class MailService implements OnModuleInit {
     const password = this.config.get<string>('SMTP_PASS');
     const port = Number(this.config.get<string>('SMTP_PORT') ?? 587);
 
-    if (host && user && password) {
+    // Sin usuario es un relé que no pide autenticación, como el buzón local de desarrollo.
+    if (host) {
       this.transport = nodemailer.createTransport({
         host,
         port,
         secure: port === 465,
-        auth: { user, pass: password },
+        auth: user ? { user, pass: password } : undefined,
       });
       this.logger.log(`Correo activo mediante SMTP en ${host}:${port}`);
       return;
     }
 
     this.logger.warn(
-      'Correo DESACTIVADO: define BREVO_API_KEY (recomendado en cPanel) o SMTP_HOST/SMTP_USER/SMTP_PASS. ' +
+      'Correo DESACTIVADO: define BREVO_API_KEY (recomendado en cPanel) o SMTP_HOST. ' +
         'La aplicación funciona, pero no saldrá ningún correo.',
     );
   }
@@ -373,16 +374,16 @@ export class MailService implements OnModuleInit {
   async sendWelcome(email: string, name: string, temporaryPassword: string, country: Country) {
     const loginUrl = `${this.appUrl}/login?sede=${country}`;
     const site = countryName(country);
-    const sent = await this.sendTemplate(
+    const template = await this.render(
       'USUARIO_APROBADO',
-      email,
       { nombre: name, email, tempPassword: temporaryPassword, sede: site, url_campus: loginUrl },
       country,
     );
-    if (sent) return true;
+    if (template) return this.deliverToProvider(email, template.subject, template.html);
 
     // Sin plantilla configurada la cuenta quedaría creada y el usuario sin conocer su
-    // clave temporal, así que este correo tiene respaldo propio.
+    // clave temporal, así que este correo tiene respaldo propio. Sólo para eso: si lo que
+    // falla es el envío, repetirlo con otro texto no lo arregla y podría llegar dos veces.
     const html = await this.wrap(
       `<h2 style="color:#1e293b;margin:0 0 16px">¡Hola ${escapeHtml(name)}!</h2>
        <p style="color:#64748b;font-size:15px;line-height:1.6">Tu cuenta en el campus de <strong>${escapeHtml(site)}</strong> está lista.</p>

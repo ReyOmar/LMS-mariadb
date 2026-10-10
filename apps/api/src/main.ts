@@ -69,6 +69,9 @@ async function bootstrap(): Promise<void> {
     origin: allowedOrigins(config),
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
     credentials: true,
+    // Con la API en otro dominio, el navegador oculta esta cabecera si no se declara: es la
+    // que dice cuánto debe esperar un formulario tras exceder el límite de intentos.
+    exposedHeaders: ['Retry-After'],
   });
 
   // La documentación describe toda la superficie de la API: sólo en desarrollo.

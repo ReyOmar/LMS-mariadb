@@ -28,28 +28,34 @@ describe('MaintenanceService — ninguna tarea borra archivos', () => {
   /** Base que devuelve las filas indicadas por tabla y anota cada escritura como `tabla.operación`. */
   function recordingBase(rows: Record<string, unknown[]>) {
     const writes: string[] = [];
-    const base = new Proxy(
+    const base: object = new Proxy(
       {},
       {
-        get: (_, model: string) =>
+        get: (_, model: string) => {
           // Las escrituras crudas sólo recalculan el recuento de avance de `lms_matriculas`.
-          model === '$executeRaw'
-            ? async () => {
-                writes.push('enrollment.$executeRaw');
-                return 1;
-              }
-            : {
-                findMany: async () => rows[model] ?? [],
-                ...Object.fromEntries(
-                  WRITES.map((operation) => [
-                    operation,
-                    async () => {
-                      writes.push(`${model}.${operation}`);
-                      return { count: 1 };
-                    },
-                  ]),
-                ),
-              },
+          if (model === '$executeRaw') {
+            return async () => {
+              writes.push('enrollment.$executeRaw');
+              return 1;
+            };
+          }
+          // La lectura cruda es el bloqueo de la matrícula, y la transacción trabaja sobre la misma base.
+          if (model === '$queryRaw') return async () => [{ active: 1, completedAt: null }];
+          if (model === '$transaction') return async (work: (tx: object) => Promise<unknown>) => work(base);
+          return {
+            findMany: async () => rows[model] ?? [],
+            count: async () => 1,
+            ...Object.fromEntries(
+              WRITES.map((operation) => [
+                operation,
+                async () => {
+                  writes.push(`${model}.${operation}`);
+                  return { count: 1 };
+                },
+              ]),
+            ),
+          };
+        },
       },
     );
     return { base, writes };
@@ -154,14 +160,19 @@ describe('MaintenanceService — desbloqueo por espera', () => {
     pending: ReturnType<typeof submission>[],
     alreadyDone: { u: string; r: string }[],
     unenrolled: string[] = [],
+    gradedMeanwhile: string[] = [],
   ) {
     const created: { userGuid: string; resourceGuid: string }[] = [];
     let progressQueries = 0;
 
     const base = {
       $executeRaw: async () => 1,
+      // La matrícula bloqueada: activa salvo que el alumno se haya dado de baja.
+      $queryRaw: async () => [{ active: 1, completedAt: null }],
+      $transaction: async (work: (tx: unknown) => Promise<unknown>) => work(base),
       submission: {
         findMany: async (query: { where?: { guid?: { gt: string } }; take?: number }) => keysetPage(pending, query),
+        count: async ({ where }: { where: { guid: string } }) => (gradedMeanwhile.includes(where.guid) ? 0 : 1),
       },
       enrollment: {
         findMany: async () =>
@@ -264,6 +275,17 @@ describe('MaintenanceService — desbloqueo por espera', () => {
 
     expect(created.map((row) => row.userGuid)).toEqual(['ana']);
     expect(notified).toEqual(['ana']);
+  });
+
+  it('no devuelve el avance de una entrega que se calificó mientras se preparaba la tanda', async () => {
+    const notified: string[] = [];
+    const ana = submission('ana', 'tarea-1');
+    const { base, created } = baseWithWaits([ana], [], [], [ana.guid]);
+
+    await serviceWith(base, notified).unlockLongWaits();
+
+    expect(created).toEqual([]);
+    expect(notified).toEqual([]);
   });
 });
 

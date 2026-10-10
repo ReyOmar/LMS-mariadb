@@ -1,6 +1,7 @@
-import { IsEmail, IsIn, IsNotEmpty, IsString, MaxLength } from 'class-validator';
-import { NormalizeEmail, Trim } from '../../common/validation/transforms';
+import { IsIn, IsNotEmpty, IsString, MaxLength } from 'class-validator';
+import { Trim } from '../../common/validation/transforms';
 import { ROLES, UserRole } from '../../common/interfaces/jwt-payload.interface';
+import { AccountEmail } from '../../common/validation/account-email';
 
 /**
  * Alta directa de una cuenta por un administrador.
@@ -21,9 +22,7 @@ export class CreateUserDto {
   @Trim()
   lastName: string;
 
-  @IsEmail({}, { message: 'El correo electrónico no es válido.' })
-  @MaxLength(255)
-  @NormalizeEmail()
+  @AccountEmail()
   email: string;
 
   @IsIn(ROLES, { message: 'El rol no es válido.' })

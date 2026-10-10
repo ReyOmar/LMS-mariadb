@@ -1,9 +1,11 @@
 'use client';
 
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import api, { errorMessage } from '@/lib/api';
 import { CountrySettings, useConfig } from '@/contexts/ConfigContext';
 import { useAlerts } from '@/contexts/AlertContext';
+import { useLeaveGuard } from './useLeaveGuard';
 
 /**
  * Edición de la configuración de la sede con guardado explícito (tema y portada).
@@ -17,7 +19,8 @@ import { useAlerts } from '@/contexts/AlertContext';
  */
 export function useSettingsDraft(withPreview = false) {
   const { config, preview, reload } = useConfig();
-  const { showAlert } = useAlerts();
+  const { showAlert, showConfirmation } = useAlerts();
+  const router = useRouter();
 
   const [changes, setChanges] = useState<Partial<CountrySettings>>({});
   const [saving, setSaving] = useState(false);
@@ -35,13 +38,29 @@ export function useSettingsDraft(withPreview = false) {
     [withPreview, preview],
   );
 
-  const discard = useCallback(async () => {
-    setChanges({});
-    await reload();
-  }, [reload]);
+  // La vista previa tiñe toda la aplicación, no sólo esta pantalla: si se sale sin guardar,
+  // se vuelve a lo guardado para que el resto del campus no enseñe una marca que no existe.
+  const restoreOnExit = useRef<(() => void) | null>(null);
+  useEffect(() => {
+    restoreOnExit.current = withPreview && hasChanges ? () => void reload() : null;
+  });
+  useEffect(() => () => restoreOnExit.current?.(), []);
+
+  useLeaveGuard(hasChanges, {
+    warning: 'Hay cambios sin guardar. ¿Salir igualmente?',
+    onLeave: async (destination) => {
+      const leave = await showConfirmation(
+        'Cambios sin guardar',
+        'Si sales ahora, se perderán los cambios que no has guardado.',
+        'Salir sin guardar',
+        'warning',
+      );
+      if (leave) router.push(destination);
+    },
+  });
 
   const save = useCallback(async () => {
-    if (!hasChanges) return true;
+    if (!hasChanges) return;
 
     setSaving(true);
     try {
@@ -49,15 +68,13 @@ export function useSettingsDraft(withPreview = false) {
       setChanges({});
       await reload();
       showAlert.success('Cambios guardados', 'La configuración de la sede se actualizó correctamente.');
-      return true;
     } catch (error) {
       // El servidor valida campo por campo y devuelve qué falla; se muestra tal cual.
       showAlert.error('No se pudo guardar', errorMessage(error));
-      return false;
     } finally {
       setSaving(false);
     }
   }, [changes, hasChanges, reload, showAlert]);
 
-  return { draft, edit, save, discard, hasChanges, saving };
+  return { draft, edit, save, hasChanges, saving };
 }

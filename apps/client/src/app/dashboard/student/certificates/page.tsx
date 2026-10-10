@@ -23,7 +23,7 @@ import { useAlerts } from '@/contexts/AlertContext';
 import { useCountry } from '@/contexts/CountryContext';
 import { useDialog } from '@/hooks/useDialog';
 import api, { errorMessage } from '@/lib/api';
-import { averageScore, MAX_SCORE, toScore } from '@/lib/grading';
+import { averageScore, formatScore, formatScoreValue } from '@/lib/grading';
 import { formatNumber } from '@/lib/country';
 import { longDate } from '@/lib/dates';
 import { plural } from '@/lib/text';
@@ -126,13 +126,8 @@ function StudentCertificates() {
   const average = averageScore(certificates.map((certificate) => certificate.averageScore));
 
   const { country } = useCountry();
-  /** Nota como se escribe en la sede (83,2 en Colombia); «—» si no hay. */
-  const points = (value: unknown) => {
-    const score = toScore(value);
-    return score === null ? '—' : formatNumber(score, country);
-  };
-  /** Nota con su escala: «83,2 / 100». */
-  const scoreText = (value: unknown) => (toScore(value) === null ? 'Sin calificar' : `${points(value)} / ${MAX_SCORE}`);
+  /** Nota con su escala, como se escribe en la sede: «83,2 / 100». */
+  const scoreText = (value: unknown) => formatScore(value, country);
 
   const onDownload = async (cert: Certificate) => {
     setDownloading(cert.guid);
@@ -205,7 +200,7 @@ function StudentCertificates() {
                 <Star className="h-5 w-5 text-amber-500" />
               </div>
               <div>
-                <p className="text-2xl font-black text-foreground">{points(average)}</p>
+                <p className="text-2xl font-black text-foreground">{formatScoreValue(average, country)}</p>
                 <p className="text-xs text-muted-foreground font-medium">Promedio general</p>
               </div>
             </div>

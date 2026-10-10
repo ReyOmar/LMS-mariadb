@@ -4,7 +4,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { SettingsService } from '../settings/settings.service';
 import { CourseAccessService } from '../courses/course-access.service';
 import { recordCompletion } from '../courses/resource-progress';
-import { waitedTooLong } from '../courses/progression';
+import { AWAITING_GRADE, waitedTooLong } from '../courses/progression';
 import { averageOfScores } from '../common/domain/grading';
 import { percent } from '../common/domain/progress';
 import { dayInTimeZone, timeZoneOffset } from '../common/domain/time-zone';
@@ -75,7 +75,7 @@ export class StudentsService {
         where: {
           userGuid: user.sub,
           assignmentGuid: { in: guids },
-          status: { in: ['SUBMITTED', 'IN_REVIEW'] },
+          status: { in: AWAITING_GRADE },
         },
         select: { assignmentGuid: true, submittedAt: true },
       }),
@@ -180,7 +180,7 @@ export class StudentsService {
     }
 
     const inTheirCourses = { module: { courseGuid: { in: courseGuids } } };
-    const [resources, progress, studyTime, scores] = await Promise.all([
+    const [resources, progress, studyTime, bestScores] = await Promise.all([
       this.prisma.resource.findMany({
         where: inTheirCourses,
         select: { guid: true },
@@ -193,9 +193,12 @@ export class StudentsService {
         where: { userGuid: user.sub, courseGuid: { in: courseGuids } },
         _sum: { durationSeconds: true },
       }),
-      this.prisma.submission.findMany({
+      // La mejor nota de cada evaluación, como en el certificado: los intentos suspendidos
+      // antes de aprobar no hunden el promedio de quien repitió.
+      this.prisma.submission.groupBy({
+        by: ['assignmentGuid'],
         where: { userGuid: user.sub, status: 'GRADED', score: { not: null }, assignment: inTheirCourses },
-        select: { score: true },
+        _max: { score: true },
       }),
     ]);
 
@@ -209,7 +212,7 @@ export class StudentsService {
       totalResources: resources.length,
       percent: percent(completedResources, resources.length),
       totalHoursSpent: Math.round(((studyTime._sum.durationSeconds ?? 0) / 3600) * 10) / 10,
-      overallAverage: averageOfScores(scores.map((submission) => submission.score)),
+      overallAverage: averageOfScores(bestScores.map((assessment) => assessment._max.score)),
     };
   }
 

@@ -1,5 +1,5 @@
 import type { CourseStatus, UserRole } from '@/types/models';
-import { plural } from '@/lib/text';
+import { matchesSearch, plural } from '@/lib/text';
 
 /** Lo que la pantalla de asignación necesita de cada curso. */
 export interface AssignableCourse {
@@ -101,9 +101,8 @@ export function filterCourses(
   search: string,
   filter: AssignmentFilter,
 ): AssignableCourse[] {
-  const text = search.trim().toLowerCase();
   return courses.filter((course) => {
-    if (text && !course.title.toLowerCase().includes(text)) return false;
+    if (!matchesSearch(course.title, search)) return false;
     if (filter === 'assigned') return hasExaminer(course);
     if (filter === 'unassigned') return !hasExaminer(course);
     return true;

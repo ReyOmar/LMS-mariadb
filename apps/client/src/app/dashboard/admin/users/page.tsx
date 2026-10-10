@@ -17,6 +17,7 @@ import { UserDetails } from './components/UserDetails';
 import { AccountList } from './components/AccountList';
 import { CourseTransfer } from './components/CourseTransfer';
 import type { AssignedCourse, TransferTarget, TransferState, Tab } from './components/accounts';
+import { useCurrentList } from '@/hooks/useCurrentList';
 
 /**
  * Base de usuarios de la sede.
@@ -60,6 +61,7 @@ export default function UsersPage() {
   const [byRole, setByRole] = useState<CountByRole>(NO_ACCOUNTS);
   const [registered, setRegistered] = useState(0);
   const [cursor, setCursor] = useState<string | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
 
   // Ficha abierta y lo que se pide al abrirla.
   const [selected, setSelected] = useState<User | null>(null);
@@ -74,11 +76,15 @@ export default function UsersPage() {
   // Diálogo para decidir a quién pasan los cursos de una cuenta que se va a eliminar.
   const [transfer, setTransfer] = useState<TransferState | null>(null);
 
+  const list = useCurrentList();
+
   const loadUsers = useCallback(async () => {
+    const isCurrent = list.start();
     try {
       const { data } = await api.get<AccountsResponse>('/auth/users', {
         params: { role: tab, search: appliedSearch || undefined },
       });
+      if (!isCurrent()) return;
       setUsers(data.users ?? []);
       setTotal(data.total ?? 0);
       setByRole(data.byRole ?? NO_ACCOUNTS);
@@ -89,7 +95,7 @@ export default function UsersPage() {
     } finally {
       setLoading(false);
     }
-  }, [tab, appliedSearch, notify]);
+  }, [tab, appliedSearch, notify, list]);
 
   /**
    * Trae la siguiente tanda sin perder lo que ya está en pantalla.
@@ -98,18 +104,23 @@ export default function UsersPage() {
    * el coste no crece según se baja, y nadie se cuela ni se repite si mientras tanto se da
    * de alta a otra persona.
    */
-  const loadMore = useCallback(async () => {
-    if (!cursor) return;
+  const loadMore = async () => {
+    if (!cursor || loadingMore) return;
+    const isCurrent = list.extend();
+    setLoadingMore(true);
     try {
       const { data } = await api.get<AccountsResponse>('/auth/users', {
         params: { role: tab, search: appliedSearch || undefined, cursor },
       });
+      if (!isCurrent()) return;
       setUsers((prev) => [...prev, ...(data.users ?? [])]);
       setCursor(data.cursor);
     } catch (error) {
       notify.error('No se pudieron cargar más cuentas', errorMessage(error));
+    } finally {
+      setLoadingMore(false);
     }
-  }, [tab, appliedSearch, cursor, notify]);
+  };
 
   useEffect(() => {
     void loadUsers();
@@ -187,7 +198,12 @@ export default function UsersPage() {
     await deleteAccount(user.guid);
   };
 
+  /** Borrado en curso: un doble clic en «Traspasar y eliminar» no debe lanzar un segundo borrado. */
+  const deleting = useRef(false);
+
   const deleteAccount = async (guid: string, courseTarget?: string) => {
+    if (deleting.current) return;
+    deleting.current = true;
     try {
       await api.delete(`/auth/users/${guid}`, {
         params: courseTarget ? { courseTarget } : undefined,
@@ -198,6 +214,8 @@ export default function UsersPage() {
       void loadUsers();
     } catch (error) {
       showAlert.error('No se pudo eliminar', errorMessage(error));
+    } finally {
+      deleting.current = false;
     }
   };
 
@@ -233,6 +251,7 @@ export default function UsersPage() {
         counts={byRole}
         total={total}
         canLoadMore={cursor !== null}
+        loadingMore={loadingMore}
         onLoadMore={loadMore}
         onTabChange={setTab}
         onSearch={setSearch}

@@ -11,23 +11,11 @@ import { fontVariables } from '@/lib/fonts';
 import { DataConsentDialog } from '@/components/legal/DataConsentDialog';
 import { StorageNotice } from '@/components/legal/StorageNotice';
 import { PageLoaderOverlay } from '@/components/ui/PageLoaderOverlay';
+import { BrandHead } from '@/components/layout/BrandHead';
 
-/**
- * Metadatos base.
- *
- * El nombre y el icono definitivos dependen de la sede que elija el visitante, y eso sólo
- * se sabe en el navegador, así que aquí se pone un valor genérico y `applyTheme` lo
- * sustituye en cuanto se conoce la sede.
- */
+/** El título y el icono dependen de la sede y los pone `BrandHead`. */
 export const metadata: Metadata = {
-  title: 'Campus Virtual PESV',
   description: 'Plataforma de capacitación y certificación en seguridad vial.',
-  icons: {
-    icon:
-      "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'>" +
-      "<circle cx='50' cy='50' r='50' fill='%231e3a8a'/>" +
-      "<text x='50' y='68' font-family='Arial' font-size='42' font-weight='bold' fill='white' text-anchor='middle'>P</text></svg>",
-  },
 };
 
 /**
@@ -44,7 +32,9 @@ export const metadata: Metadata = {
  */
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="es" className={fontVariables} suppressHydrationWarning>
+    // `data-scroll-behavior` le dice a Next.js que el desplazamiento suave de `globals.css`
+    // es deliberado, para que lo suspenda al cambiar de pantalla.
+    <html lang="es" className={fontVariables} data-scroll-behavior="smooth" suppressHydrationWarning>
       <head>
         {/* Aplica el tema de la sede (el de la caché o, sin ella, su marca) antes del primer pintado. */}
         <Script src="/theme-preload.js" strategy="beforeInteractive" />
@@ -58,6 +48,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             <SessionProvider>
               <RealtimeProvider>
                 <ConfigProvider>
+                  <BrandHead />
                   <AlertProvider>
                     {children}
                     <DataConsentDialog />

@@ -24,11 +24,14 @@ import { useDialog } from '@/hooks/useDialog';
  */
 
 let toastCounter = 0;
+let alertCounter = 0;
 
 type AlertType = 'success' | 'error' | 'warning' | 'info';
 type ConfirmationStyle = 'danger' | 'warning' | 'info';
 
 interface AlertState {
+  /** Distingue un aviso del siguiente aunque sean iguales: cada uno cuenta su propio cierre. */
+  id: number;
   open: boolean;
   type: AlertType;
   title: string;
@@ -143,6 +146,7 @@ const CONFIRMATION_STYLES: Record<ConfirmationStyle, { background: string; icon:
 
 export function AlertProvider({ children }: { children: ReactNode }) {
   const [alert, setAlert] = useState<AlertState>({
+    id: 0,
     open: false,
     type: 'info',
     title: '',
@@ -159,32 +163,40 @@ export function AlertProvider({ children }: { children: ReactNode }) {
     onCancel: () => {},
   });
   const [closing, setClosing] = useState(false);
-  const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** Final del desvanecimiento del aviso que se está cerrando. */
+  const fadeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const toastTimers = useRef<Map<number, ReturnType<typeof setTimeout>>>(new Map());
 
   const closeAlert = useCallback(() => {
     setClosing(true);
-    setTimeout(() => {
+    if (fadeTimer.current) clearTimeout(fadeTimer.current);
+    fadeTimer.current = setTimeout(() => {
       setAlert((prev) => ({ ...prev, open: false }));
       setClosing(false);
     }, 150);
   }, []);
 
-  // Cierre automático de los diálogos que lo piden.
+  // Cierre automático de los diálogos que lo piden. Cada aviso cuenta su tiempo desde que
+  // aparece, aunque sustituya a otro igual que seguía abierto.
   useEffect(() => {
-    if (closeTimer.current) clearTimeout(closeTimer.current);
-    if (alert.open && alert.autoClose && alert.autoClose > 0) {
-      closeTimer.current = setTimeout(closeAlert, alert.autoClose);
-    }
-    return () => {
-      if (closeTimer.current) clearTimeout(closeTimer.current);
-    };
-  }, [alert.open, alert.autoClose, closeAlert]);
+    if (!alert.open || !alert.autoClose) return;
+    const timer = setTimeout(closeAlert, alert.autoClose);
+    return () => clearTimeout(timer);
+  }, [alert.id, alert.open, alert.autoClose, closeAlert]);
 
   const show = useCallback((type: AlertType, title: string, message?: string, autoClose?: number | false) => {
+    // El aviso anterior que aún se desvanecía no puede llevarse por delante a este.
+    if (fadeTimer.current) clearTimeout(fadeTimer.current);
     setClosing(false);
-    setAlert({ open: true, type, title, message: message || '', autoClose: autoClose ?? AUTO_CLOSE_MS[type] });
+    setAlert({
+      id: ++alertCounter,
+      open: true,
+      type,
+      title,
+      message: message || '',
+      autoClose: autoClose ?? AUTO_CLOSE_MS[type],
+    });
   }, []);
 
   // Los objetos se memorizan: si cambiaran de identidad en cada render, cualquier efecto o
@@ -336,6 +348,7 @@ export function AlertProvider({ children }: { children: ReactNode }) {
               <div className="px-6 -mt-2 mb-2">
                 <div className="h-1 bg-muted rounded-full overflow-hidden">
                   <div
+                    key={alert.id}
                     className={`h-full rounded-full ${alertStyle.bar}`}
                     style={{ animation: `shrink ${autoCloseMs}ms linear forwards` }}
                   />
@@ -403,7 +416,7 @@ export function AlertProvider({ children }: { children: ReactNode }) {
         </div>
       )}
 
-      {/* Pila de mensajes pasajeros. Las animaciones `shrink` y `toast-shrink` están en globals.css.
+      {/* Pila de mensajes pasajeros. La animación `shrink` de las barras está en globals.css.
           Sigue activa con una ventana abierta: sus avisos tienen que leerse y poder cerrarse. */}
       <div
         data-keep-active
@@ -444,7 +457,7 @@ export function AlertProvider({ children }: { children: ReactNode }) {
               <div className="h-1 bg-muted/30">
                 <div
                   className={`h-full rounded-r-full ${toastStyle.bar}`}
-                  style={{ animation: `toast-shrink ${toast.durationMs}ms linear forwards` }}
+                  style={{ animation: `shrink ${toast.durationMs}ms linear forwards` }}
                 />
               </div>
             </div>

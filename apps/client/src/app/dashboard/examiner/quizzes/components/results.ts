@@ -1,5 +1,6 @@
 import type { SubmissionToGrade } from '@/types/models';
 import { averageScore, toScore } from '@/lib/grading';
+import { displayTitle } from '@/lib/resources';
 import { COLOR, type Slice, type RangeBucket } from '@/components/ui/charts';
 
 /**
@@ -41,9 +42,9 @@ export interface CourseQuizSummary {
   scores: { low: number; mid: number; high: number };
 }
 
-/** La marca `[QUIZ] ` es interna; el examinador ve el título sin ella. */
+/** La marca de cuestionario es interna; el examinador ve el título sin ella. */
 export function stripQuizMarker(title: string | null | undefined): string {
-  return (title ?? 'Sin título').replace('[QUIZ] ', '').trim();
+  return displayTitle({ type: 'ASSIGNMENT', title: title ?? 'Sin título' }).trim();
 }
 
 /** Nota de un intento, o `null` si todavía no se corrigió. */

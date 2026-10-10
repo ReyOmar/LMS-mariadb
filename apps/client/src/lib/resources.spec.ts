@@ -40,6 +40,11 @@ describe('esCuestionario y tituloVisible', () => {
     expect(displayTitle(resource({ type: 'ASSIGNMENT', title: '[QUIZ] Normativa' }))).toBe('Normativa');
     expect(displayTitle(resource({ type: 'ASSIGNMENT', title: 'Informe de ruta' }))).toBe('Informe de ruta');
   });
+
+  it('la quita igual que la API, con cualquier espaciado detrás', () => {
+    expect(displayTitle(resource({ type: 'ASSIGNMENT', title: '[QUIZ]Normativa' }))).toBe('Normativa');
+    expect(displayTitle(resource({ type: 'ASSIGNMENT', title: '[QUIZ]   Normativa' }))).toBe('Normativa');
+  });
 });
 
 describe('externalUrl', () => {
@@ -106,6 +111,18 @@ describe('linkTarget', () => {
 
   it('lee `fileUrl` cuando el bloque antiguo sólo tiene eso', () => {
     const url = '/api/storage/download/recursos/vieja.png';
+    expect(linkTarget(resource({ contentHtml: null, fileUrl: url }))).toEqual({ kind: 'image', url });
+  });
+
+  it('un archivo antiguo del almacenamiento se abre con la URL firmada, no con su clave', () => {
+    const signed = '/api/storage/download/recursos/vieja.png?exp=1&sig=abc';
+    expect(linkTarget(resource({ contentHtml: null, fileUrl: 'recursos/vieja.png', fileDownloadUrl: signed }))).toEqual(
+      { kind: 'image', url: signed },
+    );
+  });
+
+  it('una imagen antigua incrustada sigue siendo una imagen', () => {
+    const url = 'data:image/png;base64,iVBORw0KGgo=';
     expect(linkTarget(resource({ contentHtml: null, fileUrl: url }))).toEqual({ kind: 'image', url });
   });
 

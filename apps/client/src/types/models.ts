@@ -237,17 +237,6 @@ export interface CourseProgress {
   courseTitle?: string;
 }
 
-export interface CompletionStatus {
-  complete: boolean;
-  canGetCertificate: boolean;
-  completed: number;
-  total: number;
-  percent: number;
-  pendingAssignments: { resourceGuid: string; title: string; status: string | null }[];
-  /** Qué falta exactamente para poder certificarse. */
-  reason: string | null;
-}
-
 export interface Certificate {
   guid: string;
   /** Nulo si el curso se eliminó: el certificado sigue acreditando la formación. */

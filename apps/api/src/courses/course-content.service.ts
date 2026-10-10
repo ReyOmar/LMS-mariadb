@@ -1,4 +1,5 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { isURL } from 'class-validator';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { StorageService } from '../storage/storage.service';
@@ -9,6 +10,19 @@ import { toClientResource } from './resource-view';
 import { JwtPayload } from '../common/interfaces/jwt-payload.interface';
 import { CreateResourceDto, UpdateResourceDto } from './dto/resources.dto';
 import { CreateModuleDto, UpdateModuleDto } from './dto/courses.dto';
+
+/** Lo que se admite como dirección de un recurso de tipo enlace. */
+const LINK_ADDRESS = { require_protocol: true, require_tld: false, protocols: ['http', 'https'] };
+
+/**
+ * Un enlace guarda su dirección en el contenido. Sin protocolo, el alumno vería un vínculo
+ * a cualquier cosa en lugar del vídeo o la página que se quería enlazar.
+ */
+function assertLinkAddress(type: string | undefined, address: string | undefined): void {
+  if (type === 'LINK' && address && !isURL(address, LINK_ADDRESS)) {
+    throw new BadRequestException('La dirección del enlace debe ser una URL completa (https://…).');
+  }
+}
 
 /**
  * Contenido de un curso: módulos y los recursos que cuelgan de ellos.
@@ -79,6 +93,7 @@ export class CourseContentService {
 
   async createResource(moduleGuid: string, dto: CreateResourceDto, user: JwtPayload) {
     await this.access.editableCourseOfModule(moduleGuid, user);
+    assertLinkAddress(dto.type, dto.contentHtml);
     await this.files.assertCanUse(dto.fileUrl, null, 'recursos', { uploader: user.sub });
 
     const position = await this.prisma.resource.count({ where: { moduleGuid } });
@@ -117,8 +132,9 @@ export class CourseContentService {
 
     const previous = await this.prisma.resource.findUnique({
       where: { guid: resourceGuid },
-      select: { attachmentKey: true, fileUrl: true },
+      select: { type: true, attachmentKey: true, fileUrl: true },
     });
+    assertLinkAddress(previous?.type, dto.contentHtml);
     const owner = { uploader: user.sub };
     await this.files.assertCanUse(dto.attachmentKey, previous?.attachmentKey, 'recursos', owner);
     await this.files.assertCanUse(dto.fileUrl, previous?.fileUrl, 'recursos', owner);

@@ -3,13 +3,15 @@
 import { useState } from 'react';
 import { Mail, ArrowLeft, Loader2, CheckCircle } from 'lucide-react';
 import Link from 'next/link';
-import api, { errorMessage } from '@/lib/api';
+import api, { errorMessage, retryAfterSeconds } from '@/lib/api';
+import { useCountdown } from '@/hooks/useCountdown';
 
 export default function ForgotPasswordPage() {
   const [email, setEmail] = useState('');
   const [loading, setLoading] = useState(false);
   const [sent, setSent] = useState(false);
   const [error, setError] = useState('');
+  const rateLimit = useCountdown();
 
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -20,6 +22,7 @@ export default function ForgotPasswordPage() {
       await api.post('/auth/forgot-password', { email: email.trim() });
       setSent(true);
     } catch (failure) {
+      rateLimit.start(retryAfterSeconds(failure));
       setError(errorMessage(failure, 'No se pudo enviar la solicitud.'));
     } finally {
       setLoading(false);
@@ -90,7 +93,7 @@ export default function ForgotPasswordPage() {
 
                 <button
                   type="submit"
-                  disabled={loading || !email.trim()}
+                  disabled={loading || !email.trim() || rateLimit.waiting}
                   className="w-full bg-primary text-primary-foreground font-bold py-3 rounded-xl hover:bg-primary/90 transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
                 >
                   {loading ? (
@@ -98,7 +101,7 @@ export default function ForgotPasswordPage() {
                       <Loader2 className="h-4 w-4 animate-spin" /> Enviando...
                     </>
                   ) : (
-                    'Enviar enlace de recuperación'
+                    rateLimit.label('Enviar enlace de recuperación')
                   )}
                 </button>
 

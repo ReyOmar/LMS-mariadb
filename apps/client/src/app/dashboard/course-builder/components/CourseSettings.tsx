@@ -5,6 +5,7 @@ import { BookOpen, Clock, Download, Image as ImageIcon, Loader2, Trash2, UploadC
 import { fileUrlFor } from '@/lib/api';
 import type { Course } from '@/types/models';
 import { parseCapacity } from './capacity';
+import { saveNameOnBlur } from './names';
 
 interface Props {
   course: Course;
@@ -34,7 +35,7 @@ export function CourseSettings({ course, readOnly, uploadingCover, onSave, onUpl
             defaultValue={course.title}
             readOnly={readOnly}
             aria-label="Nombre del curso"
-            onBlur={(e) => onSave({ title: e.target.value })}
+            onBlur={saveNameOnBlur(course.title, (title) => onSave({ title }))}
             className={`w-full bg-muted border border-border rounded-xl px-4 py-3 font-medium focus:outline-none focus:ring-2 focus:ring-primary/50 text-lg transition-colors text-foreground ${readOnly ? 'opacity-60 cursor-not-allowed' : ''}`}
             placeholder="Ingresa el nombre del curso"
           />

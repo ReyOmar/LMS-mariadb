@@ -1367,18 +1367,26 @@ administrador que ya exista ni una plantilla ya editada—, así que el bloqueo 
 a un rodeo con `NODE_ENV=development` y apuntaba a un script de alta que no existe.
 
 ### Lo que queda pendiente
-1. **Quedan módulos puros sin cubrir**: `bloques`, `agrupacion` y `resultados`. El
-   andamiaje ya está montado (`npm test` en `apps/client`), así que añadirlos es escribir
-   el fichero y nada más.
-2. **Nueve servicios de la API revisados por partes**, no línea a línea: `quiz`,
-   `estudiantes`, `chat`, `matriculas`, `notificaciones`, `realtime`, `token-blacklist`.
-   De cada uno se comprobó el aislamiento por sede y la lógica en cuestión.
-3. **Quedan 25 avisos de ESLint**, ninguno un error: 18 son `<img>` —usar `next/image`
-   cambiaría el comportamiento de carga con las URLs firmadas— y el resto son `any`
-   sueltos en pantallas pequeñas.
-4. **Borrar una conversación la borra para las dos partes.** Está escrito así a propósito,
-   pero conviene decidir si es lo que se quiere: hoy una persona puede eliminar el
-   historial de otra sin que se entere.
-4. **Trece efectos de carga inicial** llevan una excepción documentada a
-   `react-hooks/exhaustive-deps`. Envolver cada carga en `useCallback` sería más limpio,
-   pero hacerlo mal introduce bucles de peticiones: conviene uno a uno y con prueba.
+
+Lo de la lista anterior está resuelto: los módulos puros tienen sus pruebas, los servicios se
+revisaron de nuevo buscando condiciones de carrera, ESLint no da ningún aviso, borrar una
+conversación sólo la oculta para quien la borra, y de los trece efectos con excepción a
+`react-hooks/exhaustive-deps` quedan tres, cada uno con su motivo escrito al lado.
+
+Queda, visto y decidido no tocar por ahora:
+
+1. **Calificar mientras el alumno sustituye su entrega.** La nota se aplica al archivo nuevo
+   aunque el examinador revisara el anterior. Evitarlo exige que el cliente diga qué
+   versión revisó.
+2. **El botón Atrás del navegador** abandona «Tema» o «Portada» sin avisar de los cambios
+   sin guardar. Cerrar la pestaña, recargar y los enlaces del campus sí avisan; Next.js no
+   ofrece una forma fiable de interceptar el retroceso.
+3. **El cliente reconoce un cuestionario por la marca `[QUIZ]` del título**, y la API por su
+   `quizConfig`. Coinciden porque el constructor pone las dos cosas a la vez; unificarlo
+   en `quizConfig` tocaría todas las pantallas que distinguen tareas y cuestionarios.
+4. **Consultas que crecerán con los datos**: el panel de cuestionarios no guarda nada en
+   memoria, el resumen del administrador lanza unas nueve consultas a la vez y la limpieza
+   nocturna de conversaciones ocultas recorre su tabla entera. Con los datos actuales son
+   instantáneas; conviene medirlas cuando haya años de uso.
+5. **Campos que se guardan sin efecto**: el código de acceso y las fechas de inicio y fin
+   de un curso se editan, pero nada los aplica.

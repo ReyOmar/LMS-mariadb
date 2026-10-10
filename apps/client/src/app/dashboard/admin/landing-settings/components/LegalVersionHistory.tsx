@@ -63,7 +63,8 @@ export function LegalVersionHistory({ fields }: { fields: Field[] }) {
       const { data } = await api.get<LegalVersionDetail>(`/settings/legal-versions/${id}`);
       setDetails((prev) => ({ ...prev, [id]: data }));
     } catch (error) {
-      setOpenId(null);
+      // Sólo se cierra si sigue abierta ésta: entretanto se pudo abrir otra.
+      setOpenId((current) => (current === id ? null : current));
       notify.error('No se pudo abrir la versión', errorMessage(error));
     }
   };

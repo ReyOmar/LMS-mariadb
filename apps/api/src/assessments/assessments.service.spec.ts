@@ -501,18 +501,34 @@ describe('calificación de una tarea', () => {
   function gradingService({ enrolled = true } = {}) {
     const progress = new Set<string>(['alumno-1|tarea-1']);
     const recounts: unknown[][] = [];
+    const steps: string[] = [];
+    const transactionOptions: unknown[] = [];
     const prisma = {
-      enrollment: { findUnique: async () => ({ active: enrolled }) },
-      submission: { update: jest.fn(async () => undefined) },
+      // El bloqueo de la matrícula, que devuelve si sigue activa.
+      $queryRaw: async () => {
+        steps.push('bloqueo');
+        return [{ active: enrolled ? 1 : 0, completedAt: null }];
+      },
+      $transaction: async (work: (client: never) => Promise<unknown>, options: unknown) => {
+        transactionOptions.push(options);
+        return work(prisma as never);
+      },
+      submission: {
+        update: jest.fn(async () => {
+          steps.push('nota');
+        }),
+      },
       $executeRaw: async (_sql: TemplateStringsArray, ...values: unknown[]) => {
-        recounts.push(values);
+        recounts.push(values.flatMap((value) => (isFragment(value) ? value.values : [value])));
         return 1;
       },
       resourceProgress: {
         upsert: async ({ create }: { create: { userGuid: string; resourceGuid: string } }) => {
+          steps.push('avance');
           progress.add(`${create.userGuid}|${create.resourceGuid}`);
         },
         deleteMany: async ({ where }: { where: { userGuid: string; resourceGuid: string } }) => {
+          steps.push('avance');
           progress.delete(`${where.userGuid}|${where.resourceGuid}`);
           return { count: 1 };
         },
@@ -543,7 +559,7 @@ describe('calificación de una tarea', () => {
       events as never,
       {} as never,
     );
-    return { service, progress, recounts, prisma };
+    return { service, progress, recounts, prisma, steps, transactionOptions };
   }
 
   it('aprobar deja la tarea completada', async () => {
@@ -571,6 +587,19 @@ describe('calificación de una tarea', () => {
       await service.gradeSubmission('entrega-1', { score }, ADMIN);
 
       expect(recounts).toEqual([['alumno-1', COURSE]]);
+    }
+  });
+
+  it('dos calificaciones a la vez van en fila: nota y avance se escriben con la matrícula bloqueada', async () => {
+    for (const score of [90, 40]) {
+      const { service, steps, transactionOptions } = gradingService();
+
+      await service.gradeSubmission('entrega-1', { score }, ADMIN);
+
+      // Si la nota y el avance se escribieran fuera, un suspenso podía quedar con el avance
+      // de un aprobado que se calificó a la vez.
+      expect(steps).toEqual(['bloqueo', 'nota', 'avance']);
+      expect(transactionOptions).toEqual([{ isolationLevel: 'ReadCommitted' }]);
     }
   });
 
@@ -606,15 +635,39 @@ describe('entrega de una tarea: límite de subida', () => {
     previous = null,
     failOnSave = false,
   }: { ownLimitMb?: number | null; previous?: Previous | null; failOnSave?: boolean } = {}) {
-    const save = async ({ data }: { data: Record<string, unknown> }) => {
-      if (failOnSave) throw new Error('base de datos caída');
-      return { guid: 'entrega-1', score: null, feedback: null, filePurged: false, attemptNumber: 1, ...data };
-    };
+    // La entrega guardada del alumno: lo que confirma un envío lo ve el siguiente.
+    let stored: Record<string, unknown> | null = previous && { ...previous };
+    const writes: string[] = [];
+    const save =
+      (operation: string) =>
+      async ({ data }: { data: Record<string, unknown> }) => {
+        if (failOnSave) throw new Error('base de datos caída');
+        writes.push(operation);
+        stored = {
+          guid: 'entrega-1',
+          score: null,
+          feedback: null,
+          filePurged: false,
+          attemptNumber: 1,
+          ...stored,
+          ...data,
+        };
+        return stored;
+      };
+
+    // El bloqueo de la matrícula: las transacciones corren de una en una, como con FOR UPDATE.
+    let queue: Promise<unknown> = Promise.resolve();
     const prisma = {
       resource: {
         findUnique: async () => ({ title: 'Informe', type: 'ASSIGNMENT', quizConfig: null, maxUploadMb: ownLimitMb }),
       },
-      submission: { findFirst: async () => previous, create: save, update: save },
+      submission: { findFirst: async () => stored, create: save('alta'), update: save('sustitución') },
+      $queryRaw: async () => [{ active: 1, completedAt: null }],
+      $transaction: (work: (client: never) => Promise<unknown>) => {
+        const run = queue.then(() => work(prisma as never));
+        queue = run.catch(() => undefined);
+        return run;
+      },
     };
 
     const uploads: { folder: string; uploader: unknown; maxBytes?: number }[] = [];
@@ -628,10 +681,18 @@ describe('entrega de una tarea: límite de subida', () => {
     };
     const files = { deleteUnreferenced: jest.fn(async () => undefined) };
     const access = {
-      unlockedResourceAccess: async () => ({ title: 'Manejo defensivo', passingScore: 80, teacherGuid: 'profe-1' }),
+      unlockedResourceAccess: async () => ({
+        guid: COURSE,
+        title: 'Manejo defensivo',
+        passingScore: 80,
+        teacherGuid: 'profe-1',
+      }),
     };
     const settings = { getMaxUploadMb: async () => 10 };
-    const events = { emit: () => true };
+    const received: { isResubmission: boolean }[] = [];
+    const events = {
+      emit: (_name: string, event: { isResubmission: boolean }) => received.push(event),
+    };
 
     const service = new AssessmentsService(
       prisma as never,
@@ -644,8 +705,42 @@ describe('entrega de una tarea: límite de subida', () => {
     );
     const receive = jest.fn(async (_limit: UploadLimit) => ({ name: 'informe.pdf', filePath: '/tmp/subida' }));
 
-    return { service, receive, uploads, storage, files };
+    return { service, receive, uploads, storage, files, writes, received, stored: () => stored };
   }
+
+  it('dos envíos a la vez de la misma tarea acaban en una sola entrega', async () => {
+    const { service, receive, writes } = submissionService();
+
+    // Un doble clic: los dos pasan la comprobación previa antes de que ninguno guarde.
+    await Promise.all([
+      service.recordSubmission('tarea-1', receive, STUDENT),
+      service.recordSubmission('tarea-1', receive, STUDENT),
+    ]);
+
+    expect(writes).toEqual(['alta', 'sustitución']);
+  });
+
+  it('sustituir un reenvío que aún no se ha calificado lo deja como reenvío', async () => {
+    const { service, receive, received, stored } = submissionService({
+      previous: { guid: 'entrega-0', status: 'IN_REVIEW', score: 40, attachmentKey: 'entregas/corregida.pdf' },
+    });
+
+    await service.recordSubmission('tarea-1', receive, STUDENT);
+
+    expect(stored()?.status).toBe('IN_REVIEW');
+    expect(received).toEqual([expect.objectContaining({ isResubmission: true, previousScore: 40 })]);
+  });
+
+  it('sustituir una entrega sin calificar no la convierte en reenvío', async () => {
+    const { service, receive, received, stored } = submissionService({
+      previous: { guid: 'entrega-0', status: 'SUBMITTED', score: null, attachmentKey: 'entregas/primera.pdf' },
+    });
+
+    await service.recordSubmission('tarea-1', receive, STUDENT);
+
+    expect(stored()?.status).toBe('SUBMITTED');
+    expect(received).toEqual([expect.objectContaining({ isResubmission: false })]);
+  });
 
   it('recibe el archivo con el límite propio de la tarea, aunque supere el general de la sede', async () => {
     const { service, receive, uploads } = submissionService({ ownLimitMb: 1024 });

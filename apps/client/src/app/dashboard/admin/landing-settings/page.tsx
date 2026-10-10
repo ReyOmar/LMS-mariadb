@@ -1,12 +1,13 @@
 'use client';
 
 import { useState } from 'react';
-import { FileText, Globe, MapPin, Phone, Save, Type } from 'lucide-react';
+import { FileText, Globe, MapPin, Phone, Type } from 'lucide-react';
 import { CountrySettings } from '@/contexts/ConfigContext';
 import { useCountry } from '@/contexts/CountryContext';
 import { useSettingsDraft } from '@/hooks/useSettingsDraft';
 import { PageLoader } from '@/components/ui/PageLoader';
 import { LegalVersionHistory } from './components/LegalVersionHistory';
+import { UnsavedChangesBar } from '@/components/ui/UnsavedChangesBar';
 
 /** Campos editables de la portada, descritos como datos en lugar de repetir el mismo JSX. */
 interface EditableField {
@@ -171,22 +172,7 @@ export default function LandingSettingsPage() {
         {tab.id === 'legal' && <LegalVersionHistory fields={tab.fields} />}
       </section>
 
-      {hasChanges && (
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-40 w-[min(calc(100%-2rem),40rem)]">
-          <div className="flex items-center justify-between gap-4 rounded-2xl border border-border bg-card px-5 py-4 shadow-2xl">
-            <p className="text-sm font-medium">Tienes cambios sin guardar.</p>
-            <button
-              type="button"
-              onClick={save}
-              disabled={saving}
-              className="inline-flex items-center gap-2 rounded-xl bg-primary px-5 py-2.5 text-sm font-bold text-primary-foreground hover:bg-primary/90 disabled:opacity-60 transition-colors"
-            >
-              <Save className="h-4 w-4" />
-              {saving ? 'Guardando…' : 'Guardar'}
-            </button>
-          </div>
-        </div>
-      )}
+      {hasChanges && <UnsavedChangesBar saving={saving} onSave={save} />}
     </div>
   );
 }

@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable, Logger, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import * as crypto from 'crypto';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { MAIL_CONCURRENCY, MailService } from '../mail/mail.service';
 import { RealtimeService } from '../realtime/realtime.service';
@@ -27,8 +28,14 @@ const CODE_VALIDITY_MS = 10 * 60 * 1000;
 /** Espera mínima entre dos envíos de código al mismo correo. */
 const RESEND_DELAY_MS = 60 * 1000;
 
-/** Fallos tolerados antes de invalidar un código de verificación. */
+/** Intentos que admite un código de verificación antes de invalidarse. */
 const MAX_CODE_ATTEMPTS = 5;
+
+const CODE_EXHAUSTED = 'Has agotado los intentos con este código. Solicita uno nuevo.';
+
+const REQUEST_ALREADY_RESOLVED = 'Esta solicitud ya fue procesada.';
+
+const REQUEST_PENDING = 'Ya tienes una solicitud pendiente de revisión con este correo.';
 
 /**
  * Respuesta neutra de recuperación de contraseña.
@@ -239,7 +246,7 @@ export class AuthService {
 
     const existing = await this.prisma.accessRequest.findUnique({ where: { email: dto.email } });
     if (existing?.status === 'PENDING') {
-      throw new BadRequestException('Ya tienes una solicitud pendiente de revisión con este correo.');
+      throw new BadRequestException(REQUEST_PENDING);
     }
 
     const consentVersion = await this.settings.legalVersion(dto.country);
@@ -316,14 +323,14 @@ export class AuthService {
     const hash = await hashPassword(temporaryPassword);
 
     const user = await this.prisma.$transaction(async (tx) => {
+      await this.resolveRequest(tx, id, { status: 'ACCEPTED', rejectionReason: null });
+
       // Comprobación dentro de la transacción: entre la solicitud y la aprobación
       // pudo crearse la cuenta por otra vía.
       const duplicate = await tx.user.findUnique({ where: { email: accessRequest.email }, select: { guid: true } });
       if (duplicate) {
         throw new BadRequestException('Ya existe una cuenta con ese correo. Rechaza la solicitud.');
       }
-
-      await tx.accessRequest.update({ where: { id }, data: { status: 'ACCEPTED', rejectionReason: null } });
 
       return tx.user.create({
         data: {
@@ -358,10 +365,7 @@ export class AuthService {
     const accessRequest = await this.pendingRequest(id, country);
     const rejectionReason = reason?.trim() || null;
 
-    await this.prisma.accessRequest.update({
-      where: { id },
-      data: { status: 'REJECTED', rejectionReason },
-    });
+    await this.resolveRequest(this.prisma, id, { status: 'REJECTED', rejectionReason });
 
     this.realtime.emitToRole('request:resolved', { id, action: 'rejected' }, country, 'ADMIN');
 
@@ -376,8 +380,22 @@ export class AuthService {
   private async pendingRequest(id: number, country: Country) {
     const accessRequest = await this.prisma.accessRequest.findFirst({ where: { id, country } });
     if (!accessRequest) throw new NotFoundException('Solicitud no encontrada.');
-    if (accessRequest.status !== 'PENDING') throw new BadRequestException('Esta solicitud ya fue procesada.');
+    if (accessRequest.status !== 'PENDING') throw new BadRequestException(REQUEST_ALREADY_RESOLVED);
     return accessRequest;
+  }
+
+  /**
+   * Anota la decisión sólo si la solicitud sigue pendiente. Si dos administradores la
+   * resuelven a la vez, la segunda decisión no se aplica: ni se crea una cuenta que otro
+   * acaba de rechazar ni la persona recibe dos correos con decisiones opuestas.
+   */
+  private async resolveRequest(
+    db: Prisma.TransactionClient,
+    id: number,
+    decision: { status: 'ACCEPTED' | 'REJECTED'; rejectionReason: string | null },
+  ): Promise<void> {
+    const { count } = await db.accessRequest.updateMany({ where: { id, status: 'PENDING' }, data: decision });
+    if (count === 0) throw new BadRequestException(REQUEST_ALREADY_RESOLVED);
   }
 
   // ── Recuperación de contraseña ───────────────────────────────────────────
@@ -385,11 +403,16 @@ export class AuthService {
   /**
    * Envía un enlace de recuperación. La respuesta es idéntica exista o no la cuenta.
    * Los enlaces anteriores del mismo correo se invalidan para que sólo uno esté vivo.
+   *
+   * El enlace va siempre al correo guardado en la cuenta, nunca al escrito en el formulario:
+   * la base los compara sin distinguir tildes, y enviarlo al escrito pondría en manos de quien
+   * controle `juan@empresá.com` la cuenta de `juan@empresa.com`.
    */
-  async requestPasswordReset(email: string) {
-    const user = await this.prisma.user.findUnique({ where: { email } });
+  async requestPasswordReset(typedEmail: string) {
+    const user = await this.prisma.user.findUnique({ where: { email: typedEmail } });
     if (!user) return PASSWORD_RESET_RESPONSE;
 
+    const { email } = user;
     const token = crypto.randomBytes(32).toString('hex');
 
     await this.prisma.$transaction([
@@ -442,19 +465,34 @@ export class AuthService {
 
   // ── Verificación de correo ───────────────────────────────────────────────
 
-  /** Envía un código de 6 dígitos para probar que el correo pertenece a quien solicita acceso. */
+  /**
+   * Envía un código de 6 dígitos para probar que el correo pertenece a quien solicita acceso.
+   *
+   * Responde con los segundos que faltan para poder pedir otro. Quien lo vuelve a pedir antes
+   * de tiempo —recargó la página o volvió atrás— ya tiene un código válido en su bandeja: no
+   * se le envía otro, pero tampoco se le cierra el paso a escribir el que tiene.
+   */
   async requestVerificationCode(email: string, country: Country) {
     const alreadyExists = await this.prisma.user.findUnique({ where: { email }, select: { guid: true } });
     if (alreadyExists) {
       throw new BadRequestException('Este correo ya tiene una cuenta. Inicia sesión directamente.');
     }
 
+    // Se dice ya en el primer paso, y no después de verificar el correo y rellenar los datos.
+    const request = await this.prisma.accessRequest.findUnique({ where: { email }, select: { status: true } });
+    if (request?.status === 'PENDING') {
+      throw new BadRequestException(REQUEST_PENDING);
+    }
+
     const recent = await this.prisma.emailVerification.findFirst({
       where: { email, createdAt: { gt: new Date(Date.now() - RESEND_DELAY_MS) } },
-      select: { id: true },
+      select: { createdAt: true },
     });
     if (recent) {
-      throw new BadRequestException('Ya te enviamos un código hace menos de un minuto. Revisa tu bandeja de entrada.');
+      return {
+        message: 'Ya te enviamos un código hace menos de un minuto. Revisa tu bandeja de entrada.',
+        resendInSeconds: Math.ceil((recent.createdAt.getTime() + RESEND_DELAY_MS - Date.now()) / 1000),
+      };
     }
 
     // `randomInt` en lugar de `Math.random`: el código es un secreto de un solo uso.
@@ -467,14 +505,21 @@ export class AuthService {
       }),
     ]);
 
-    await this.mail.sendVerificationCode(email, code, country);
-    return { message: 'Te enviamos un código de verificación a tu correo electrónico.' };
+    // El envío no se espera, como en el resto de correos: con el proveedor lento o caído la
+    // respuesta tardaría lo que sus reintentos —cerca de un minuto— para decir lo mismo.
+    this.mail
+      .sendVerificationCode(email, code, country)
+      .catch((error) => this.logger.error('No se pudo enviar el código de verificación', error));
+    return {
+      message: 'Te enviamos un código de verificación a tu correo electrónico.',
+      resendInSeconds: RESEND_DELAY_MS / 1000,
+    };
   }
 
   /**
    * Confirma el código recibido por correo.
    *
-   * Cada fallo se cuenta y, al llegar a {@link MAX_CODE_ATTEMPTS}, el código deja de
+   * Cada intento se cuenta y, al llegar a {@link MAX_CODE_ATTEMPTS}, el código deja de
    * valer. El límite por dirección IP no basta: seis dígitos son pocos y probarlos desde
    * muchas direcciones es barato.
    */
@@ -490,22 +535,24 @@ export class AuthService {
     if (record.expiresAt < new Date()) {
       throw new BadRequestException('El código ha caducado. Solicita uno nuevo.');
     }
-    if (record.attempts >= MAX_CODE_ATTEMPTS) {
-      throw new BadRequestException('Has agotado los intentos con este código. Solicita uno nuevo.');
+
+    // El intento se gasta antes de comparar, y sólo si queda alguno. Mirando el recuento
+    // primero y sumándolo después, cien peticiones a la vez leerían el mismo recuento y
+    // probarían cien códigos.
+    const { count } = await this.prisma.emailVerification.updateMany({
+      where: { id: record.id, attempts: { lt: MAX_CODE_ATTEMPTS } },
+      data: { attempts: { increment: 1 } },
+    });
+    if (count === 0) {
+      throw new BadRequestException(CODE_EXHAUSTED);
     }
 
     if (record.code !== code) {
-      const { attempts } = await this.prisma.emailVerification.update({
-        where: { id: record.id },
-        data: { attempts: { increment: 1 } },
-        select: { attempts: true },
-      });
-
-      const remaining = Math.max(MAX_CODE_ATTEMPTS - attempts, 0);
+      const remaining = Math.max(MAX_CODE_ATTEMPTS - record.attempts - 1, 0);
       throw new BadRequestException(
         remaining > 0
           ? `El código no es correcto. ${plural(remaining, 'Te queda', 'Te quedan')} ${remaining} ${plural(remaining, 'intento', 'intentos')}.`
-          : 'Has agotado los intentos con este código. Solicita uno nuevo.',
+          : CODE_EXHAUSTED,
       );
     }
 

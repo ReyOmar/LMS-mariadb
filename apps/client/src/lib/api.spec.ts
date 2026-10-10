@@ -1,5 +1,5 @@
 import { AxiosError, AxiosHeaders } from 'axios';
-import { fileUrlFor, isLogoutReason, isNetworkFailure, loginUrl, safeNextPath } from './api';
+import { fileUrlFor, isLogoutReason, isNetworkFailure, loginUrl, retryAfterSeconds, safeNextPath } from './api';
 
 /**
  * Cómo se convierte lo que guarda la base en algo que el navegador pueda pedir.
@@ -23,6 +23,11 @@ describe('fileUrlFor', () => {
     expect(fileUrlFor(signed)).toContain(signed);
     // Y no la vuelve a prefijar, que dejaría la firma en una ruta inexistente.
     expect(fileUrlFor(signed)).not.toContain('/download/api/');
+  });
+
+  it('deja intacta una imagen incrustada de un bloque antiguo', () => {
+    const image = 'data:image/png;base64,iVBORw0KGgo=';
+    expect(fileUrlFor(image)).toBe(image);
   });
 
   it('deja intacta una dirección externa', () => {
@@ -54,6 +59,33 @@ describe('isNetworkFailure', () => {
 
   it('tampoco lo es un error que no viene de una petición', () => {
     expect(isNetworkFailure(new Error('otra cosa'))).toBe(false);
+  });
+});
+
+/**
+ * Tras exceder el límite de intentos, el formulario queda bloqueado lo que diga el servidor:
+ * ni más (el usuario esperaría sin motivo) ni menos (cada pulsación sería otro rechazo).
+ */
+describe('retryAfterSeconds', () => {
+  const failure = (status: number, headers: Record<string, string> = {}) => {
+    const config = { headers: new AxiosHeaders() };
+    const response = { status, statusText: '', data: {}, headers, config };
+    return new AxiosError('', 'ERR_BAD_REQUEST', config, null, response);
+  };
+
+  it('toma la espera de la cabecera Retry-After', () => {
+    expect(retryAfterSeconds(failure(429, { 'retry-after': '42' }))).toBe(42);
+  });
+
+  it('sin cabecera legible, espera lo que dura el límite', () => {
+    expect(retryAfterSeconds(failure(429))).toBe(60);
+    expect(retryAfterSeconds(failure(429, { 'retry-after': 'pronto' }))).toBe(60);
+  });
+
+  it('cualquier otro error no obliga a esperar', () => {
+    expect(retryAfterSeconds(failure(401, { 'retry-after': '42' }))).toBe(0);
+    expect(retryAfterSeconds(new AxiosError('Network Error', 'ERR_NETWORK'))).toBe(0);
+    expect(retryAfterSeconds(new Error('otra cosa'))).toBe(0);
   });
 });
 

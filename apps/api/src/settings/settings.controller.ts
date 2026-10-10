@@ -40,12 +40,6 @@ export class SettingsController {
   // El país sale de la sesión: un administrador sólo configura su propia sede.
 
   @Roles('ADMIN')
-  @Get('/full')
-  getFullSettings(@CurrentUser() user: JwtPayload) {
-    return this.settings.getFullSettings(user.country);
-  }
-
-  @Roles('ADMIN')
   @Post()
   updateSettings(@CurrentUser() user: JwtPayload, @Body() dto: UpdateSettingsDto) {
     return this.settings.updateSettings(user.country, dto);

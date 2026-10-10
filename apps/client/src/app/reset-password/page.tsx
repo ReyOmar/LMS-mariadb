@@ -4,7 +4,8 @@ import { useState, Suspense } from 'react';
 import { Lock, ArrowLeft, Loader2, CheckCircle, Eye, EyeOff } from 'lucide-react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
-import api, { errorMessage } from '@/lib/api';
+import api, { errorMessage, retryAfterSeconds } from '@/lib/api';
+import { useCountdown } from '@/hooks/useCountdown';
 import { MIN_PASSWORD_LENGTH, PASSWORD_HINT, passwordProblem } from '@/lib/password';
 
 function NewPasswordForm() {
@@ -16,6 +17,7 @@ function NewPasswordForm() {
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState(false);
   const [error, setError] = useState('');
+  const rateLimit = useCountdown();
   const [showPassword, setShowPassword] = useState(false);
 
   const onSubmit = async (e: React.FormEvent) => {
@@ -35,6 +37,7 @@ function NewPasswordForm() {
       await api.post('/auth/reset-password', { token, newPassword: password });
       setSuccess(true);
     } catch (failure) {
+      rateLimit.start(retryAfterSeconds(failure));
       setError(errorMessage(failure, 'No se pudo restablecer la contraseña.'));
     } finally {
       setLoading(false);
@@ -132,7 +135,7 @@ function NewPasswordForm() {
 
           <button
             type="submit"
-            disabled={loading || !password || !confirmPassword}
+            disabled={loading || !password || !confirmPassword || rateLimit.waiting}
             className="w-full bg-primary text-primary-foreground font-bold py-3 rounded-xl hover:bg-primary/90 transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
           >
             {loading ? (
@@ -140,7 +143,7 @@ function NewPasswordForm() {
                 <Loader2 className="h-4 w-4 animate-spin" /> Actualizando...
               </>
             ) : (
-              'Restablecer contraseña'
+              rateLimit.label('Restablecer contraseña')
             )}
           </button>
 

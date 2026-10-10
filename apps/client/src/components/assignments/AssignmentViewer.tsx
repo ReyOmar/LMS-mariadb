@@ -16,8 +16,7 @@ import api, { errorMessage, uploadFile, fileUrlFor } from '@/lib/api';
 import { fileSizeWarning, formatMb, submissionLimit } from '@/lib/upload-limits';
 import { useConfig } from '@/contexts/ConfigContext';
 import { PageLoader } from '@/components/ui/PageLoader';
-import { isPassing, toScore, MAX_SCORE } from '@/lib/grading';
-import { formatNumber } from '@/lib/country';
+import { isPassing, formatScoreValue, MAX_SCORE } from '@/lib/grading';
 import { useCountry } from '@/contexts/CountryContext';
 import { useRealtimeEvent } from '@/contexts/RealtimeContext';
 import { sanitizeHTML } from '@/lib/sanitize';
@@ -86,11 +85,7 @@ export default function AssignmentViewer({
   onAccessErrorRef.current = onAccessError;
 
   const { country } = useCountry();
-  /** Nota como se escribe en la sede (83,2 en Colombia); «—» si no hay. */
-  const points = (value: unknown) => {
-    const number = toScore(value);
-    return number === null ? '—' : formatNumber(number, country);
-  };
+  const points = (value: unknown) => formatScoreValue(value, country);
 
   const loadState = useCallback(async () => {
     try {
@@ -118,6 +113,8 @@ export default function AssignmentViewer({
   });
 
   const processFile = async (file: File) => {
+    // Con una entrega subiendo no se empieza otra: soltar un archivo encima no la sustituye.
+    if (uploadStatus === 'uploading') return;
     setUploadError(null);
 
     const warning = fileTypeWarning(file.name) ?? fileSizeWarning(file, limit);

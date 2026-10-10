@@ -298,12 +298,7 @@ export class CoursesService {
     }
     const students = await this.enrolledStudents(courseGuid);
     if (updated.status === 'DRAFT' && course.status !== 'DRAFT') {
-      this.realtime.emitToUsers(
-        'course:maintenance',
-        { courseGuid, guid: courseGuid, title: updated.title, status: updated.status },
-        user.country,
-        students,
-      );
+      this.realtime.emitToUsers('course:maintenance', { courseGuid }, user.country, students);
     }
     this.emitToCourseAudience(
       'course:updated',

@@ -1,12 +1,10 @@
-import { IsEmail, IsNotEmpty, IsString, Length, MaxLength } from 'class-validator';
-import { NormalizeEmail } from '../../common/validation/transforms';
+import { IsNotEmpty, IsString, Length } from 'class-validator';
 import { IsCountry } from '../../common/validation/country.validator';
 import type { Country } from '../../common/domain/country';
+import { AccountEmail } from '../../common/validation/account-email';
 
 export class RequestCodeDto {
-  @IsEmail({}, { message: 'El correo electrónico no es válido.' })
-  @MaxLength(255)
-  @NormalizeEmail()
+  @AccountEmail()
   email: string;
 
   /** Sede desde la que se solicita el acceso: el correo sale con su marca. */
@@ -15,9 +13,7 @@ export class RequestCodeDto {
 }
 
 export class ConfirmCodeDto {
-  @IsEmail({}, { message: 'El correo electrónico no es válido.' })
-  @MaxLength(255)
-  @NormalizeEmail()
+  @AccountEmail()
   email: string;
 
   @IsString()

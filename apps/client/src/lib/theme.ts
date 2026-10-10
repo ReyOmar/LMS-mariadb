@@ -1,21 +1,17 @@
 /**
  * Aplicación del tema de la sede al documento.
  *
- * La marca (color, tipografía, redondeo, favicon) es configurable por sede desde el panel
+ * La marca (color, tipografía, redondeo) es configurable por sede desde el panel
  * de administración, así que se aplica en tiempo de ejecución sobre variables CSS. El
  * contexto de configuración trae los datos; esto sólo los pinta. `public/theme-preload.js`
  * repite la parte de colores y redondeo para aplicarla antes de que React monte.
  */
 
-import { absoluteUrl } from './env';
-
 export interface CountryTheme {
-  platformName?: string;
   primaryColor?: string;
   secondaryColor?: string;
   font?: string;
   borderRadius?: number;
-  faviconUrl?: string | null;
 }
 
 /** Tipografías admitidas en el selector del panel. */
@@ -44,7 +40,6 @@ export function fontFamilyOf(font: string): string {
 }
 
 const STYLE_ELEMENT_ID = 'lms-theme';
-const FAVICON_ID = 'lms-favicon';
 
 // ── Color y contraste ───────────────────────────────────────────────────────
 
@@ -243,32 +238,4 @@ export function applyTheme(theme: CountryTheme): void {
     document.head.appendChild(styles);
   }
   styles.textContent = themeCss(theme);
-
-  applyFavicon(theme.faviconUrl);
-
-  if (theme.platformName) document.title = theme.platformName;
-}
-
-/**
- * Sustituye el favicon por el de la sede.
- * Next.js genera el suyo en el HTML del servidor, así que hay que retirarlo para que el
- * navegador no se quede con el primero que encuentra.
- */
-function applyFavicon(key: string | null | undefined): void {
-  const existing = document.getElementById(FAVICON_ID) as HTMLLinkElement | null;
-
-  if (!key) {
-    existing?.remove();
-    return;
-  }
-
-  document.querySelectorAll('link[rel="icon"], link[rel="shortcut icon"]').forEach((element) => {
-    if (element.id !== FAVICON_ID) element.remove();
-  });
-
-  const link = existing ?? document.createElement('link');
-  link.id = FAVICON_ID;
-  link.rel = 'icon';
-  link.href = absoluteUrl(key.startsWith('/') ? key : `/api/storage/download/${key}`);
-  if (!existing) document.head.appendChild(link);
 }

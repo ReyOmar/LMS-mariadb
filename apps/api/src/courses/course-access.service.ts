@@ -3,7 +3,7 @@ import { CourseStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { Country } from '../common/domain/country';
 import { JwtPayload } from '../common/interfaces/jwt-payload.interface';
-import { isResourceUnlocked, waitedTooLong } from './progression';
+import { AWAITING_GRADE, isResourceUnlocked, waitedTooLong } from './progression';
 
 /** Datos mínimos de un curso para decidir si alguien puede verlo o tocarlo. */
 export interface CourseAccessInfo {
@@ -164,7 +164,7 @@ export class CourseAccessService {
         select: { resourceGuid: true },
       }),
       this.prisma.submission.findMany({
-        where: { userGuid, assignmentGuid: { in: guids }, status: { in: ['SUBMITTED', 'IN_REVIEW'] } },
+        where: { userGuid, assignmentGuid: { in: guids }, status: { in: AWAITING_GRADE } },
         select: { assignmentGuid: true, submittedAt: true },
       }),
     ]);

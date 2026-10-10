@@ -1,14 +1,12 @@
-import { IsEmail, IsNotEmpty, IsString, MaxLength } from 'class-validator';
+import { IsNotEmpty, IsString, MaxLength } from 'class-validator';
 import { MAX_PASSWORD_LENGTH } from '../../common/domain/password';
-import { NormalizeEmail } from '../../common/validation/transforms';
 import { IsCountry } from '../../common/validation/country.validator';
 import { Country } from '../../common/domain/country';
+import { AccountEmail } from '../../common/validation/account-email';
 
 export class LoginDto {
-  @IsEmail({}, { message: 'El correo electrónico no es válido.' })
   @IsNotEmpty({ message: 'El correo es obligatorio.' })
-  @MaxLength(255)
-  @NormalizeEmail()
+  @AccountEmail()
   email: string;
 
   @IsString()

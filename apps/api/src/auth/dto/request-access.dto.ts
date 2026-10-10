@@ -1,17 +1,16 @@
-import { Equals, IsEmail, IsIn, IsNotEmpty, IsString, MaxLength } from 'class-validator';
-import { NormalizeEmail, StrictBoolean, Trim } from '../../common/validation/transforms';
+import { Equals, IsIn, IsNotEmpty, IsString, MaxLength } from 'class-validator';
+import { StrictBoolean, Trim } from '../../common/validation/transforms';
 import { IsCountry } from '../../common/validation/country.validator';
 import { Country } from '../../common/domain/country';
 import { UserRole } from '../../common/interfaces/jwt-payload.interface';
+import { AccountEmail } from '../../common/validation/account-email';
 
 /** Roles que un visitante puede pedir por sí mismo. Un ADMIN sólo lo crea otro administrador. */
 const REQUESTABLE_ROLES: UserRole[] = ['STUDENT', 'TEACHER'];
 
 export class RequestAccessDto {
-  @IsEmail({}, { message: 'El correo electrónico no es válido.' })
   @IsNotEmpty({ message: 'El correo es obligatorio.' })
-  @MaxLength(255)
-  @NormalizeEmail()
+  @AccountEmail()
   email: string;
 
   @IsString()

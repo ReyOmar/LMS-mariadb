@@ -8,6 +8,12 @@ import { readLocal, writeLocal } from '@/lib/local-storage';
 const NOTICE_KEY = 'lms_storage_notice';
 
 /**
+ * Alto que ocupa el aviso, con su margen. Lo leen el final de la página (`globals.css`) y lo
+ * que se fija abajo, como la barra de cambios sin guardar, para colocarse por encima.
+ */
+const NOTICE_SPACE = '--storage-notice-space';
+
+/**
  * Aviso sobre lo que el campus guarda en el navegador.
  *
  * Todo lo que se guarda es imprescindible para funcionar —sesión, preferencias, apariencia de
@@ -15,8 +21,8 @@ const NOTICE_KEY = 'lms_storage_notice';
  * rechazarlo: se informa, se enlaza el detalle y se recuerda que ya se leyó. Es la
  * advertencia visible que piden los Lineamientos del Aviso de Privacidad en México.
  *
- * En el móvil es una franja compacta pegada al borde inferior, y mientras se ve reserva su
- * alto al final de la página para no tapar los botones de abajo, como «Entrar».
+ * En el móvil es una franja compacta pegada al borde inferior. Mientras se ve, publica su
+ * alto en `--storage-notice-space` para no tapar los botones de abajo, como «Entrar».
  */
 export function StorageNotice() {
   // Se decide tras montar: en el servidor no hay almacenamiento que consultar.
@@ -30,15 +36,14 @@ export function StorageNotice() {
   useEffect(() => {
     const notice = noticeRef.current;
     if (!visible || !notice) return;
-    const reserveSpace = () => {
-      document.body.style.paddingBottom = `${notice.offsetHeight + 16}px`;
-    };
+    const root = document.documentElement.style;
+    const reserveSpace = () => root.setProperty(NOTICE_SPACE, `${notice.offsetHeight + 16}px`);
     reserveSpace();
     const observer = new ResizeObserver(reserveSpace);
     observer.observe(notice);
     return () => {
       observer.disconnect();
-      document.body.style.paddingBottom = '';
+      root.removeProperty(NOTICE_SPACE);
     };
   }, [visible]);
 

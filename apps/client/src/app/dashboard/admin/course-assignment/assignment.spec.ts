@@ -52,6 +52,10 @@ describe('filterCourses', () => {
     expect(filterCourses(courses, '  NORMATIVA ', 'all').map((c) => c.guid)).toEqual(['c2']);
     expect(filterCourses(courses, 'normativa', 'assigned')).toEqual([]);
   });
+
+  it('busca sin distinguir tildes, como el resto del campus', () => {
+    expect(filterCourses(courses, 'primeros auxílios', 'all').map((c) => c.guid)).toEqual(['c3']);
+  });
 });
 
 /**

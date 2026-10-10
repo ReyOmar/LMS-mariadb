@@ -1,4 +1,4 @@
-import { PrismaService } from '../prisma/prisma.service';
+import { Prisma } from '@prisma/client';
 
 /**
  * Marca un recurso como completado por el alumno y actualiza el recuento de su matrícula.
@@ -8,7 +8,7 @@ import { PrismaService } from '../prisma/prisma.service';
  * debe fallar por la restricción única.
  */
 export async function recordCompletion(
-  prisma: PrismaService,
+  prisma: Prisma.TransactionClient,
   userGuid: string,
   resourceGuid: string,
   courseGuid: string,
@@ -29,7 +29,17 @@ export async function recordCompletion(
  * más allá de la siguiente llamada. Cuesta un puñado de lecturas por índice (≈1 ms).
  * Quien añada o retire progreso tiene que llamarla después.
  */
-export function refreshCompletedResources(prisma: PrismaService, userGuid: string, courseGuid: string) {
+export function refreshCompletedResources(prisma: Prisma.TransactionClient, userGuid: string, courseGuid: string) {
+  return recount(prisma, Prisma.sql`m.usuario_guid = ${userGuid} AND m.curso_guid = ${courseGuid}`);
+}
+
+/** Lo mismo para varias matrículas a la vez, por su identificador. */
+export function refreshCompletedResourcesOf(prisma: Prisma.TransactionClient, enrollmentIds: number[]) {
+  return recount(prisma, Prisma.sql`m.id IN (${Prisma.join(enrollmentIds)})`);
+}
+
+/** Recuenta las matrículas (alias `m`) que cumplen `enrollments`. */
+function recount(prisma: Prisma.TransactionClient, enrollments: Prisma.Sql) {
   return prisma.$executeRaw`
     UPDATE lms_matriculas m
     SET m.recursos_completados = (
@@ -39,5 +49,5 @@ export function refreshCompletedResources(prisma: PrismaService, userGuid: strin
       JOIN lms_modulos mo ON mo.guid = r.modulo_guid
       WHERE p.usuario_guid = m.usuario_guid AND mo.curso_guid = m.curso_guid
     )
-    WHERE m.usuario_guid = ${userGuid} AND m.curso_guid = ${courseGuid}`;
+    WHERE ${enrollments}`;
 }

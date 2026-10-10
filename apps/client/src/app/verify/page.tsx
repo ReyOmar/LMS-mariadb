@@ -4,7 +4,8 @@ import { FormEvent, Suspense, useCallback, useEffect, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { ArrowLeft, BadgeCheck, Search, ShieldAlert, ShieldCheck } from 'lucide-react';
-import api, { errorMessage } from '@/lib/api';
+import api, { errorMessage, retryAfterSeconds } from '@/lib/api';
+import { useCountdown } from '@/hooks/useCountdown';
 import { formatScore } from '@/lib/grading';
 import { PageLoader } from '@/components/ui/PageLoader';
 import { longDate } from '@/lib/dates';
@@ -62,25 +63,33 @@ function Verifier() {
   const [result, setResult] = useState<Result | null>(null);
   const [checking, setChecking] = useState(false);
   const [error, setError] = useState('');
+  const rateLimit = useCountdown();
+  const startWait = rateLimit.start;
 
-  const verify = useCallback(async (codeToCheck: string) => {
-    const cleaned = codeToCheck.trim();
-    if (!cleaned) return;
+  const verify = useCallback(
+    async (codeToCheck: string) => {
+      const cleaned = codeToCheck.trim();
+      if (!cleaned) return;
 
-    setChecking(true);
-    setError('');
-    setResult(null);
-    try {
-      const { data } = await api.get<VerifyResponse>(`/certificates/verify/${encodeURIComponent(cleaned)}`);
-      setResult(
-        data.valid ? { status: 'valid', certificate: data.certificate } : { status: 'invalid', message: data.message },
-      );
-    } catch (failure) {
-      setError(errorMessage(failure, 'No se pudo comprobar el certificado.'));
-    } finally {
-      setChecking(false);
-    }
-  }, []);
+      setChecking(true);
+      setError('');
+      setResult(null);
+      try {
+        const { data } = await api.get<VerifyResponse>(`/certificates/verify/${encodeURIComponent(cleaned)}`);
+        setResult(
+          data.valid
+            ? { status: 'valid', certificate: data.certificate }
+            : { status: 'invalid', message: data.message },
+        );
+      } catch (failure) {
+        startWait(retryAfterSeconds(failure));
+        setError(errorMessage(failure, 'No se pudo comprobar el certificado.'));
+      } finally {
+        setChecking(false);
+      }
+    },
+    [startWait],
+  );
 
   // Permite enlazar directamente desde un QR o un correo: /verify?code=CERT-...
   useEffect(() => {
@@ -138,10 +147,10 @@ function Verifier() {
             </div>
             <button
               type="submit"
-              disabled={checking || !code.trim()}
+              disabled={checking || !code.trim() || rateLimit.waiting}
               className="h-13 rounded-2xl bg-primary px-8 py-4 font-bold text-primary-foreground hover:bg-primary/90 disabled:opacity-60 transition-colors"
             >
-              {checking ? 'Comprobando…' : 'Verificar'}
+              {checking ? 'Comprobando…' : rateLimit.label('Verificar')}
             </button>
           </form>
 

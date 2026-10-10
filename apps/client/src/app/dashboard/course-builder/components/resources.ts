@@ -6,21 +6,18 @@ import { plural } from '@/lib/text';
  * Vocabulario del constructor de cursos.
  *
  * Lo que aquí se llama «bloque» es un recurso visto desde el editor, donde el usuario
- * elige entre cinco cosas que no coinciden con los cinco tipos de la base: una imagen se
- * guarda como enlace y un cuestionario como tarea marcada.
+ * elige entre cuatro cosas que no coinciden con los tipos de la base: un cuestionario se
+ * guarda como tarea marcada.
  *
  * Cómo se lee un recurso ya guardado —si su enlace es una imagen, un vídeo o una página—
  * vive en `@/lib/resources`, porque de eso también depende la pantalla del alumno.
  */
 
 /** Cómo se presenta un bloque en el constructor. No coincide con `ResourceType`. */
-export type ResourceKind = 'PARAGRAPH' | 'IMAGE' | 'ASSIGNMENT' | 'QUIZ' | 'LINK';
-
-/** Tipos que puede tener un bloque ya guardado (la imagen se almacena como enlace). */
-export type StoredResourceKind = Exclude<ResourceKind, 'IMAGE'>;
+export type ResourceKind = 'PARAGRAPH' | 'ASSIGNMENT' | 'QUIZ' | 'LINK';
 
 /** Cómo debe mostrarse un recurso ya guardado. */
-export function resourceKindOf(resource: Pick<Resource, 'type' | 'title'>): StoredResourceKind {
+export function resourceKindOf(resource: Pick<Resource, 'type' | 'title'>): ResourceKind {
   if (resource.type === 'LINK') return 'LINK';
   if (resource.type === 'ASSIGNMENT') return isQuiz(resource) ? 'QUIZ' : 'ASSIGNMENT';
   return 'PARAGRAPH';
@@ -31,8 +28,6 @@ export function newResource(type: ResourceKind): { type: ResourceType; title: st
   switch (type) {
     case 'PARAGRAPH':
       return { type: 'TEXT', title: 'Bloque de texto' };
-    case 'IMAGE':
-      return { type: 'LINK', title: 'Imagen' };
     case 'LINK':
       return { type: 'LINK', title: 'Video' };
     case 'QUIZ':

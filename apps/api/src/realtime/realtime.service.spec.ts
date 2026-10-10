@@ -110,3 +110,82 @@ describe('RealtimeService · avisos al personal de un curso', () => {
     expect(received(adminMX)).toBe(0);
   });
 });
+
+/**
+ * Lo que pasa cuando el servidor corta una sesión (cuenta borrada, cambio de rol, entrada
+ * desde otro dispositivo). Tiene que dejar el mismo rastro que un cierre del navegador: si
+ * no, la persona seguiría «en línea» y sus cursos «en edición» hasta reiniciar la API.
+ */
+describe('RealtimeService · cierre de sesiones', () => {
+  let service: RealtimeService;
+
+  beforeEach(() => {
+    service = new RealtimeService();
+  });
+
+  afterEach(() => service.onModuleDestroy());
+
+  const editorCO = { guid: 'profe-co', name: 'Carlos Pérez', role: 'TEACHER' as const, country: 'COLOMBIA' as const };
+
+  it('al revocar la sesión se anuncia la desconexión y se libera el aviso de edición', () => {
+    const admin = fakeStream();
+    service.register(sessionFor('ADMIN', 'COLOMBIA', 'admin-co'), admin.res as never);
+    service.register(sessionFor('TEACHER', 'COLOMBIA', 'profe-co'), fakeStream().res as never);
+    service.acquireCourseEdit('curso-co', editorCO);
+
+    service.revokeSession('profe-co', 'account_deleted');
+
+    expect(admin.events).toContainEqual({ event: 'presence:update', data: { guid: 'profe-co', status: 'offline' } });
+    expect(admin.events).toContainEqual({ event: 'course:editing-released', data: { courseGuid: 'curso-co' } });
+    expect(service.acquireCourseEdit('curso-co', { ...editorCO, guid: 'otro-profe' }).guid).toBe('otro-profe');
+  });
+
+  it('cada aviso de presencia lleva sólo el cambio, no la lista entera de la sede', () => {
+    const admin = fakeStream();
+    service.register(sessionFor('ADMIN', 'COLOMBIA', 'admin-co'), admin.res as never);
+    service.register(sessionFor('STUDENT', 'COLOMBIA', 'alumno-co'), fakeStream().res as never);
+
+    expect(admin.events).toContainEqual({ event: 'presence:update', data: { guid: 'alumno-co', status: 'online' } });
+  });
+
+  it('corta el flujo de un cliente que dejó de leer, y lo da por desconectado', () => {
+    const admin = fakeStream();
+    const stalled = fakeStream();
+    service.register(sessionFor('ADMIN', 'COLOMBIA', 'admin-co'), admin.res as never);
+    service.register(sessionFor('STUDENT', 'COLOMBIA', 'alumno-co'), stalled.res as never);
+    Object.assign(stalled.res, { writableLength: 2 * 1024 * 1024 });
+
+    service.emitToCountry('config:updated', {}, 'COLOMBIA');
+
+    expect(stalled.events.some((e) => e.event === 'config:updated')).toBe(false);
+    expect(admin.events).toContainEqual({ event: 'presence:update', data: { guid: 'alumno-co', status: 'offline' } });
+  });
+});
+
+/**
+ * Con más pestañas que el máximo, la más antigua cede su flujo. Tiene que saberlo, porque
+ * si se reconectara sola echaría a otra y las pestañas se turnarían sin fin.
+ */
+describe('RealtimeService · pestañas de más', () => {
+  let service: RealtimeService;
+
+  beforeEach(() => {
+    service = new RealtimeService();
+  });
+
+  afterEach(() => service.onModuleDestroy());
+
+  it('avisa a la pestaña más antigua de que otra ocupó su sitio, sin darla por desconectada', () => {
+    const tabs = Array.from({ length: 6 }, () => fakeStream());
+    const admin = fakeStream();
+    service.register(sessionFor('ADMIN', 'COLOMBIA', 'admin-co'), admin.res as never);
+    tabs.forEach((tab) => service.register(sessionFor('STUDENT', 'COLOMBIA', 'alumno-co'), tab.res as never));
+
+    expect(tabs[0].events.map((e) => e.event)).toContain('stream:superseded');
+    expect(tabs.slice(1).some((tab) => tab.events.some((e) => e.event === 'stream:superseded'))).toBe(false);
+    expect(admin.events).not.toContainEqual({
+      event: 'presence:update',
+      data: { guid: 'alumno-co', status: 'offline' },
+    });
+  });
+});

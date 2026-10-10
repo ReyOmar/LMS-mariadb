@@ -24,8 +24,8 @@ import { useCountry } from '@/contexts/CountryContext';
 import { useRealtimeEvent } from '@/contexts/RealtimeContext';
 import api, { errorMessage } from '@/lib/api';
 import { formatNumber } from '@/lib/country';
-import { DEFAULT_PASSING_SCORE, MAX_SCORE, scoreColor } from '@/lib/grading';
-import { Donut, BarsByRange, BarsByThreshold, COLOR } from '@/components/ui/charts';
+import { MAX_SCORE, scoreColor } from '@/lib/grading';
+import { Donut, BarsByRange, BarsByThreshold } from '@/components/ui/charts';
 import { useAlerts } from '@/contexts/AlertContext';
 import { useDebounce } from '@/hooks/useDebounce';
 import type { SubmissionToGrade } from '@/types/models';
@@ -41,7 +41,9 @@ import {
   type CourseQuizSummary,
 } from './components/results';
 import { dateTime } from '@/lib/dates';
-import { initials, plural } from '@/lib/text';
+import { initials, matchesSearch, plural } from '@/lib/text';
+import { useCurrentList } from '@/hooks/useCurrentList';
+import { LoadMoreButton } from '@/components/ui/LoadMoreButton';
 
 /** Cuántos caracteres del título caben en una etiqueta de la gráfica. */
 const MAX_LABEL_LENGTH = 15;
@@ -72,6 +74,7 @@ export default function QuizResults() {
   const [cursor, setCursor] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadingAttempts, setLoadingAttempts] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
 
   // Curso abierto y filtros de la lista
   const [openCourse, setOpenCourse] = useState<string | null>(null);
@@ -116,57 +119,72 @@ export default function QuizResults() {
     [openCourse, filter, appliedSearch],
   );
 
+  const list = useCurrentList();
+
   useEffect(() => {
+    const isCurrent = list.start();
     if (!openCourse) return;
-    let current = true;
     setLoadingAttempts(true);
 
     fetchAttempts()
       .then(({ data }) => {
-        if (!current) return;
+        if (!isCurrent()) return;
         setSubmissions(data.submissions ?? []);
         setCursor(data.cursor);
       })
       .catch((error) => {
-        if (current) notify.error('No se pudieron cargar los intentos', errorMessage(error));
+        if (isCurrent()) notify.error('No se pudieron cargar los intentos', errorMessage(error));
       })
       .finally(() => {
-        if (current) setLoadingAttempts(false);
+        if (isCurrent()) setLoadingAttempts(false);
       });
-
-    // Una respuesta tardía de la búsqueda anterior pisaría la lista recién pedida.
-    return () => {
-      current = false;
-    };
-  }, [openCourse, fetchAttempts, notify]);
+  }, [openCourse, fetchAttempts, notify, list]);
 
   /**
    * Trae la siguiente tanda de alumnos sin perder lo que ya está en pantalla.
    * Se pide desde la marca del último recibido, no desde un número de filas: el coste no
    * crece según se baja y nadie se repite ni se cuela si entretanto llega otro intento.
    */
-  const loadMore = useCallback(async () => {
-    if (!cursor) return;
+  const loadMore = async () => {
+    if (!cursor || loadingMore) return;
+    const isCurrent = list.extend();
+    setLoadingMore(true);
     try {
       const { data } = await fetchAttempts(cursor);
+      if (!isCurrent()) return;
       setSubmissions((prev) => [...prev, ...(data.submissions ?? [])]);
       setCursor(data.cursor);
     } catch (error) {
       notify.error('No se pudieron cargar más intentos', errorMessage(error));
+    } finally {
+      setLoadingMore(false);
     }
-  }, [cursor, fetchAttempts, notify]);
+  };
 
   /** Vuelve a pedir las cifras y la primera página, sin el indicador de carga. */
   const reloadSilently = useCallback(() => {
     void loadSummary();
     if (!openCourse) return;
+    // La misma lista vuelta a pedir, no otra: con `start` invalidaría la carga en curso, que
+    // ya no apagaría su indicador.
+    const isCurrent = list.extend();
     void fetchAttempts()
       .then(({ data }) => {
+        if (!isCurrent()) return;
         setSubmissions(data.submissions ?? []);
         setCursor(data.cursor);
       })
       .catch(() => undefined);
-  }, [loadSummary, openCourse, fetchAttempts]);
+  }, [loadSummary, openCourse, fetchAttempts, list]);
+
+  /** Vuelve al directorio sin dejar la lista del curso anterior para el siguiente que se abra. */
+  const backToCourses = () => {
+    setOpenCourse(null);
+    setSubmissions([]);
+    setCursor(null);
+    setSearch('');
+    setFilter('all');
+  };
 
   useRealtimeEvent('submission:graded', reloadSilently);
 
@@ -232,23 +250,17 @@ export default function QuizResults() {
       );
     }
 
-    const visibleCourses = courses.filter((c) => c.title.toLowerCase().includes(courseSearch.toLowerCase()));
+    const visibleCourses = courses.filter((c) => matchesSearch(c.title, courseSearch));
 
     const global = globalStats(courses);
-
-    const globalBreakdown =
-      global.assessed > 0
-        ? [
-            { name: 'Aprobados', value: global.passedCount, color: COLOR.passed },
-            { name: 'Reprobados', value: global.failed, color: COLOR.failed },
-          ]
-        : [{ name: 'Sin datos', value: 1, color: COLOR.empty }];
+    const globalBreakdown = resultBreakdown(global.passedCount, global.failed);
 
     const barsByCourse = courses
       .filter((c) => c.assessed > 0)
       .map((c) => ({
         name: c.title.length > MAX_LABEL_LENGTH ? c.title.substring(0, MAX_LABEL_LENGTH) + '...' : c.title,
         average: c.average,
+        threshold: c.threshold,
         guid: c.courseGuid,
       }));
 
@@ -317,12 +329,7 @@ export default function QuizResults() {
             </h3>
             <div className="h-[200px] w-full">
               {barsByCourse.length > 0 ? (
-                <BarsByThreshold
-                  data={barsByCourse}
-                  dataKey="average"
-                  label="Promedio"
-                  threshold={DEFAULT_PASSING_SCORE}
-                />
+                <BarsByThreshold data={barsByCourse} dataKey="average" label="Promedio" />
               ) : (
                 <div className="h-full flex items-center justify-center text-muted-foreground text-sm">
                   No hay datos suficientes para calcular promedios.
@@ -433,11 +440,8 @@ export default function QuizResults() {
   return (
     <div className="animate-in slide-in-from-right-4 duration-500">
       <button
-        onClick={() => {
-          setOpenCourse(null);
-          setSearch('');
-          setFilter('all');
-        }}
+        type="button"
+        onClick={backToCourses}
         className="mb-6 flex items-center gap-2 text-sm font-bold text-muted-foreground hover:text-foreground transition-colors"
       >
         <ArrowLeft className="h-4 w-4" /> Volver a los cursos
@@ -756,13 +760,9 @@ export default function QuizResults() {
           })}
 
           {cursor && (
-            <button
-              type="button"
-              onClick={loadMore}
-              className="w-full rounded-xl border border-border px-4 py-3 text-sm font-bold hover:bg-muted transition-colors"
-            >
+            <LoadMoreButton loading={loadingMore} onClick={loadMore} className="w-full px-4 py-3 text-sm">
               Ver más alumnos
-            </button>
+            </LoadMoreButton>
           )}
         </div>
       )}

@@ -3,7 +3,14 @@
 import React, { ReactNode, createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { apiUrl, clearSession, readToken, redirectToLogin, type LogoutReason } from '@/lib/api';
 import { connectStream } from '@/lib/realtime/stream';
-import { CourseEditor, RealtimeEvent, RealtimeMessage, batchKey } from '@/lib/realtime/events';
+import {
+  CourseEditor,
+  PresenceChange,
+  RealtimeEvent,
+  RealtimeMessage,
+  batchKey,
+  withPresence,
+} from '@/lib/realtime/events';
 import { useSession } from './SessionContext';
 
 /**
@@ -24,18 +31,16 @@ interface RealtimeContextType {
   subscribe: (event: RealtimeEvent, listener: Listener) => () => void;
   /** Se suscribe a la recuperación del flujo tras un corte y devuelve la función para darse de baja. */
   onReconnect: (listener: () => void) => () => void;
-  onlineUsers: string[];
+  onlineUsers: ReadonlySet<string>;
   coursesBeingEdited: Record<string, CourseEditor>;
-  coursesUnderMaintenance: Record<string, string>;
 }
 
 const RealtimeContext = createContext<RealtimeContextType>({
   connected: false,
   subscribe: () => () => undefined,
   onReconnect: () => () => undefined,
-  onlineUsers: [],
+  onlineUsers: new Set(),
   coursesBeingEdited: {},
-  coursesUnderMaintenance: {},
 });
 
 /**
@@ -65,9 +70,8 @@ const REASON_TO_LOGOUT: Record<string, LogoutReason> = {
 export function RealtimeProvider({ children }: { children: ReactNode }) {
   const { authenticated } = useSession();
   const [connected, setConnected] = useState(false);
-  const [onlineUsers, setOnlineUsers] = useState<string[]>([]);
+  const [onlineUsers, setOnlineUsers] = useState<ReadonlySet<string>>(() => new Set());
   const [coursesBeingEdited, setCoursesBeingEdited] = useState<Record<string, CourseEditor>>({});
-  const [coursesUnderMaintenance, setCoursesUnderMaintenance] = useState<Record<string, string>>({});
 
   const listeners = useRef(new Map<RealtimeEvent, Set<Listener>>());
   const timers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
@@ -109,10 +113,14 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
   /** Estado que el propio contexto mantiene, sin que cada pantalla tenga que suscribirse. */
   const applyInternalState = useCallback((message: RealtimeMessage) => {
     switch (message.event) {
-      case 'presence:sync':
-      case 'presence:update': {
+      case 'presence:sync': {
         const data = message.data as { onlineUsers?: string[] };
-        if (Array.isArray(data?.onlineUsers)) setOnlineUsers(data.onlineUsers);
+        if (Array.isArray(data?.onlineUsers)) setOnlineUsers(new Set(data.onlineUsers));
+        break;
+      }
+      case 'presence:update': {
+        const change = message.data as PresenceChange;
+        setOnlineUsers((online) => withPresence(online, change));
         break;
       }
       case 'course:editing': {
@@ -133,23 +141,6 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         setCoursesBeingEdited((message.data as Record<string, CourseEditor>) ?? {});
         break;
       }
-      case 'course:maintenance': {
-        const data = message.data as { courseGuid: string; title: string };
-        setCoursesUnderMaintenance((prev) => ({ ...prev, [data.courseGuid]: data.title }));
-        break;
-      }
-      case 'course:updated': {
-        const data = message.data as { guid?: string; status?: string };
-        const guid = data?.guid;
-        if (data?.status === 'PUBLISHED' && guid) {
-          setCoursesUnderMaintenance((prev) => {
-            const next = { ...prev };
-            delete next[guid];
-            return next;
-          });
-        }
-        break;
-      }
       default:
         break;
     }
@@ -167,9 +158,8 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
     // Sin sesión no hay nada que escuchar: la portada y el login no abren flujo.
     if (!authenticated || !token) {
       setConnected(false);
-      setOnlineUsers([]);
+      setOnlineUsers(new Set());
       setCoursesBeingEdited({});
-      setCoursesUnderMaintenance({});
       return;
     }
 
@@ -225,8 +215,8 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const value = useMemo(
-    () => ({ connected, subscribe, onReconnect, onlineUsers, coursesBeingEdited, coursesUnderMaintenance }),
-    [connected, subscribe, onReconnect, onlineUsers, coursesBeingEdited, coursesUnderMaintenance],
+    () => ({ connected, subscribe, onReconnect, onlineUsers, coursesBeingEdited }),
+    [connected, subscribe, onReconnect, onlineUsers, coursesBeingEdited],
   );
 
   return <RealtimeContext.Provider value={value}>{children}</RealtimeContext.Provider>;

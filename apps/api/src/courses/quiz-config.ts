@@ -102,6 +102,18 @@ export function quizConfigForEditor(stored: string | null): string | null {
   }
 }
 
+/**
+ * Marca con la que el constructor de cursos (`quizTitleOf` en el cliente) empieza el título
+ * guardado de un cuestionario. Sólo sirve al cliente para clasificarlo: la API lo reconoce
+ * por su `quizConfig`, y quita la marca antes de enseñar el título a una persona.
+ */
+const QUIZ_MARKER = /^\[QUIZ\]\s*/;
+
+/** Título del cuestionario tal y como lo lee una persona: sin la marca interna. */
+export function quizDisplayTitle(storedTitle: string): string {
+  return storedTitle.replace(QUIZ_MARKER, '');
+}
+
 /** Resumen que acompaña a la ficha del curso del alumno: sin preguntas ni respuestas. */
 export function quizOverview(config: QuizConfig): QuizOverview {
   return {

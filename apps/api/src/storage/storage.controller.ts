@@ -11,7 +11,7 @@ import {
   Req,
   Res,
 } from '@nestjs/common';
-import { Throttle } from '@nestjs/throttler';
+import { SkipThrottle, Throttle } from '@nestjs/throttler';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import * as path from 'path';
 import { StorageService, ACTIVE_CONTENT_FORMATS } from './storage.service';
@@ -72,8 +72,13 @@ export class StorageController {
    *  - Material de marca (`logos/`, `portadas/`, `fondos/`, `avatars/`): acceso libre.
    *  - Entregas, certificados, firmas y material de curso: exigen `exp` y `sig`, que
    *    genera la API sólo para quien tiene derecho a ver el archivo y caducan en una hora.
+   *
+   * No cuenta para el límite de peticiones: sin cabecera no hay usuario por el que contar,
+   * y por IP una oficina que abre un catálogo de portadas o avanza por un vídeo (una
+   * petición por tramo) agotaría el cupo de todos en segundos.
    */
   @Public()
+  @SkipThrottle()
   @Get('/download/*')
   async downloadFile(
     @Req() req: FastifyRequest,

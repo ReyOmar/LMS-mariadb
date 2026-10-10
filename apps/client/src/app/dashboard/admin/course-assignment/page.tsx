@@ -39,6 +39,9 @@ import {
   type AssignmentFilter,
   type EnrollmentFailure,
 } from './assignment';
+import { useCurrentList } from '@/hooks/useCurrentList';
+import { useInFlight } from '@/hooks/useInFlight';
+import { LoadMoreButton } from '@/components/ui/LoadMoreButton';
 
 interface Person {
   guid: string;
@@ -121,6 +124,7 @@ export default function CourseAssignmentPage() {
   const [totalEnrolled, setTotalEnrolled] = useState(0);
   const [enrolledCursor, setEnrolledCursor] = useState<string | null>(null);
   const [loadingEnrollments, setLoadingEnrollments] = useState(false);
+  const [loadingMoreEnrolled, setLoadingMoreEnrolled] = useState(false);
   const [studentSearch, setStudentSearch] = useState('');
   const debouncedStudentSearch = useDebounce(studentSearch, 300);
   const appliedStudentSearch = candidateSearch(debouncedStudentSearch);
@@ -128,46 +132,56 @@ export default function CourseAssignmentPage() {
   const [selected, setSelected] = useState<Map<string, Candidate>>(new Map());
   const [batchProgress, setBatchProgress] = useState<{ done: number; total: number } | null>(null);
   const enrollingBatch = batchProgress !== null;
+  /** Alumno que se está matriculando suelto: su botón espera para no enviar el alta dos veces. */
+  const enrolling = useInFlight<string>();
   const [teacherSearch, setTeacherSearch] = useState('');
   const appliedTeacherSearch = useDebounce(teacherSearch, 300);
   // Resultado de buscar en el servidor; sin búsqueda se muestran los examinadores ya cargados.
   const [teacherMatches, setTeacherMatches] = useState<Person[] | null>(null);
+  const [changingTeacher, setChangingTeacher] = useState(false);
 
   const { user } = useSession();
   const { notify, showAlert, showConfirmation } = useAlerts();
 
+  // Dentro del mismo curso también se cruzan respuestas: una búsqueda anterior que tarda más,
+  // o una página de «Ver más» que llega tras recargar.
+  const enrolledList = useCurrentList();
+  const candidateList = useCurrentList();
+
   const loadEnrollments = useCallback(
     async (courseGuid: string) => {
+      const isCurrent = enrolledList.start();
       setLoadingEnrollments(true);
       try {
         const { data } = await api.get<EnrolledResponse>(`/enrollments/${courseGuid}`);
-        if (currentCourse.current !== courseGuid) return;
+        if (currentCourse.current !== courseGuid || !isCurrent()) return;
         setEnrolledStudents(data.enrolledStudents ?? []);
         setTotalEnrolled(data.total ?? 0);
         setEnrolledCursor(data.cursor);
       } catch (error) {
         notify.error('No se pudieron cargar las matrículas', errorMessage(error));
       } finally {
-        if (currentCourse.current === courseGuid) setLoadingEnrollments(false);
+        if (isCurrent()) setLoadingEnrollments(false);
       }
     },
-    [notify],
+    [notify, enrolledList],
   );
 
   /** Alumnos de la sede que aún no están en el curso, según lo que se busque. */
   const loadCandidates = useCallback(
     async (courseGuid: string, search: string) => {
+      const isCurrent = candidateList.start();
       try {
         const { data } = await api.get<Candidate[]>(`/enrollments/${courseGuid}/candidates`, {
           params: { search: search.trim() || undefined },
         });
-        if (currentCourse.current !== courseGuid) return;
+        if (currentCourse.current !== courseGuid || !isCurrent()) return;
         setCandidates(Array.isArray(data) ? data : []);
       } catch (error) {
         notify.error('No se pudieron cargar los estudiantes', errorMessage(error));
       }
     },
-    [notify],
+    [notify, candidateList],
   );
 
   const selectCourse = useCallback(
@@ -246,16 +260,20 @@ export default function CourseAssignmentPage() {
   /** Siguiente tanda de matriculados, desde la marca de la última fila recibida. */
   const loadMoreEnrolled = async () => {
     const courseGuid = selectedCourseGuid;
-    if (!courseGuid || !enrolledCursor) return;
+    if (!courseGuid || !enrolledCursor || loadingMoreEnrolled) return;
+    const isCurrent = enrolledList.extend();
+    setLoadingMoreEnrolled(true);
     try {
       const { data } = await api.get<EnrolledResponse>(`/enrollments/${courseGuid}`, {
         params: { cursor: enrolledCursor },
       });
-      if (currentCourse.current !== courseGuid) return;
+      if (currentCourse.current !== courseGuid || !isCurrent()) return;
       setEnrolledStudents((prev) => [...prev, ...(data.enrolledStudents ?? [])]);
       setEnrolledCursor(data.cursor);
     } catch (error) {
       notify.error('No se pudieron cargar más matriculados', errorMessage(error));
+    } finally {
+      setLoadingMoreEnrolled(false);
     }
   };
 
@@ -295,24 +313,25 @@ export default function CourseAssignmentPage() {
       return next;
     });
 
-  const enrollStudent = async (candidate: Candidate) => {
-    const courseGuid = selectedCourseGuid;
-    if (!courseGuid) return;
-    if (candidate.certified && !(await confirmRestart([fullName(candidate)]))) return;
-    try {
-      await api.post(`/enrollments/${courseGuid}`, { userGuid: candidate.guid, confirmRestart: candidate.certified });
-      notify.success('Estudiante matriculado');
-      dropCandidate(candidate.guid);
-      void loadEnrollments(courseGuid);
-    } catch (error) {
-      notify.error(errorMessage(error, 'No se pudo matricular al estudiante.'));
-      if (isAlreadyEnrolled(error)) {
+  const enrollStudent = (candidate: Candidate) =>
+    enrolling.run(candidate.guid, async () => {
+      const courseGuid = selectedCourseGuid;
+      if (!courseGuid) return;
+      if (candidate.certified && !(await confirmRestart([fullName(candidate)]))) return;
+      try {
+        await api.post(`/enrollments/${courseGuid}`, { userGuid: candidate.guid, confirmRestart: candidate.certified });
+        notify.success('Estudiante matriculado');
         dropCandidate(candidate.guid);
         void loadEnrollments(courseGuid);
-        void loadCandidates(courseGuid, appliedStudentSearch);
+      } catch (error) {
+        notify.error(errorMessage(error, 'No se pudo matricular al estudiante.'));
+        if (isAlreadyEnrolled(error)) {
+          dropCandidate(candidate.guid);
+          void loadEnrollments(courseGuid);
+          void loadCandidates(courseGuid, appliedStudentSearch);
+        }
       }
-    }
-  };
+    });
 
   /**
    * Matricula a los seleccionados de uno en uno —el cupo se comprueba en cada alta— y al
@@ -376,38 +395,35 @@ export default function CourseAssignmentPage() {
       prev.map((course) => (course.guid === courseGuid ? { ...course, teacherGuid: teacher.guid, teacher } : course)),
     );
 
-  const assignTeacher = async (teacher: Person) => {
+  /** Pone el curso a cargo de otra persona. Un doble clic no lanza una segunda petición. */
+  const changeTeacher = async (teacher: AssignableCourse['teacher'], successMessage: string) => {
     const courseGuid = selectedCourseGuid;
-    if (!courseGuid) return;
+    if (!courseGuid || changingTeacher) return;
+    setChangingTeacher(true);
     try {
       await api.post(`/courses/${courseGuid}/assign`, { teacherGuid: teacher.guid });
-      notify.success('Examinador asignado');
-      setCourseTeacher(courseGuid, { ...teacher, role: 'TEACHER' });
+      notify.success(successMessage);
+      setCourseTeacher(courseGuid, teacher);
     } catch (error) {
-      notify.error('No se pudo asignar', errorMessage(error));
+      notify.error('No se pudo cambiar el responsable', errorMessage(error));
+    } finally {
+      setChangingTeacher(false);
     }
   };
+
+  const assignTeacher = (teacher: Person) => changeTeacher({ ...teacher, role: 'TEACHER' }, 'Examinador asignado');
 
   /**
    * Devuelve el curso al administrador que lo gestiona.
    * Un curso siempre tiene responsable —es obligatorio en la base de datos—, así que
    * «quitar examinador» significa reasignárselo a uno mismo.
    */
-  const unassignTeacher = async () => {
-    const courseGuid = selectedCourseGuid;
-    if (!courseGuid || !user?.guid) return;
-    try {
-      await api.post(`/courses/${courseGuid}/assign`, { teacherGuid: user.guid });
-      notify.success('El curso vuelve a tu cargo');
-      setCourseTeacher(courseGuid, {
-        guid: user.guid,
-        firstName: user.firstName,
-        lastName: user.lastName,
-        role: 'ADMIN',
-      });
-    } catch (error) {
-      notify.error('No se pudo reasignar', errorMessage(error));
-    }
+  const unassignTeacher = () => {
+    if (!user) return;
+    void changeTeacher(
+      { guid: user.guid, firstName: user.firstName, lastName: user.lastName, role: 'ADMIN' },
+      'El curso vuelve a tu cargo',
+    );
   };
 
   // ── Datos derivados ──
@@ -661,13 +677,13 @@ export default function CourseAssignmentPage() {
                           )}
 
                           {enrolledCursor && (
-                            <button
-                              type="button"
+                            <LoadMoreButton
+                              loading={loadingMoreEnrolled}
                               onClick={loadMoreEnrolled}
-                              className="w-full rounded-xl border border-border px-4 py-2 text-xs font-bold hover:bg-muted transition-colors"
+                              className="w-full px-4 py-2 text-xs"
                             >
-                              Ver más ({enrolledStudents.length} de {totalEnrolled})
-                            </button>
+                              {`Ver más (${enrolledStudents.length} de ${totalEnrolled})`}
+                            </LoadMoreButton>
                           )}
                         </div>
                       </div>
@@ -785,7 +801,7 @@ export default function CourseAssignmentPage() {
                                   <button
                                     type="button"
                                     onClick={() => enrollStudent(student)}
-                                    disabled={enrollingBatch}
+                                    disabled={enrollingBatch || enrolling.has(student.guid)}
                                     aria-label={`Agregar a ${fullName(student)}`}
                                     title="Agregar al curso"
                                     className="p-2 shrink-0 bg-primary/10 hover:bg-primary text-primary hover:text-primary-foreground rounded-xl transition-colors disabled:opacity-50 disabled:pointer-events-none"
@@ -838,6 +854,7 @@ export default function CourseAssignmentPage() {
                               <button
                                 type="button"
                                 onClick={unassignTeacher}
+                                disabled={changingTeacher}
                                 className="p-2 shrink-0 text-muted-foreground hover:text-red-500 hover:bg-red-500/10 rounded-lg transition-colors"
                                 aria-label="Remover examinador"
                                 title="Remover examinador"
@@ -912,7 +929,8 @@ export default function CourseAssignmentPage() {
                                   ) : (
                                     <button
                                       type="button"
-                                      onClick={() => assignTeacher(teacher)}
+                                      onClick={() => void assignTeacher(teacher)}
+                                      disabled={changingTeacher}
                                       className="flex items-center gap-1 px-4 py-2 shrink-0 bg-blue-500/10 hover:bg-blue-500 text-blue-600 hover:text-white text-xs font-bold rounded-xl transition-colors"
                                     >
                                       <Plus className="h-4 w-4" /> Asignar

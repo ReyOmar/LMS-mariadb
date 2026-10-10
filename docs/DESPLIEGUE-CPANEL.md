@@ -182,7 +182,7 @@ Tres cosas viven en la memoria del proceso y dejarían de funcionar bien si hubi
 - **El bloqueo de edición de cursos.** Dos administradores en procesos distintos podrían
   editar el mismo curso a la vez sin verse.
 - **El límite de peticiones.** Cada proceso cuenta por su lado, así que el tope de 5
-  intentos de acceso por minuto se convertiría en 5 por cada proceso.
+  intentos por minuto sobre una misma cuenta se convertiría en 5 por cada proceso.
 
 Las sesiones no dependen de esto: qué token vale lo decide la base de datos, así que cerrar
 sesión o cambiar la contraseña corta el acceso en la siguiente petición en cualquier caso.
@@ -382,6 +382,26 @@ Reinicia siempre la API después de cambiar una variable de entorno: se leen al 
 **Despliega siempre las dos partes juntas.** El cliente y la API comparten las rutas y los
 nombres de los campos; un cliente de una versión contra la API de otra deja pantallas sin
 datos.
+
+### Al actualizar a la versión con límites por usuario y correos sólo en ASCII
+
+- **Índices nuevos.** Hay dos, sobre el archivo de las entregas y de las entregas
+  archivadas: aceleran la limpieza de archivos sustituidos. `npx prisma db push` los crea sin
+  tocar ningún dato.
+- **Los correos de las cuentas sólo admiten caracteres ASCII.** La base compara los correos
+  sin distinguir tildes, y un correo con ellas podía usarse para pedir cosas en nombre de
+  otra cuenta. Antes de actualizar, comprueba que ninguna cuenta tenga uno, porque ya no
+  podría entrar:
+
+  ```sql
+  SELECT email FROM usuarios WHERE email REGEXP '[^ -~]';
+  ```
+
+  Si aparece alguno, cámbialo en la base por su forma ASCII (los dominios internacionales
+  se escriben `xn--…`): `UPDATE usuarios SET email = '…' WHERE email = '…';`. La interfaz
+  no permite cambiar el correo de una cuenta.
+- **SMTP sin usuario.** `SMTP_HOST` basta para un relé que no pide autenticación;
+  `SMTP_USER` y `SMTP_PASS` sólo hacen falta si el servidor los exige, como Brevo.
 
 ### Al actualizar a la versión con el código en inglés
 

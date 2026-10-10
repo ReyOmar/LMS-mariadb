@@ -26,6 +26,7 @@ import type { Course, CourseStatus, QuizConfig, Resource } from '@/types/models'
 import { displayTitle, isQuiz, quizTitleOf } from '@/lib/resources';
 import { COURSE_STATUS_LABEL } from '@/lib/labels';
 import { formatMb, parseLimitMb, uploadLimit } from '@/lib/upload-limits';
+import { breakableSpaces } from '@/lib/editor-html';
 import { CourseInUseAlert } from '@/app/dashboard/course-builder/components/Notices';
 import { QuizEditor } from '@/app/dashboard/course-builder/components/QuizEditor';
 
@@ -142,7 +143,8 @@ export default function ResourceEditor({
 
       await api.patch(`/courses/resources/${resourceId}`, {
         title: quiz ? quizTitleOf(baseTitle) : baseTitle,
-        contentHtml: contentHtml,
+        // Un enlace guarda su dirección en este campo; el resto, lo que escribe el editor.
+        contentHtml: resource.type === 'LINK' ? contentHtml : breakableSpaces(contentHtml),
         referenceUrl: referenceUrl || null,
         attachmentKey: attachmentKey || null,
         attachmentName: attachmentName || null,
@@ -230,8 +232,9 @@ export default function ResourceEditor({
           <div className="ml-auto">
             <button
               onClick={onSave}
-              disabled={saving}
-              className="px-6 py-3 rounded-xl font-bold flex items-center gap-2 transition-transform shadow-md bg-primary hover:bg-primary/90 text-primary-foreground hover:-translate-y-0.5"
+              // Con un adjunto subiendo, guardar ahora lo dejaría fuera del recurso.
+              disabled={saving || uploading}
+              className="px-6 py-3 rounded-xl font-bold flex items-center gap-2 transition-transform shadow-md bg-primary hover:bg-primary/90 text-primary-foreground hover:-translate-y-0.5 disabled:opacity-60 disabled:hover:translate-y-0"
             >
               <Save className="h-5 w-5" />
               {saving ? 'Guardando...' : 'Guardar y volver'}

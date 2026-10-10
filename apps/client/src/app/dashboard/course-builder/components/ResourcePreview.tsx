@@ -1,25 +1,22 @@
 'use client';
 
 import type { ReactNode } from 'react';
-import { CheckCircle, Edit3, FileText, Link as LinkIcon, PlayCircle, Trash2, Type, UploadCloud } from 'lucide-react';
+import { CheckCircle, Edit3, FileText, PlayCircle, Trash2, Type, UploadCloud } from 'lucide-react';
 import { sanitizeHTML } from '@/lib/sanitize';
-import { fileUrlFor } from '@/lib/api';
+import { displayTitle } from '@/lib/resources';
 import type { Resource } from '@/types/models';
+import { ResourceTarget } from '@/components/resources/ResourceTarget';
 import { ResourceExtras } from './ResourceExtras';
-import { linkTarget } from '@/lib/resources';
-import type { StoredResourceKind } from './resources';
+import { resourceKindOf, type ResourceKind } from './resources';
 
 interface Props {
-  type: StoredResourceKind;
-  title: string;
-  html: string;
-  resource: Resource | null;
+  resource: Resource;
   readOnly: boolean;
   onEdit: () => void;
   onDelete: () => void;
 }
 
-const ICONS: Record<StoredResourceKind, ReactNode> = {
+const ICONS: Record<ResourceKind, ReactNode> = {
   PARAGRAPH: <Type className="h-4 sm:h-5 w-4 sm:w-5 text-primary shrink-0" />,
   LINK: <PlayCircle className="h-4 sm:h-5 w-4 sm:w-5 text-pink-500 shrink-0" />,
   ASSIGNMENT: <FileText className="h-4 sm:h-5 w-4 sm:w-5 text-blue-500 shrink-0" />,
@@ -35,7 +32,11 @@ const NO_INSTRUCTIONS = '<p class="text-muted-foreground italic opacity-70">No h
  * Es una simulación: las áreas de entrega y de cuestionario se muestran inertes, porque el
  * examinador está revisando su propio curso y no debe poder entregar en él.
  */
-export function ResourcePreview({ type, title, html, resource, readOnly, onEdit, onDelete }: Props) {
+export function ResourcePreview({ resource, readOnly, onEdit, onDelete }: Props) {
+  const type = resourceKindOf(resource);
+  const title = displayTitle(resource);
+  const html = resource.contentHtml ?? '';
+
   return (
     <div className="max-w-4xl mx-auto bg-card rounded-2xl shadow-sm border border-border flex flex-col overflow-hidden h-full max-h-full">
       <div className="p-3 sm:p-4 border-b border-border flex flex-wrap items-center justify-between gap-2 bg-muted/30">
@@ -78,7 +79,15 @@ export function ResourcePreview({ type, title, html, resource, readOnly, onEdit,
           </>
         )}
 
-        {type === 'LINK' && <LinkPreview resource={resource} html={html} />}
+        {/* Una imagen, un vídeo o una página externa, tal como lo verá el alumno. */}
+        {type === 'LINK' && (
+          <div className="w-full max-w-3xl mx-auto">
+            <ResourceTarget
+              resource={resource}
+              empty={<p>Sin destino configurado. Haz clic en «Editar contenido».</p>}
+            />
+          </div>
+        )}
 
         {type === 'ASSIGNMENT' && (
           <Simulation
@@ -116,71 +125,12 @@ export function ResourcePreview({ type, title, html, resource, readOnly, onEdit,
   );
 }
 
-/**
- * Un bloque de enlace puede ser tres cosas —una imagen, un vídeo de YouTube o una página
- * externa— y aquí se enseña cada una como la verá el alumno.
- */
-function LinkPreview({ resource, html }: { resource: Resource | null; html: string }) {
-  const target = linkTarget(resource ?? { contentHtml: html, fileUrl: null });
-
-  if (target.kind === 'image') {
-    return (
-      <div className="flex flex-col items-center">
-        <img
-          src={fileUrlFor(target.url) ?? target.url}
-          alt={resource?.title ?? 'Imagen del curso'}
-          className="w-full max-w-3xl rounded-2xl border border-border shadow-sm object-contain"
-        />
-      </div>
-    );
-  }
-
-  if (target.kind === 'video') {
-    return (
-      <div className="flex flex-col items-center">
-        <div className="w-full max-w-3xl rounded-2xl overflow-hidden border border-border shadow-sm">
-          {/* @ts-expect-error: elemento personalizado de @justinribeiro/lite-youtube */}
-          <lite-youtube videoid={target.video} nocookie></lite-youtube>
-        </div>
-      </div>
-    );
-  }
-
-  if (target.kind === 'link') {
-    return (
-      <div className="flex flex-col items-center">
-        <a
-          href={target.url}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="w-full max-w-3xl flex items-center gap-4 rounded-2xl border border-border bg-muted/10 p-6 hover:border-pink-500 transition-colors"
-        >
-          <LinkIcon className="h-8 w-8 text-pink-500 shrink-0" />
-          <div className="min-w-0">
-            <p className="font-bold truncate">{resource?.title ?? 'Enlace externo'}</p>
-            <p className="text-xs text-muted-foreground truncate">{target.url}</p>
-          </div>
-        </a>
-      </div>
-    );
-  }
-
-  return (
-    <div className="flex flex-col items-center">
-      <div className="w-full max-w-3xl h-64 bg-muted/20 border border-border border-dashed rounded-2xl flex flex-col items-center justify-center text-muted-foreground">
-        <PlayCircle className="h-12 w-12 opacity-30 mb-4" />
-        <p>Sin destino configurado. Haz clic en «Editar contenido».</p>
-      </div>
-    </div>
-  );
-}
-
 interface SimulationProps {
   instructionsTitle: string;
   headerClass: string;
   instructionsTitleClass: string;
   html: string;
-  resource: Resource | null;
+  resource: Resource;
   icon: ReactNode;
   circleClass: string;
   title: string;

@@ -34,6 +34,8 @@ import { Donut, BarsByRange } from '@/components/ui/charts';
 import { Panel, StatCard } from './components/Widgets';
 import { SubmissionList } from './components/SubmissionList';
 import { CourseSelector } from './components/CourseSelector';
+import { useCurrentList } from '@/hooks/useCurrentList';
+import { LoadMoreButton } from '@/components/ui/LoadMoreButton';
 
 /**
  * Calificación manual de entregas.
@@ -59,6 +61,7 @@ export default function ManualGrading() {
   const [cursor, setCursor] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadingSubmissions, setLoadingSubmissions] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
 
   const [courseGuid, setCourseGuid] = useState<string | null>(null);
   const [search, setSearch] = useState('');
@@ -100,30 +103,27 @@ export default function ManualGrading() {
     [courseGuid, filter, appliedSearch],
   );
 
+  const list = useCurrentList();
+
   /** Primera página del curso elegido. Se rehace al cambiar la búsqueda o el filtro. */
   useEffect(() => {
+    const isCurrent = list.start();
     if (!courseGuid) return;
-    let current = true;
     setLoadingSubmissions(true);
 
     fetchSubmissions()
       .then(({ data }) => {
-        if (!current) return;
+        if (!isCurrent()) return;
         setSubmissions(data.submissions ?? []);
         setCursor(data.cursor);
       })
       .catch((error) => {
-        if (current) showAlert.error('Error', errorMessage(error, 'No se pudieron cargar las entregas.'));
+        if (isCurrent()) showAlert.error('Error', errorMessage(error, 'No se pudieron cargar las entregas.'));
       })
       .finally(() => {
-        if (current) setLoadingSubmissions(false);
+        if (isCurrent()) setLoadingSubmissions(false);
       });
-
-    // Una respuesta tardía de la búsqueda anterior pisaría la lista recién pedida.
-    return () => {
-      current = false;
-    };
-  }, [courseGuid, fetchSubmissions, showAlert]);
+  }, [courseGuid, fetchSubmissions, showAlert, list]);
 
   /**
    * Trae la siguiente tanda sin perder lo que ya está en pantalla.
@@ -132,24 +132,32 @@ export default function ManualGrading() {
    * el coste no crece según se baja, y nada se repite ni se cuela si mientras tanto llega
    * una entrega nueva.
    */
-  const loadMore = useCallback(async () => {
-    if (!cursor) return;
+  const loadMore = async () => {
+    if (!cursor || loadingMore) return;
+    const isCurrent = list.extend();
+    setLoadingMore(true);
     try {
       const { data } = await fetchSubmissions(cursor);
+      if (!isCurrent()) return;
       setSubmissions((prev) => [...prev, ...(data.submissions ?? [])]);
       setCursor(data.cursor);
     } catch (error) {
       notify.error('No se pudieron cargar más entregas', errorMessage(error));
+    } finally {
+      setLoadingMore(false);
     }
-  }, [cursor, fetchSubmissions, notify]);
+  };
 
   const reload = useCallback(() => {
     void loadSummary();
     if (!courseGuid) return;
+    const isCurrent = list.extend();
     void fetchSubmissions()
-      .then(({ data }) => setSubmissions((loaded) => mergeFirstPage(data.submissions ?? [], loaded)))
+      .then(({ data }) => {
+        if (isCurrent()) setSubmissions((loaded) => mergeFirstPage(data.submissions ?? [], loaded));
+      })
       .catch(() => undefined);
-  }, [loadSummary, courseGuid, fetchSubmissions]);
+  }, [loadSummary, courseGuid, fetchSubmissions, list]);
 
   useRealtimeEvent('submission:new', reload);
   useRealtimeEvent('submission:graded', reload);
@@ -302,14 +310,9 @@ export default function ManualGrading() {
           />
 
           {cursor && (
-            <button
-              type="button"
-              onClick={loadMore}
-              className="mt-6 w-full rounded-xl border border-border px-4 py-3 text-sm font-bold hover:bg-muted transition-colors"
-            >
-              Ver más ({submissions.length}
-              {appliedSearch ? ' cargadas' : ` de ${filteredTotal}`})
-            </button>
+            <LoadMoreButton loading={loadingMore} onClick={loadMore} className="mt-6 w-full px-4 py-3 text-sm">
+              {`Ver más (${submissions.length}${appliedSearch ? ' cargadas' : ` de ${filteredTotal}`})`}
+            </LoadMoreButton>
           )}
         </>
       )}

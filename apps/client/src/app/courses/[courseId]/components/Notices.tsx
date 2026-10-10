@@ -1,6 +1,6 @@
 'use client';
 
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import Link from 'next/link';
 import { AlertTriangle, ArrowLeft, Award, Clock, Eye, Sparkles, Trophy, X } from 'lucide-react';
 import { plural } from '@/lib/text';
@@ -186,28 +186,33 @@ function Background({ children }: { children: ReactNode }) {
   );
 }
 
-/** Papelillos de la celebración. Son decorativos, así que no reciben eventos del ratón. */
+const CONFETTI_COLORS = ['#4f46e5', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4', '#ec4899', '#f97316'];
+
+/**
+ * Papelillos de la celebración. Son decorativos, así que no reciben eventos del ratón.
+ *
+ * Se sortean una sola vez: si se sortearan en cada pintado, todos saltarían de sitio cuando
+ * la ventana vuelve a pintarse al aparecer sus botones.
+ */
 function Confetti() {
-  const colors = ['#4f46e5', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4', '#ec4899', '#f97316'];
+  const [pieces] = useState(() =>
+    Array.from({ length: 50 }, (_, i) => ({
+      left: `${Math.random() * 100}%`,
+      top: '-5%',
+      backgroundColor: CONFETTI_COLORS[i % CONFETTI_COLORS.length],
+      animation: `confettiFall ${2 + Math.random() * 3}s ease-in-out ${Math.random() * 2}s infinite`,
+      opacity: 0.8,
+      width: `${4 + Math.random() * 8}px`,
+      height: `${4 + Math.random() * 8}px`,
+      borderRadius: Math.random() > 0.5 ? '50%' : '2px',
+    })),
+  );
 
   return (
     <>
       <div className="absolute inset-0 overflow-hidden pointer-events-none">
-        {Array.from({ length: 50 }).map((_, i) => (
-          <div
-            key={i}
-            className="absolute rounded-full"
-            style={{
-              left: `${Math.random() * 100}%`,
-              top: '-5%',
-              backgroundColor: colors[i % colors.length],
-              animation: `confettiFall ${2 + Math.random() * 3}s ease-in-out ${Math.random() * 2}s infinite`,
-              opacity: 0.8,
-              width: `${4 + Math.random() * 8}px`,
-              height: `${4 + Math.random() * 8}px`,
-              borderRadius: Math.random() > 0.5 ? '50%' : '2px',
-            }}
-          />
+        {pieces.map((style, i) => (
+          <div key={i} className="absolute rounded-full" style={style} />
         ))}
       </div>
       <style>{`

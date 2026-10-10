@@ -93,24 +93,29 @@ export class FileOwnershipService {
     for (let start = 0; start < keys.length; start += REFERENCE_BATCH) {
       const among = { in: keys.slice(start, start + REFERENCE_BATCH) };
 
-      const rows = await Promise.all([
-        this.prisma.course.findMany({ where: { coverImage: among }, select: { coverImage: true } }),
-        this.prisma.resource.findMany({
+      // Una consulta tras otra y no a la vez: es una limpieza, y siete a la vez ocuparían
+      // casi todo el pool mientras otras peticiones esperan conexión.
+      const rows = [
+        await this.prisma.course.findMany({ where: { coverImage: among }, select: { coverImage: true } }),
+        await this.prisma.resource.findMany({
           where: { OR: [{ attachmentKey: among }, { fileUrl: among }] },
           select: { attachmentKey: true, fileUrl: true },
         }),
-        this.prisma.user.findMany({
+        await this.prisma.user.findMany({
           where: { OR: [{ photoUrl: among }, { signatureUrl: among }] },
           select: { photoUrl: true, signatureUrl: true },
         }),
-        this.prisma.countrySettings.findMany({
+        await this.prisma.countrySettings.findMany({
           where: { OR: [{ logoUrl: among }, { faviconUrl: among }, { loginBackgroundUrl: among }] },
           select: { logoUrl: true, faviconUrl: true, loginBackgroundUrl: true },
         }),
-        this.prisma.submission.findMany({ where: { attachmentKey: among }, select: { attachmentKey: true } }),
-        this.prisma.archivedSubmission.findMany({ where: { attachmentKey: among }, select: { attachmentKey: true } }),
-        this.prisma.certificate.findMany({ where: { pdfKey: among }, select: { pdfKey: true } }),
-      ]);
+        await this.prisma.submission.findMany({ where: { attachmentKey: among }, select: { attachmentKey: true } }),
+        await this.prisma.archivedSubmission.findMany({
+          where: { attachmentKey: among },
+          select: { attachmentKey: true },
+        }),
+        await this.prisma.certificate.findMany({ where: { pdfKey: among }, select: { pdfKey: true } }),
+      ];
 
       for (const row of rows.flat()) {
         for (const value of Object.values(row)) {

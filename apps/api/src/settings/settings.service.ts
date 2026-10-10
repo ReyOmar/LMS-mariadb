@@ -199,11 +199,6 @@ export class SettingsService implements OnModuleInit {
     return this.publicOnly(await this.getSettings(country));
   }
 
-  /** Configuración completa, sólo para administradores de la sede. */
-  getFullSettings(country: Country): Promise<CountrySettings> {
-    return this.loadSettings(country);
-  }
-
   /** Ajustes de impresión del certificado de la sede. */
   async getCertificateSettings(country: Country) {
     const config = await this.getSettings(country);

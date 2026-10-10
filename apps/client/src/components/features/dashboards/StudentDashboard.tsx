@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Play, BookOpen, Clock, GraduationCap, ChevronLeft, ChevronRight, AlertTriangle } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useSession } from '@/contexts/SessionContext';
-import { useRealtime, useRealtimeEvent, useRealtimeReconnect } from '@/contexts/RealtimeContext';
+import { useRealtimeEvent, useRealtimeReconnect } from '@/contexts/RealtimeContext';
 import { HighlightedStat } from '@/components/ui/HighlightedStat';
 import { PageLoader } from '@/components/ui/PageLoader';
 import api, { errorMessage } from '@/lib/api';
@@ -32,7 +32,6 @@ const DAY_NAMES = ['Do', 'Lu', 'Ma', 'Mi', 'Ju', 'Vi', 'Sa'];
 export function StudentDashboard() {
   const { notify } = useAlerts();
   const { user } = useSession();
-  const { coursesUnderMaintenance: maintenance } = useRealtime();
   const router = useRouter();
 
   const [courses, setCourses] = useState<Course[]>([]);
@@ -80,24 +79,25 @@ export function StudentDashboard() {
   const finished = (course: Course) => Boolean(course.completedAt);
 
   // Cursos que se pueden hacer ahora: publicados, sin mantenimiento y sin terminar.
-  const activeCourses = courses.filter((c) => c.status === 'PUBLISHED' && !maintenance[c.guid] && !finished(c));
+  const activeCourses = courses.filter((c) => c.status === 'PUBLISHED' && !finished(c));
 
   // Cursos asignados que ahora mismo están en mantenimiento y aún sin completar.
-  const coursesUnderMaintenance = courses.filter((c) => (c.status === 'DRAFT' || maintenance[c.guid]) && !finished(c));
+  const coursesUnderMaintenance = courses.filter((c) => c.status === 'DRAFT' && !finished(c));
 
   // Todo lo que al alumno le queda por terminar, esté el curso como esté.
   const incompleteCourses = courses.filter((c) => !finished(c));
 
-  const lastCourse = activeCourses.length > 0 ? activeCourses[0] : null;
+  const currentCourse = activeCourses.length > 0 ? activeCourses[0] : null;
   const hasMaintenance = coursesUnderMaintenance.length > 0;
   const allCoursesCompleted = courses.length > 0 && incompleteCourses.length === 0;
   const totalCourses = metrics?.totalCourses ?? courses.length;
-  const moduleCount = lastCourse?._count?.modules ?? 0;
+  const moduleCount = currentCourse?._count?.modules ?? 0;
   const progress = {
-    completed: lastCourse?.completedResources ?? 0,
-    total: lastCourse?.totalResources ?? 0,
-    percent: lastCourse?.percent ?? 0,
+    completed: currentCourse?.completedResources ?? 0,
+    total: currentCourse?.totalResources ?? 0,
+    percent: currentCourse?.percent ?? 0,
   };
+  const started = progress.completed > 0;
 
   // Lo que explica la cifra de cursos activos cuando es cero o hay alguno parado.
   const activeDetail = hasMaintenance
@@ -141,7 +141,7 @@ export function StudentDashboard() {
     <div className="animate-fade-slide-in">
       {/* Cabecera */}
       <header className="mb-8">
-        <p className="text-sm font-medium text-muted-foreground mb-1">Bienvenido de vuelta,</p>
+        <p className="text-sm font-medium text-muted-foreground mb-1">Hola,</p>
         <h1 className="text-3xl font-extrabold tracking-tight text-foreground">{user?.firstName || 'Estudiante'} 👋</h1>
       </header>
 
@@ -152,22 +152,22 @@ export function StudentDashboard() {
           <div className="absolute -right-10 -top-10 w-40 h-40 bg-white/10 rounded-full blur-2xl group-hover:scale-150 transition-transform duration-1000" />
 
           <div className="flex-1 z-10">
-            {lastCourse ? (
+            {currentCourse ? (
               <>
                 <span className="inline-block px-3 py-1 bg-primary-foreground/20 rounded-full text-xs font-semibold uppercase tracking-wider mb-4 border border-primary-foreground/10 text-primary-foreground/90 backdrop-blur-sm">
-                  Continuar aprendiendo
+                  {started ? 'Continuar aprendiendo' : 'Tu próximo curso'}
                 </span>
-                <h2 className="text-2xl md:text-3xl font-bold mb-2 leading-tight">{lastCourse.title}</h2>
+                <h2 className="text-2xl md:text-3xl font-bold mb-2 leading-tight">{currentCourse.title}</h2>
                 <p className="text-primary-foreground/70 mb-6">
                   {moduleCount} {plural(moduleCount, 'módulo', 'módulos')} · {progress.completed}/{progress.total}{' '}
                   {plural(progress.total, 'recurso completado', 'recursos completados')}
                 </p>
                 <button
                   type="button"
-                  onClick={() => router.push(`/courses/${lastCourse.guid}`)}
+                  onClick={() => router.push(`/courses/${currentCourse.guid}`)}
                   className="flex items-center gap-2 bg-white text-primary px-6 py-3 rounded-xl font-bold hover:scale-105 transition-transform shadow-md"
                 >
-                  <Play className="h-4 w-4 fill-primary" /> Retomar curso
+                  <Play className="h-4 w-4 fill-primary" /> {started ? 'Retomar curso' : 'Empezar curso'}
                 </button>
               </>
             ) : hasMaintenance && !allCoursesCompleted ? (
@@ -207,7 +207,7 @@ export function StudentDashboard() {
           </div>
 
           {/* Anillo de progreso */}
-          {lastCourse && (
+          {currentCourse && (
             <div className="relative w-28 h-28 shrink-0 z-10 flex items-center justify-center">
               <svg className="w-full h-full transform -rotate-90" viewBox="0 0 100 100">
                 <circle cx="50" cy="50" r="40" className="stroke-primary-foreground/20" strokeWidth="8" fill="none" />

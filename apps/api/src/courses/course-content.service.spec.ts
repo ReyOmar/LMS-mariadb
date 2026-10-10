@@ -113,6 +113,44 @@ describe('CourseContentService', () => {
     expect(create).toHaveBeenCalled();
   });
 
+  describe('la dirección de un enlace', () => {
+    function linkService() {
+      const update = jest.fn(async () => ({ guid: 'r1', attachmentKey: null, fileUrl: null, quizConfig: null }));
+      const { service } = serviceWith({
+        resource: { findUnique: async () => ({ type: 'LINK', attachmentKey: null, fileUrl: null }), update },
+      });
+      return { service, update };
+    }
+
+    it.each(['https://www.youtube.com/watch?v=dQw4w9WgXcQ', 'http://intranet:8080/manual'])(
+      'acepta %s',
+      async (url) => {
+        const { service, update } = linkService();
+
+        await service.updateResource('r1', { contentHtml: url }, ADMIN);
+
+        expect(update).toHaveBeenCalled();
+      },
+    );
+
+    it.each(['no-es-url', 'youtube.com/watch?v=abc', 'javascript:alert(1)'])('rechaza %s', async (url) => {
+      const { service, update } = linkService();
+
+      await expect(service.updateResource('r1', { contentHtml: url }, ADMIN)).rejects.toThrow(/URL completa/);
+      expect(update).not.toHaveBeenCalled();
+    });
+
+    it('se comprueba también al crear el recurso, no sólo al editarlo', async () => {
+      const create = jest.fn(async () => ({ guid: 'r1' }));
+      const { service } = serviceWith({ resource: { count: async () => 0, create } });
+
+      await expect(
+        service.createResource('modulo-1', { type: 'LINK', contentHtml: 'no-es-url' }, ADMIN),
+      ).rejects.toThrow(/URL completa/);
+      expect(create).not.toHaveBeenCalled();
+    });
+  });
+
   it('reordenar ignora identificadores ajenos y repetidos', async () => {
     const updates: { guid: string; position: number }[] = [];
     const { service } = serviceWith({

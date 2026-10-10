@@ -1,6 +1,6 @@
 'use client';
 
-import { Suspense, useCallback, useEffect, useState } from 'react';
+import { Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { BookOpen, Layers, ShieldAlert } from 'lucide-react';
 
@@ -8,20 +8,21 @@ import api, { errorMessage, uploadFile } from '@/lib/api';
 import { uploadLimit } from '@/lib/upload-limits';
 import { useSession } from '@/contexts/SessionContext';
 import { useAlerts } from '@/contexts/AlertContext';
-import { useRealtimeEvent, useRealtime } from '@/contexts/RealtimeContext';
+import { useRealtimeEvent } from '@/contexts/RealtimeContext';
 import { useCourseLock } from '@/hooks/useCourseLock';
 import { PageLoader } from '@/components/ui/PageLoader';
+import { CourseCatalog } from '@/components/features/CourseCatalog';
 import type { Course, CourseStatus, CourseModule, Resource } from '@/types/models';
 
 import { CourseInUseAlert, CoursePublishedAlert, DraftExitAlert } from './components/Notices';
 import { CourseHeader } from './components/CourseHeader';
-import { CourseCatalog, NoCourses } from './components/CourseCatalog';
+import { NoCourses } from './components/NoCourses';
 import { CourseSettings } from './components/CourseSettings';
 import { ModuleSettings } from './components/ModuleSettings';
 import { CourseOutline, type Selection } from './components/CourseOutline';
 import { ResourcePreview } from './components/ResourcePreview';
-import { newResource, resourceKindOf, type ResourceKind } from './components/resources';
-import { displayTitle } from '@/lib/resources';
+import { newResource, type ResourceKind } from './components/resources';
+import { useLeaveGuard } from '@/hooks/useLeaveGuard';
 
 const NONE: Selection = { type: 'NONE' };
 
@@ -46,7 +47,6 @@ export default function CourseBuilderPage() {
 
 function CourseBuilder() {
   const { role, user } = useSession();
-  const { coursesBeingEdited } = useRealtime();
   const { showAlert, showConfirmation } = useAlerts();
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -59,9 +59,10 @@ function CourseBuilder() {
   const [uploadingCover, setUploadingCover] = useState(false);
   const [outlineVisible, setOutlineVisible] = useState(false);
 
-  // Avisos: qué hacer tras pasar el curso a borrador, y si se está saliendo de un borrador.
+  // Avisos: qué hacer tras pasar el curso a borrador, y la salida de un borrador pendiente de
+  // confirmar, con el enlace que se pulsó (`null`: el botón de volver).
   const [pendingDraftAction, setPendingDraftAction] = useState<(() => void) | null>(null);
-  const [confirmingExit, setConfirmingExit] = useState(false);
+  const [pendingExit, setPendingExit] = useState<{ to: string | null } | null>(null);
 
   const isAdmin = role === 'admin';
   const readOnly = activeCourse?.status === 'PUBLISHED';
@@ -131,13 +132,18 @@ function CourseBuilder() {
       return;
     }
 
+    const moduleGuid = searchParams?.get('module');
+    const resourceGuid = searchParams?.get('resource');
+    // Abrir o crear un curso desde esta pantalla ya lo deja cargado: la dirección sólo lo refleja.
+    if (activeCourse?.guid === courseParam && !resourceGuid) return;
+
+    // Yendo y viniendo deprisa con Atrás, sólo cuenta la respuesta del curso que pide la dirección.
+    let current = true;
     api
       .get<Course>(`/courses/${courseParam}`)
       .then(({ data }) => {
+        if (!current) return;
         setActiveCourse(data);
-
-        const moduleGuid = searchParams?.get('module');
-        const resourceGuid = searchParams?.get('resource');
         if (!moduleGuid || !resourceGuid) return;
 
         const courseModule = data.modules?.find((m) => m.guid === moduleGuid);
@@ -147,7 +153,14 @@ function CourseBuilder() {
         setSelection({ type: 'RESOURCE', resource, moduleGuid });
         setExpandedModules((prev) => ({ ...prev, [moduleGuid]: true }));
       })
-      .catch((error) => showAlert.error('Error', errorMessage(error, 'No se pudo abrir el curso.')));
+      .catch((error) => {
+        if (current) showAlert.error('Error', errorMessage(error, 'No se pudo abrir el curso.'));
+      });
+    return () => {
+      current = false;
+    };
+    // Sólo cuando cambia la dirección. `activeCourse` se lee para no volver a pedir el curso que
+    // ya está abierto; como dependencia, el curso recién cargado se pediría otra vez sin fin.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams, role]);
 
@@ -164,48 +177,27 @@ function CourseBuilder() {
     router.replace(window.location.pathname);
   }, [role, router]);
 
+  /** Sale del curso hacia el enlace que se pulsó o, sin él, adonde lleva el botón de volver. */
+  const leaveTo = (to: string | null) => {
+    if (to) router.push(to);
+    else closeCourse();
+  };
+
   /** Un curso en borrador no lo ve nadie: conviene recordarlo antes de marcharse. */
   const tryToLeave = () => {
     if (activeCourse?.status === 'DRAFT') {
-      setConfirmingExit(true);
+      setPendingExit({ to: null });
       return;
     }
     closeCourse();
   };
 
-  useEffect(() => {
-    if (activeCourse?.status !== 'DRAFT') return;
-
-    const onTabClose = (event: BeforeUnloadEvent) => {
-      event.preventDefault();
-      event.returnValue = 'El curso sigue en Borrador y los alumnos no lo verán. ¿Salir igualmente?';
-    };
-    window.addEventListener('beforeunload', onTabClose);
-    return () => window.removeEventListener('beforeunload', onTabClose);
-  }, [activeCourse?.status]);
-
-  /**
-   * El mismo recordatorio para la navegación interna. Se intercepta en captura porque los
-   * enlaces del menú lateral son componentes de Next y no pasan por esta pantalla.
-   */
-  useEffect(() => {
-    if (activeCourse?.status !== 'DRAFT') return;
-
-    const onDocumentClick = (event: MouseEvent) => {
-      const link = (event.target as HTMLElement).closest('a');
-      const target = link?.getAttribute('href');
-      if (!target || target.startsWith('#') || target.startsWith('javascript:')) return;
-      // Moverse dentro del constructor o descargar un archivo no es salir.
-      if (target.includes('/dashboard/course-builder') || target.includes('/storage/download/')) return;
-
-      event.preventDefault();
-      event.stopPropagation();
-      setConfirmingExit(true);
-    };
-
-    document.addEventListener('click', onDocumentClick, true);
-    return () => document.removeEventListener('click', onDocumentClick, true);
-  }, [activeCourse?.guid, activeCourse?.status]);
+  useLeaveGuard(activeCourse?.status === 'DRAFT', {
+    warning: 'El curso sigue en Borrador y los alumnos no lo verán. ¿Salir igualmente?',
+    onLeave: (to) => setPendingExit({ to }),
+    // Moverse dentro del constructor o descargar un archivo no es salir.
+    stays: (to) => to.includes('/dashboard/course-builder') || to.includes('/storage/download/'),
+  });
 
   // ── Permiso de edición ───────────────────────────────────────────────────
 
@@ -250,20 +242,26 @@ function CourseBuilder() {
     setLoading(false);
   };
 
+  /** Alta en curso: un doble clic no debe crear dos cursos ni dos módulos. */
+  const creating = useRef(false);
+
   const createCourse = async () => {
+    if (creating.current) return;
+    creating.current = true;
     await saveChange('No se pudo crear el curso.', async () => {
       const { data: created } = await api.post<Course>('/courses', {
         title: 'Curso nuevo',
         teacherGuid: user?.guid,
       });
 
-      // El detalle se abre vacío para no dejar la pantalla en blanco mientras carga.
+      // Recién creado no tiene módulos: se abre tal cual, sin volver a pedirlo.
       setActiveCourse({ ...created, modules: [] });
       setCourses((prev) => [created, ...prev]);
       setSelection(NONE);
       setExpandedModules({});
       router.push(`?course=${created.guid}`);
     });
+    creating.current = false;
   };
 
   const changeStatus = async (status: CourseStatus) => {
@@ -355,12 +353,13 @@ function CourseBuilder() {
     });
 
   const publishAndExit = async () => {
-    if (!activeCourse) return;
+    if (!activeCourse || !pendingExit) return;
     const guid = activeCourse.guid;
+    const { to } = pendingExit;
 
     // Se cierra antes de la petición: si llega un evento de tiempo real mientras tanto, no
     // debe reabrir el curso que se está abandonando.
-    setConfirmingExit(false);
+    setPendingExit(null);
     setActiveCourse(null);
     setSelection(NONE);
     setExpandedModules({});
@@ -371,25 +370,28 @@ function CourseBuilder() {
       showAlert.error('Error', errorMessage(error, 'No se pudo publicar el curso.'));
     }
     void loadCourses();
-
-    if (role === 'teacher') router.push('/dashboard');
-    else router.replace(window.location.pathname);
+    leaveTo(to);
   };
 
   // ── Módulos y bloques ────────────────────────────────────────────────────
 
   const createModule = async () => {
-    if (!activeCourse) return;
+    if (!activeCourse || creating.current) return;
+    creating.current = true;
     await saveChange('No se pudo crear el módulo.', async () => {
       await api.post(`/courses/${activeCourse.guid}/modules`, {
         title: `Módulo ${(activeCourse.modules?.length ?? 0) + 1} Nuevo`,
       });
       await reloadActiveCourse();
     });
+    creating.current = false;
   };
 
   const renameModule = async (moduleGuid: string, title: string) => {
-    if (readOnly) return;
+    // Nada que enviar si el nombre no cambió: evita una petición, y recargar el curso entero,
+    // cada vez que el campo pierde el foco.
+    const currentTitle = activeCourse?.modules?.find((m) => m.guid === moduleGuid)?.title;
+    if (readOnly || title === currentTitle) return;
     await saveChange('No se pudo renombrar el módulo.', async () => {
       await api.patch(`/courses/modules/${moduleGuid}`, { title });
       await reloadActiveCourse();
@@ -558,9 +560,6 @@ function CourseBuilder() {
 
               {selection.type === 'RESOURCE' && (
                 <ResourcePreview
-                  type={resourceKindOf(selection.resource)}
-                  title={displayTitle(selection.resource)}
-                  html={selection.resource.contentHtml ?? ''}
                   resource={selection.resource}
                   readOnly={readOnly}
                   onEdit={() =>
@@ -607,28 +606,21 @@ function CourseBuilder() {
           </div>
         </div>
       ) : (
-        <CourseCatalog
-          courses={courses}
-          isAdmin={isAdmin}
-          coursesBeingEdited={coursesBeingEdited}
-          userGuid={user?.guid}
-          onCreate={createCourse}
-          onOpen={openCourse}
-        />
+        <CourseCatalog courses={courses} onCreate={isAdmin ? createCourse : undefined} onOpen={openCourse} />
       )}
 
       {pendingDraftAction && (
         <CoursePublishedAlert onCancel={() => setPendingDraftAction(null)} onRevertToDraft={revertToDraft} />
       )}
 
-      {confirmingExit && (
+      {pendingExit && (
         <DraftExitAlert
           onPublishAndExit={publishAndExit}
           onExitWithoutPublishing={() => {
-            setConfirmingExit(false);
-            closeCourse();
+            setPendingExit(null);
+            leaveTo(pendingExit.to);
           }}
-          onCancel={() => setConfirmingExit(false)}
+          onCancel={() => setPendingExit(null)}
         />
       )}
 

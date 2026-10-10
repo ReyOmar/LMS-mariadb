@@ -6,6 +6,7 @@ import type { UserRole } from '@/types/models';
  */
 export const REALTIME_EVENTS = [
   'session:revoked',
+  'stream:superseded',
   'user:created',
   'user:updated',
   'user:deleted',
@@ -21,6 +22,7 @@ export const REALTIME_EVENTS = [
   'enrollment:changed',
   'submission:new',
   'submission:graded',
+  'quiz:attempt-enabled',
   'config:updated',
   'presence:update',
   'presence:sync',
@@ -45,6 +47,25 @@ export interface CourseEditor {
   guid: string;
   name: string;
   role: UserRole;
+}
+
+/** Alguien abrió su primera pestaña del campus o cerró la última. */
+export interface PresenceChange {
+  guid: string;
+  status: 'online' | 'offline';
+}
+
+/**
+ * Quién está en línea tras un cambio de presencia. Devuelve el mismo conjunto si el cambio
+ * no altera nada, para no repintar las listas que lo consultan.
+ */
+export function withPresence(online: ReadonlySet<string>, { guid, status }: PresenceChange): ReadonlySet<string> {
+  if (online.has(guid) === (status === 'online')) return online;
+
+  const next = new Set(online);
+  if (status === 'online') next.add(guid);
+  else next.delete(guid);
+  return next;
 }
 
 /**

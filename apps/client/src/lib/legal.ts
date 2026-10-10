@@ -121,16 +121,6 @@ export const STORAGE_NOTICE =
   'borradores de los cuestionarios. No usamos cookies publicitarias, analíticas ni de seguimiento. Los vídeos de ' +
   'YouTube de algunos cursos pueden usar cookies de YouTube al reproducirlos.';
 
-/** Identificación del responsable en una línea, con lo que haya configurado. */
-export function describeController(controller: DataController, country: Country): string {
-  const parts = [
-    controller.name,
-    controller.taxId && `${TAX_ID_LABEL[country]} ${controller.taxId}`,
-    controller.address && `domicilio en ${controller.address}`,
-  ].filter(Boolean);
-  return parts.join(', ');
-}
-
 /** Canales para ejercer los derechos, dentro de una frase. */
 function contactLine(controller: DataController): string {
   const channels = [
@@ -537,9 +527,7 @@ export function collectionNotice(country: Country, controller: DataController): 
 }
 
 export type LegalBlock =
-  | { kind: 'heading'; text: string }
-  | { kind: 'paragraph'; text: string }
-  | { kind: 'list'; items: string[] };
+  { kind: 'heading'; text: string } | { kind: 'paragraph'; text: string } | { kind: 'list'; items: string[] };
 
 /** Convierte un texto legal en bloques según el formato descrito al principio del módulo. */
 export function parseLegalText(text: string): LegalBlock[] {

@@ -8,7 +8,6 @@ import {
   Image as ImageIcon,
   Palette,
   RectangleHorizontal,
-  Save,
   Sparkles,
   Type,
   Upload,
@@ -21,6 +20,7 @@ import { useCountry } from '@/contexts/CountryContext';
 import { useAlerts } from '@/contexts/AlertContext';
 import { useSettingsDraft } from '@/hooks/useSettingsDraft';
 import { PageLoader } from '@/components/ui/PageLoader';
+import { UnsavedChangesBar } from '@/components/ui/UnsavedChangesBar';
 
 /** Combinaciones de color listas para aplicar de un clic. */
 const PALETTES = [
@@ -344,24 +344,7 @@ export default function ThemePage() {
         </Field>
       </Section>
 
-      {/* Barra de guardado: sólo aparece si hay algo que guardar, para que no quede duda de
-          si los cambios están aplicados. */}
-      {hasChanges && (
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-40 w-[min(calc(100%-2rem),40rem)]">
-          <div className="flex items-center justify-between gap-4 rounded-2xl border border-border bg-card px-5 py-4 shadow-2xl">
-            <p className="text-sm font-medium">Tienes cambios sin guardar.</p>
-            <button
-              type="button"
-              onClick={onSave}
-              disabled={saving}
-              className="inline-flex items-center gap-2 rounded-xl bg-primary px-5 py-2.5 text-sm font-bold text-primary-foreground hover:bg-primary/90 disabled:opacity-60 transition-colors"
-            >
-              <Save className="h-4 w-4" />
-              {saving ? 'Guardando…' : 'Guardar'}
-            </button>
-          </div>
-        </div>
-      )}
+      {hasChanges && <UnsavedChangesBar saving={saving} onSave={onSave} />}
     </div>
   );
 }

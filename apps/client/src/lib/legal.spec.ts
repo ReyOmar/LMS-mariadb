@@ -5,7 +5,6 @@ import {
   collectionNotice,
   dataControllerFrom,
   defaultLegalTexts,
-  describeController,
   legalVersionLabel,
   missingControllerData,
   parseLegalText,
@@ -20,17 +19,6 @@ const controller = {
 };
 
 const DATE = '25 de septiembre de 2026';
-
-describe('describeController', () => {
-  it('usa la identificación fiscal de cada país', () => {
-    expect(describeController(controller, 'COLOMBIA')).toContain('NIT 900123456-7');
-    expect(describeController(controller, 'MEXICO')).toContain('RFC 900123456-7');
-  });
-
-  it('omite lo que no se ha configurado', () => {
-    expect(describeController({ ...controller, taxId: null, address: null }, 'COLOMBIA')).toBe(controller.name);
-  });
-});
 
 describe('dataControllerFrom', () => {
   it('usa los datos de la portada cuando faltan los del responsable', () => {

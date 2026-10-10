@@ -149,17 +149,6 @@ describe('MailService · cuentas', () => {
     return { service, sent };
   }
 
-  it('la bienvenida nombra la sede y enlaza al acceso con esa sede elegida', async () => {
-    const { service, sent } = capturingService();
-
-    await service.sendWelcome('eva@pesv.test', 'Eva', 'Temporal2026', 'MEXICO');
-
-    expect(sent[0].variables).toMatchObject({
-      sede: 'México',
-      url_campus: 'https://campus.test/login?sede=MEXICO',
-    });
-  });
-
   it('el aviso de rechazo escapa el motivo que escribió el administrador', async () => {
     const { service, sent } = capturingService();
 
@@ -176,6 +165,64 @@ describe('MailService · cuentas', () => {
     await service.sendAccessRequestRejected('rita@pesv.test', 'Rita', null, 'COLOMBIA');
 
     expect(sent[0].variables.motivo).toBe('');
+  });
+});
+
+/**
+ * Bienvenida con la contraseña temporal.
+ *
+ * Sin ella la persona no puede entrar, así que tiene un texto de respaldo para cuando la
+ * sede no tiene plantilla. El respaldo es para eso y sólo para eso: si lo que falla es el
+ * proveedor, repetir el envío con otro texto duplica los reintentos y puede hacer que
+ * llegue dos veces.
+ */
+describe('MailService · bienvenida', () => {
+  function welcomeService({ withTemplate = true, delivered = true } = {}) {
+    const config = { get: (key: string) => (key === 'APP_URL' ? 'https://campus.test/' : undefined) };
+    const prisma = {
+      emailEvent: {
+        findUnique: async () => ({
+          templates: withTemplate ? [{ subject: 'Bienvenida', bodyHtml: '<p>{{sede}} {{url_campus}}</p>' }] : [],
+        }),
+      },
+    };
+    const settings = { getSettings: async () => ({ platformName: 'PESV', primaryColor: '#000', logoUrl: null }) };
+    const service = new MailService(config as never, prisma as never, settings as never, {} as never);
+    jest.spyOn(service['logger'], 'warn').mockImplementation(() => undefined);
+
+    const deliveries: { subject: string; html: string }[] = [];
+    jest
+      .spyOn(service as never as { deliverToProvider: (...args: string[]) => Promise<boolean> }, 'deliverToProvider')
+      .mockImplementation(async (_recipient: string, subject: string, html: string) => {
+        deliveries.push({ subject, html });
+        return delivered;
+      });
+    return { service, deliveries };
+  }
+
+  it('nombra la sede y enlaza al acceso con esa sede elegida', async () => {
+    const { service, deliveries } = welcomeService();
+
+    await service.sendWelcome('eva@pesv.test', 'Eva', 'Temporal2026', 'MEXICO');
+
+    expect(deliveries).toHaveLength(1);
+    expect(deliveries[0].html).toContain('México https://campus.test/login?sede=MEXICO');
+  });
+
+  it('sin plantilla envía el texto de respaldo con la contraseña temporal', async () => {
+    const { service, deliveries } = welcomeService({ withTemplate: false });
+
+    await service.sendWelcome('eva@pesv.test', 'Eva', 'Temporal2026', 'MEXICO');
+
+    expect(deliveries).toHaveLength(1);
+    expect(deliveries[0].html).toContain('Temporal2026');
+  });
+
+  it('si falla el envío, no lo repite con el texto de respaldo', async () => {
+    const { service, deliveries } = welcomeService({ delivered: false });
+
+    await expect(service.sendWelcome('eva@pesv.test', 'Eva', 'Temporal2026', 'MEXICO')).resolves.toBe(false);
+    expect(deliveries).toHaveLength(1);
   });
 });
 

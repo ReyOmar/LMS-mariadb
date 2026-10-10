@@ -142,6 +142,27 @@ describe('FileOwnershipService · retirar archivos', () => {
     expect(storage.deleteFiles).toHaveBeenCalledWith(['portadas/vieja.png']);
   });
 
+  it('consulta las tablas una tras otra: una limpieza no ocupa varias conexiones a la vez', async () => {
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const findMany = async () => {
+      inFlight++;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise((resolve) => setImmediate(resolve));
+      inFlight--;
+      return [];
+    };
+    const models = ['course', 'resource', 'user', 'countrySettings', 'submission', 'archivedSubmission', 'certificate'];
+    const prisma = Object.fromEntries(models.map((model) => [model, { findMany }]));
+    const storage = { deleteFiles: jest.fn(async () => undefined) };
+    const service = new FileOwnershipService(prisma as never, storage as never);
+
+    await service.deleteUnreferenced(['entregas/vieja.pdf']);
+
+    expect(maxInFlight).toBe(1);
+    expect(storage.deleteFiles).toHaveBeenCalledWith(['entregas/vieja.pdf']);
+  });
+
   it('si no puede comprobar quién los usa, no borra nada y no falla', async () => {
     const { service, storage } = campus({ failQueries: true });
 

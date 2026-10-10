@@ -1,5 +1,6 @@
 'use client';
 
+import type { ReactNode } from 'react';
 import { ExternalLink, PlayCircle } from 'lucide-react';
 import { fileUrlFor } from '@/lib/api';
 import { linkTarget, isQuiz } from '@/lib/resources';
@@ -7,9 +8,12 @@ import type { Resource } from '@/types/models';
 
 /**
  * Lo que el alumno ve dentro de un recurso de tipo `LINK`: una imagen, un vídeo de YouTube
- * o una página externa, según adónde apunte.
+ * o una página externa, según adónde apunte. La vista previa del constructor usa esta misma
+ * pieza, así que el examinador ve exactamente lo que verá el alumno.
+ *
+ * @param empty Lo que se enseña mientras el enlace no apunta a nada.
  */
-export function ResourceTarget({ resource }: { resource: Resource }) {
+export function ResourceTarget({ resource, empty }: { resource: Resource; empty?: ReactNode }) {
   const target = linkTarget(resource);
 
   if (target.kind === 'image') {
@@ -49,8 +53,9 @@ export function ResourceTarget({ resource }: { resource: Resource }) {
   }
 
   return (
-    <div className="w-full h-64 bg-muted/20 border border-dashed border-border rounded-2xl flex items-center justify-center text-muted-foreground">
+    <div className="w-full h-64 bg-muted/20 border border-dashed border-border rounded-2xl flex flex-col items-center justify-center gap-4 text-muted-foreground">
       <PlayCircle className="h-12 w-12 opacity-30" />
+      {empty}
     </div>
   );
 }

@@ -17,7 +17,7 @@ import { shortDateTime, timeAgo } from '@/lib/dates';
 export function LastAccess({ guid, date }: { guid: string; date?: string | null }) {
   const { onlineUsers } = useRealtime();
 
-  if (onlineUsers.includes(guid)) {
+  if (onlineUsers.has(guid)) {
     return (
       <span className="flex items-center gap-1.5 text-xs text-emerald-700 dark:text-emerald-400 font-bold bg-emerald-500/10 px-2 py-1 rounded-full w-fit">
         <span className="relative flex h-2 w-2">

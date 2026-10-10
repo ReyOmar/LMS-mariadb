@@ -1,12 +1,12 @@
 import { ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import * as crypto from 'crypto';
-import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { StorageService } from '../storage/storage.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { MailService } from '../mail/mail.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { CourseAccessService } from '../courses/course-access.service';
+import { lockEnrollment } from '../enrollments/enrollment-lock';
 import { percent } from '../common/domain/progress';
 import { Country } from '../common/domain/country';
 import { plural } from '../common/domain/text';
@@ -269,7 +269,10 @@ export class CertificatesService {
 
     const certificate = await this.prisma.$transaction(
       async (tx) => {
-        if (!(await this.lockOpenRound(tx, courseGuid, userGuid))) return null;
+        // Quien esperaba el bloqueo lee lo que dejó la emisión anterior: si ya cerró la
+        // vuelta, no hay nada que emitir. Sin matrícula, tampoco.
+        const enrollment = await lockEnrollment(tx, userGuid, courseGuid);
+        if (!enrollment || enrollment.completedAt) return null;
 
         // Cuántas vueltas lleva el alumno por este curso. La primera es la 1.
         const attempt = (await tx.certificate.count({ where: { userGuid, courseGuid } })) + 1;
@@ -322,21 +325,6 @@ export class CertificatesService {
 
     void this.notifyIssuance(certificate.guid, userGuid, data, country);
     return true;
-  }
-
-  /**
-   * Bloquea la matrícula hasta el final de la transacción y dice si su vuelta sigue abierta.
-   *
-   * La emisión escribe `completedAt` en la misma transacción que el certificado, así que
-   * quien esperaba el bloqueo lee lo que dejó la anterior: si ya cerró la vuelta, no hay
-   * nada que emitir. Sin matrícula, tampoco.
-   */
-  private async lockOpenRound(tx: Prisma.TransactionClient, courseGuid: string, userGuid: string) {
-    const [enrollment] = await tx.$queryRaw<{ completedAt: Date | null }[]>`
-      SELECT fecha_finalizacion AS completedAt FROM lms_matriculas
-      WHERE usuario_guid = ${userGuid} AND curso_guid = ${courseGuid}
-      FOR UPDATE`;
-    return enrollment !== undefined && !enrollment.completedAt;
   }
 
   /** Avisa al alumno, en la campana y por correo, y a su examinador. */

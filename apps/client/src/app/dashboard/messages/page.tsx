@@ -25,7 +25,8 @@ import { useAlerts } from '@/contexts/AlertContext';
 import { useDebounce } from '@/hooks/useDebounce';
 import { USER_ROLE_LABEL } from '@/lib/labels';
 import { shortTime, conversationTimestamp } from '@/lib/dates';
-import { initials, searchable } from '@/lib/text';
+import { initials, matchesSearch } from '@/lib/text';
+import { useInFlight } from '@/hooks/useInFlight';
 
 /** Relación con alguien a quien se ha pedido conversar. */
 type ContactStatus = 'PENDING' | 'ACCEPTED' | 'REJECTED';
@@ -94,10 +95,14 @@ export default function MessagesPage() {
   const [searching, setSearching] = useState(false);
   /** Se incrementa para volver a pedir los resultados sin que cambie el texto buscado. */
   const [searchVersion, setSearchVersion] = useState(0);
+  /** Persona a la que se está pidiendo contacto: su botón espera para no pedirlo dos veces. */
+  const [requestingContact, setRequestingContact] = useState<string | null>(null);
 
   // Solicitudes de contacto recibidas.
   const [pendingRequests, setPendingRequests] = useState<ContactRequest[]>([]);
   const [showRequests, setShowRequests] = useState(false);
+  /** Solicitud que se está respondiendo: sus dos botones esperan a que termine. */
+  const responding = useInFlight<number>();
 
   const conversationEnd = useRef<HTMLDivElement>(null);
 
@@ -163,8 +168,10 @@ export default function MessagesPage() {
       createdAt: string;
     };
 
-    void loadContacts();
-    if (!openContact || message.senderGuid !== openContact.guid) return;
+    if (openContact?.guid !== message.senderGuid) {
+      void loadContacts();
+      return;
+    }
 
     setMessages((prev) => [
       ...prev,
@@ -179,8 +186,12 @@ export default function MessagesPage() {
       },
     ]);
 
-    // Ya está a la vista: se marca como leído para que el contador no crezca.
-    void api.patch(`/notifications/messages/${message.senderGuid}/read`).catch(() => undefined);
+    // Ya está a la vista: se marca como leído y sólo después se recarga la lista, o la
+    // conversación abierta aparecería con un mensaje pendiente.
+    void api
+      .patch(`/notifications/messages/${message.senderGuid}/read`)
+      .catch(() => undefined)
+      .then(() => loadContacts());
   });
 
   // Una solicitud recibida o aceptada cambia la bandeja: se ve sin recargar.
@@ -271,12 +282,15 @@ export default function MessagesPage() {
   };
 
   const sendContactRequest = async (receiverGuid: string) => {
+    setRequestingContact(receiverGuid);
     try {
       await api.post('/notifications/messages/requests', { receiverGuid });
       // Se vuelven a pedir los resultados para que el botón pase a «Pendiente».
       setSearchVersion((version) => version + 1);
     } catch (error) {
       showAlert.error('No se pudo enviar la solicitud', errorMessage(error));
+    } finally {
+      setRequestingContact(null);
     }
   };
 
@@ -297,23 +311,23 @@ export default function MessagesPage() {
     );
   };
 
-  const respondToRequest = async (id: number, accept: boolean) => {
-    try {
-      await api.patch(`/notifications/messages/requests/${id}`, { accept });
-      setPendingRequests((prev) => prev.filter((r) => r.id !== id));
-      if (accept) void loadContacts();
-    } catch (error) {
-      showAlert.error('No se pudo responder a la solicitud', errorMessage(error));
-    }
-  };
+  const respondToRequest = (id: number, accept: boolean) =>
+    responding.run(id, async () => {
+      try {
+        await api.patch(`/notifications/messages/requests/${id}`, { accept });
+        setPendingRequests((prev) => prev.filter((r) => r.id !== id));
+        if (accept) void loadContacts();
+      } catch (error) {
+        showAlert.error('No se pudo responder a la solicitud', errorMessage(error));
+      }
+    });
 
   // La lista se recarga en vivo: lo que diga es más reciente que la copia de la conversación abierta.
   const openContactCanWrite = openContact
     ? (contacts.find((contact) => contact.guid === openContact.guid) ?? openContact).canWrite
     : false;
 
-  const contactSearch = searchable(search.trim());
-  const filteredContacts = contacts.filter((c) => searchable(`${c.firstName} ${c.lastName}`).includes(contactSearch));
+  const filteredContacts = contacts.filter((c) => matchesSearch(`${c.firstName} ${c.lastName}`, search));
 
   if (loading) return <PageLoader message="Cargando mensajes..." />;
 
@@ -414,7 +428,8 @@ export default function MessagesPage() {
                       <button
                         type="button"
                         onClick={() => respondToRequest(req.id, true)}
-                        className="p-1.5 bg-emerald-500/10 text-emerald-600 rounded-lg hover:bg-emerald-500/20 transition-colors"
+                        disabled={responding.has(req.id)}
+                        className="p-1.5 bg-emerald-500/10 text-emerald-600 rounded-lg hover:bg-emerald-500/20 transition-colors disabled:opacity-50"
                         title="Aceptar"
                         aria-label="Aceptar la solicitud"
                       >
@@ -423,7 +438,8 @@ export default function MessagesPage() {
                       <button
                         type="button"
                         onClick={() => respondToRequest(req.id, false)}
-                        className="p-1.5 bg-red-500/10 text-red-500 rounded-lg hover:bg-red-500/20 transition-colors"
+                        disabled={responding.has(req.id)}
+                        className="p-1.5 bg-red-500/10 text-red-500 rounded-lg hover:bg-red-500/20 transition-colors disabled:opacity-50"
                         title="Rechazar"
                         aria-label="Rechazar la solicitud"
                       >
@@ -516,7 +532,8 @@ export default function MessagesPage() {
                         <button
                           type="button"
                           onClick={() => sendContactRequest(u.guid)}
-                          className="text-[10px] bg-primary text-primary-foreground font-bold px-2.5 py-1.5 rounded-lg hover:bg-primary/90 transition-colors shrink-0"
+                          disabled={requestingContact === u.guid}
+                          className="text-[10px] bg-primary text-primary-foreground font-bold px-2.5 py-1.5 rounded-lg hover:bg-primary/90 transition-colors shrink-0 disabled:opacity-50"
                         >
                           Solicitar
                         </button>
