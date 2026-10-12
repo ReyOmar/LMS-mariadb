@@ -52,6 +52,7 @@ describe('CertificatesService — verificación y descarga', () => {
       {} as never,
       data as never,
       {} as never,
+      {} as never,
     );
     for (const level of ['warn', 'error'] as const) {
       jest.spyOn(service['logger'], level).mockImplementation(() => undefined);

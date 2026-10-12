@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Prisma, Submission } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
@@ -6,11 +6,18 @@ import { StorageService } from '../storage/storage.service';
 import { FileOwnershipService } from '../storage/file-ownership.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { SettingsService } from '../settings/settings.service';
-import { CourseAccessService } from '../courses/course-access.service';
+import { CourseAccessService, UNENROLLED_MESSAGE } from '../courses/course-access.service';
 import { recordCompletion, refreshCompletedResources } from '../courses/resource-progress';
 import { AWAITING_GRADE } from '../courses/progression';
-import { quizDisplayTitle } from '../courses/quiz-config';
-import { AFTER_LOCK, lockEnrollment } from '../enrollments/enrollment-lock';
+import { QuizConfig, parseQuizConfig, quizDisplayTitle } from '../courses/quiz-config';
+import { attemptsExhausted, usedAttempts } from '../courses/quiz.service';
+import {
+  AFTER_LOCK,
+  ClosedRoundMessages,
+  LockedEnrollment,
+  assertRoundOpen,
+  lockEnrollment,
+} from '../enrollments/enrollment-lock';
 import { toScore, isPassing, formatScore, normalizeScore, passingThreshold } from '../common/domain/grading';
 import { JwtPayload } from '../common/interfaces/jwt-payload.interface';
 import { FileReceiver } from '../storage/multipart';
@@ -130,6 +137,21 @@ function tallyOf(row: SubmissionsByCourseRow): SubmissionTally {
   return { total: Number(row.total), graded: Number(row.graded), ...rangesOf(row) };
 }
 
+const SUBMISSIONS_CLOSED: ClosedRoundMessages = {
+  unenrolled: UNENROLLED_MESSAGE,
+  certified: 'Ya terminaste este curso: tus entregas quedaron cerradas con tu certificado.',
+};
+
+const GRADING_CLOSED: ClosedRoundMessages = {
+  unenrolled: 'Este alumno ya no está matriculado en el curso: no puedes calificar su entrega.',
+  certified: 'La vuelta de este alumno ya está certificada: su calificación no puede cambiarse.',
+};
+
+const NEW_ATTEMPT_CLOSED: ClosedRoundMessages = {
+  unenrolled: 'Este alumno ya no está matriculado en el curso: no puedes habilitarle otro intento.',
+  certified: 'La vuelta de este alumno ya está certificada: no puedes habilitarle otro intento.',
+};
+
 /** Lo que se mira de la entrega anterior de un alumno al recibir otra. */
 const OWN_SUBMISSION_SELECT = {
   guid: true,
@@ -199,6 +221,7 @@ export class AssessmentsService {
     }
 
     // Antes de recibir el archivo, para no aceptar en balde uno que puede pesar varios GB.
+    assertRoundOpen(await this.enrollmentOf(user.sub, course.guid), SUBMISSIONS_CLOSED);
     ensureReplaceable(await this.ownSubmission(this.prisma, assignmentGuid, user.sub), threshold);
 
     const limit = uploadLimit('entregas', assignment.maxUploadMb ?? (await this.settings.getMaxUploadMb(user.country)));
@@ -226,14 +249,17 @@ export class AssessmentsService {
     return this.forStudent(submission);
   }
 
-  /** Con la matrícula bloqueada: dos envíos a la vez se ponen en fila y el segundo sustituye al primero. */
+  /**
+   * Con la matrícula bloqueada: dos envíos a la vez se ponen en fila y el segundo sustituye al
+   * primero, y uno que llega tras la baja o el certificado se rechaza.
+   */
   private saveDelivery(
     target: { assignmentGuid: string; courseGuid: string; userGuid: string; threshold: number },
     attachment: { attachmentKey: string; attachmentName: string },
   ) {
     const { assignmentGuid, courseGuid, userGuid, threshold } = target;
     return this.prisma.$transaction(async (tx) => {
-      await lockEnrollment(tx, userGuid, courseGuid);
+      assertRoundOpen(await lockEnrollment(tx, userGuid, courseGuid), SUBMISSIONS_CLOSED);
       const previous = await this.ownSubmission(tx, assignmentGuid, userGuid);
       ensureReplaceable(previous, threshold);
 
@@ -254,6 +280,13 @@ export class AssessmentsService {
     }, AFTER_LOCK);
   }
 
+  private enrollmentOf(userGuid: string, courseGuid: string): Promise<LockedEnrollment | null> {
+    return this.prisma.enrollment.findUnique({
+      where: { userGuid_courseGuid: { userGuid, courseGuid } },
+      select: { active: true, completedAt: true },
+    });
+  }
+
   /** La entrega del alumno en una tarea, si ya la tiene: cada tarea admite una por alumno. */
   private ownSubmission(db: Prisma.TransactionClient, assignmentGuid: string, userGuid: string) {
     return db.submission.findFirst({ where: { assignmentGuid, userGuid }, select: OWN_SUBMISSION_SELECT });
@@ -270,10 +303,15 @@ export class AssessmentsService {
   }
 
   /**
-   * Proyección de una entrega hacia su autor.
-   * El archivo se entrega como URL firmada y caducable, nunca como clave suelta: la clave
-   * sola permitiría a cualquiera descargar el documento.
+   * El archivo entregado, como URL firmada y caducable y nunca como clave suelta: la clave sola
+   * permitiría a cualquiera descargarlo. Ninguna si se retiró al emitirse el certificado.
    */
+  private deliveredFileUrl(submission: Pick<Submission, 'attachmentKey' | 'attachmentName' | 'filePurged'>) {
+    if (submission.filePurged || !submission.attachmentKey) return null;
+    return this.storage.downloadUrl(submission.attachmentKey, submission.attachmentName);
+  }
+
+  /** Proyección de una entrega hacia su autor. */
   private forStudent(
     submission: Pick<
       Submission,
@@ -293,9 +331,7 @@ export class AssessmentsService {
       status: submission.status,
       submittedAt: submission.submittedAt,
       fileName: submission.attachmentName,
-      fileUrl: submission.attachmentKey
-        ? this.storage.downloadUrl(submission.attachmentKey, submission.attachmentName)
-        : null,
+      fileUrl: this.deliveredFileUrl(submission),
       filePurged: submission.filePurged,
       score: toScore(submission.score),
       feedback: submission.feedback,
@@ -346,11 +382,27 @@ export class AssessmentsService {
 
     const hasMore = rows.length > take;
     const page = hasMore ? rows.slice(0, take) : rows;
+    const certified = await this.certifiedStudents(filter.course, page);
 
     return {
       cursor: hasMore ? lastItemCursor(page) : null,
-      submissions: page.map((submission) => this.forExaminer(submission)),
+      submissions: page.map((submission) => this.forExaminer(submission, certified)),
     };
+  }
+
+  /** Autores de las entregas indicadas cuya vuelta en el curso ya está certificada. */
+  private async certifiedStudents(courseGuid: string, submissions: DashboardSubmission[]): Promise<Set<string>> {
+    if (submissions.length === 0) return new Set();
+
+    const certified = await this.prisma.enrollment.findMany({
+      where: {
+        courseGuid,
+        userGuid: { in: [...new Set(submissions.map((submission) => submission.user.guid))] },
+        completedAt: { not: null },
+      },
+      select: { userGuid: true },
+    });
+    return new Set(certified.map((enrollment) => enrollment.userGuid));
   }
 
   /**
@@ -499,11 +551,12 @@ export class AssessmentsService {
     });
 
     const last = page[page.length - 1];
+    const certified = await this.certifiedStudents(filter.course, attempts);
 
     return {
       cursor: hasMore ? encodeCursor(last.lastSubmittedAt, last.userGuid) : null,
       submissions: attempts.map((attempt) => ({
-        ...this.forExaminer(attempt),
+        ...this.forExaminer(attempt, certified),
         assignmentTitle: attempt.assignment?.title ?? 'Cuestionario eliminado',
       })),
     };
@@ -578,8 +631,11 @@ export class AssessmentsService {
       : Prisma.sql`AND c2.profesor_guid = ${user.sub}`;
   }
 
-  /** Proyección común del panel: el archivo sale como URL firmada y la nota, normalizada. */
-  private forExaminer(submission: DashboardSubmission) {
+  /**
+   * Proyección común del panel: el archivo sale como URL firmada y la nota, normalizada.
+   * `roundClosed` dice que la vuelta del alumno ya está certificada y su nota no se toca.
+   */
+  private forExaminer(submission: DashboardSubmission, certified: Set<string>) {
     return {
       guid: submission.guid,
       status: submission.status,
@@ -589,10 +645,9 @@ export class AssessmentsService {
       feedback: submission.feedback,
       passingScore: passingThreshold(submission.assignment?.module.course.passingScore),
       fileName: submission.attachmentName,
-      fileUrl: submission.attachmentKey
-        ? this.storage.downloadUrl(submission.attachmentKey, submission.attachmentName)
-        : null,
+      fileUrl: this.deliveredFileUrl(submission),
       filePurged: submission.filePurged,
+      roundClosed: certified.has(submission.user.guid),
       student: submission.user,
       assignmentGuid: submission.assignment?.guid ?? null,
       assignmentTitle: submission.assignment?.title ?? 'Tarea eliminada',
@@ -612,8 +667,8 @@ export class AssessmentsService {
    * avance que tuviera en ella —por un aprobado anterior o por el desbloqueo por espera—:
    * si no, una tarea suspendida contaría como completada para el certificado.
    *
-   * A quien se dio de baja no se le califica: su entrega ya no está en la cola y la nota
-   * movería el avance de una matrícula cerrada.
+   * A quien se dio de baja o ya tiene el certificado de esta vuelta no se le califica: la nota
+   * movería el avance de una vuelta cerrada.
    */
   async gradeSubmission(submissionGuid: string, dto: GradeSubmissionDto, user: JwtPayload) {
     const { submission, course } = await this.access.managedCourseOfSubmission(submissionGuid, user);
@@ -631,10 +686,7 @@ export class AssessmentsService {
     // y la nota y el avance de la tarea quedan los dos de acuerdo con la última. Por
     // separado, la nota podía ser un suspenso con el avance de un aprobado.
     await this.prisma.$transaction(async (tx) => {
-      const enrollment = await lockEnrollment(tx, submission.userGuid, course.guid);
-      if (!enrollment?.active) {
-        throw new ForbiddenException('Este alumno ya no está matriculado en el curso: no puedes calificar su entrega.');
-      }
+      assertRoundOpen(await lockEnrollment(tx, submission.userGuid, course.guid), GRADING_CLOSED);
 
       await tx.submission.update({
         where: { guid: submissionGuid },
@@ -673,7 +725,7 @@ export class AssessmentsService {
   }
 
   /**
-   * Devuelve **un** intento de cuestionario a un alumno que agotó los suyos.
+   * Devuelve **un** intento de cuestionario a un alumno que agotó los suyos sin superarlo.
    *
    * Es la vía de escape del examinador cuando alguien pierde un intento por un problema de
    * conexión o de dispositivo. Se retira únicamente el último intento registrado, porque
@@ -690,24 +742,13 @@ export class AssessmentsService {
     if (!resource?.quizConfig) {
       throw new BadRequestException('Este recurso no es un cuestionario.');
     }
+    const config = parseQuizConfig(resource.quizConfig);
 
-    const last = await this.prisma.submission.findFirst({
-      where: { assignmentGuid: resourceGuid, userGuid: studentGuid, status: 'GRADED' },
-      orderBy: [{ attemptNumber: 'desc' }, { submittedAt: 'desc' }],
-      select: { guid: true },
-    });
-    if (!last) {
-      throw new NotFoundException('Este alumno no tiene intentos registrados en el cuestionario.');
-    }
-
-    await this.prisma.submission.delete({ where: { guid: last.guid } });
-
-    // Si lo había superado, el progreso se retira: volver a intentarlo sólo tiene sentido
-    // mientras el recurso siga contando como pendiente.
-    await this.prisma.resourceProgress.deleteMany({
-      where: { userGuid: studentGuid, resourceGuid },
-    });
-    await refreshCompletedResources(this.prisma, studentGuid, course.guid);
+    // Con la matrícula bloqueada, como al abrir y corregir intentos: nadie cuenta a la vez los que quedan.
+    await this.prisma.$transaction(async (tx) => {
+      assertRoundOpen(await lockEnrollment(tx, studentGuid, course.guid), NEW_ATTEMPT_CLOSED);
+      await this.discardLastAttempt(tx, { resourceGuid, studentGuid, config });
+    }, AFTER_LOCK);
 
     const quizTitle = quizDisplayTitle(resource.title);
     this.logger.log(`${user.email} habilitó un nuevo intento de "${quizTitle}" a ${studentGuid}`);
@@ -726,5 +767,37 @@ export class AssessmentsService {
     });
 
     return { message: 'El alumno puede volver a realizar el cuestionario.' };
+  }
+
+  /** Retira el último intento calificado; nunca el de quien ya superó el cuestionario ni a quien le quedan. */
+  private async discardLastAttempt(
+    tx: Prisma.TransactionClient,
+    { resourceGuid, studentGuid, config }: { resourceGuid: string; studentGuid: string; config: QuizConfig },
+  ): Promise<void> {
+    const passed = await tx.resourceProgress.findUnique({
+      where: { userGuid_resourceGuid: { userGuid: studentGuid, resourceGuid } },
+      select: { id: true },
+    });
+    if (passed) {
+      throw new BadRequestException('Este alumno ya superó el cuestionario: su intento aprobado no se retira.');
+    }
+
+    const last = await tx.submission.findFirst({
+      where: { assignmentGuid: resourceGuid, userGuid: studentGuid, status: 'GRADED' },
+      orderBy: [{ attemptNumber: 'desc' }, { submittedAt: 'desc' }],
+      select: { guid: true },
+    });
+    if (!last) {
+      throw new NotFoundException('Este alumno no tiene intentos registrados en el cuestionario.');
+    }
+
+    const used = await tx.submission.count({ where: usedAttempts(resourceGuid, studentGuid) });
+    if (!attemptsExhausted(config, used)) {
+      throw new BadRequestException(
+        'A este alumno todavía le quedan intentos: puede volver a presentar el cuestionario sin que le habilites otro.',
+      );
+    }
+
+    await tx.submission.delete({ where: { guid: last.guid } });
   }
 }

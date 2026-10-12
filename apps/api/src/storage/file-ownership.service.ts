@@ -125,7 +125,7 @@ export class FileOwnershipService {
     for (let start = 0; start < keys.length; start += REFERENCE_BATCH) {
       const among = { in: keys.slice(start, start + REFERENCE_BATCH) };
 
-      // Una tras otra: es una limpieza, y siete a la vez ocuparían casi todo el pool de conexiones.
+      // Una tras otra: es una limpieza, y seis a la vez ocuparían casi todo el pool de conexiones.
       const rows = [
         await this.prisma.course.findMany({ where: { coverImage: among }, select: { coverImage: true } }),
         await this.prisma.resource.findMany({
@@ -141,10 +141,6 @@ export class FileOwnershipService {
           select: { logoUrl: true, faviconUrl: true, loginBackgroundUrl: true },
         }),
         await this.prisma.submission.findMany({ where: { attachmentKey: among }, select: { attachmentKey: true } }),
-        await this.prisma.archivedSubmission.findMany({
-          where: { attachmentKey: among },
-          select: { attachmentKey: true },
-        }),
         await this.prisma.certificate.findMany({ where: { pdfKey: among }, select: { pdfKey: true } }),
       ];
 

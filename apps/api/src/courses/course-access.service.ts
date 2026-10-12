@@ -5,6 +5,9 @@ import { Country } from '../common/domain/country';
 import { JwtPayload } from '../common/interfaces/jwt-payload.interface';
 import { AWAITING_GRADE, isResourceUnlocked, waitedTooLong } from './progression';
 
+/** Lo que ve un alumno dado de baja al intentar trabajar en el curso. */
+export const UNENROLLED_MESSAGE = 'Tu matrícula en este curso está dada de baja. Contacta con el administrador.';
+
 /** Datos mínimos de un curso para decidir si alguien puede verlo o tocarlo. */
 export interface CourseAccessInfo {
   guid: string;
@@ -102,9 +105,7 @@ export class CourseAccessService {
     if (!enrollment) {
       throw new ForbiddenException('No estás matriculado en este curso.');
     }
-    if (!enrollment.active) {
-      throw new ForbiddenException('Tu matrícula en este curso está dada de baja. Contacta con el administrador.');
-    }
+    if (!enrollment.active) throw new ForbiddenException(UNENROLLED_MESSAGE);
   }
 
   /**

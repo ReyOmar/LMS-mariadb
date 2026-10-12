@@ -88,9 +88,15 @@ function stitchSql(chunks: TemplateStringsArray, values: unknown[]) {
  * `totalCount` es lo que tiene el curso; el doble respeta el `take`, que es justamente lo
  * que se quiere comprobar.
  */
-function recordingService(totalCount = 0, rawRows: unknown[] = [], finishedRows: unknown[] = []) {
+function recordingService(
+  totalCount = 0,
+  rawRows: unknown[] = [],
+  finishedRows: unknown[] = [],
+  certifiedStudents: string[] = [],
+) {
   const queries: Query[] = [];
   const rawQueries: { sql: string; values: unknown[] }[] = [];
+  const enrollmentQueries: Query[] = [];
   let coursesQueried = 0;
 
   const prisma = {
@@ -99,6 +105,12 @@ function recordingService(totalCount = 0, rawRows: unknown[] = [], finishedRows:
         queries.push(query);
         const count = Math.min(totalCount, query.take ?? totalCount);
         return Array.from({ length: count }, (_, i) => submission(i));
+      },
+    },
+    enrollment: {
+      findMany: async (query: Query) => {
+        enrollmentQueries.push(query);
+        return certifiedStudents.map((userGuid) => ({ userGuid }));
       },
     },
     $queryRaw: async (chunks: TemplateStringsArray, ...values: unknown[]) => {
@@ -127,7 +139,7 @@ function recordingService(totalCount = 0, rawRows: unknown[] = [], finishedRows:
     {} as never,
   );
 
-  return { service, queries, rawQueries, coursesQueried: () => coursesQueried };
+  return { service, queries, rawQueries, enrollmentQueries, coursesQueried: () => coursesQueried };
 }
 
 describe('cola de entregas del examinador', () => {
@@ -258,6 +270,39 @@ describe('cola de entregas del examinador', () => {
     const where = queries[0].where as { AND: Record<string, unknown>[] };
     expect(where.AND[0]).toHaveProperty('OR');
     expect(where.AND[1]).toHaveProperty('OR');
+  });
+});
+
+describe('cola del examinador: vueltas certificadas y archivos retirados', () => {
+  it('marca las entregas de quien ya tiene el certificado de su vuelta: su nota ya no se toca', async () => {
+    const { service, enrollmentQueries } = recordingService(2, [], [], ['alumno-1']);
+
+    const { submissions } = await service.getSubmissionsToGrade(ADMIN, { course: COURSE });
+
+    expect(submissions.map((row) => row.roundClosed)).toEqual([false, true]);
+    expect(enrollmentQueries[0].where).toEqual({
+      courseGuid: COURSE,
+      userGuid: { in: ['alumno-0', 'alumno-1'] },
+      completedAt: { not: null },
+    });
+  });
+
+  it('lo mismo en el historial de intentos de cuestionario', async () => {
+    const { service } = recordingService(2, [{ userGuid: 'alumno-0', lastSubmittedAt: new Date() }], [], ['alumno-0']);
+
+    const { submissions } = await service.getQuizAttempts(ADMIN, { course: COURSE });
+
+    expect(submissions.map((row) => row.roundClosed)).toEqual([true, false]);
+  });
+
+  it('una entrega cuyo archivo se retiró no ofrece enlace de descarga', async () => {
+    const { service } = recordingService(1);
+    const purged = { ...submission(0), attachmentKey: 'entregas/informe.pdf', filePurged: true };
+    jest.spyOn(service['prisma'].submission, 'findMany').mockResolvedValueOnce([purged] as never);
+
+    const { submissions } = await service.getSubmissionsToGrade(ADMIN, { course: COURSE });
+
+    expect(submissions[0]).toMatchObject({ fileName: 'informe.pdf', fileUrl: null, filePurged: true });
   });
 });
 
@@ -499,16 +544,16 @@ describe('historial de intentos de cuestionario', () => {
  * podría certificarse sin aprobarla.
  */
 describe('calificación de una tarea', () => {
-  function gradingService({ enrolled = true } = {}) {
+  function gradingService({ enrolled = true, certifiedAt = null as Date | null } = {}) {
     const progress = new Set<string>(['alumno-1|tarea-1']);
     const recounts: unknown[][] = [];
     const steps: string[] = [];
     const transactionOptions: unknown[] = [];
     const prisma = {
-      // El bloqueo de la matrícula, que devuelve si sigue activa.
+      // El bloqueo de la matrícula, que devuelve si sigue activa y si su vuelta terminó.
       $queryRaw: async () => {
         steps.push('bloqueo');
-        return [{ active: enrolled ? 1 : 0, completedAt: null }];
+        return [{ active: enrolled ? 1 : 0, completedAt: certifiedAt }];
       },
       $transaction: async (work: (client: never) => Promise<unknown>, options: unknown) => {
         transactionOptions.push(options);
@@ -612,6 +657,18 @@ describe('calificación de una tarea', () => {
     expect(prisma.submission.update).not.toHaveBeenCalled();
     expect(progress.has('alumno-1|tarea-1')).toBe(true);
   });
+
+  it('no recalifica una entrega de una vuelta ya certificada: su nota respalda el certificado', async () => {
+    const { service, prisma, progress, recounts } = gradingService({ certifiedAt: new Date('2026-02-20') });
+
+    await expect(service.gradeSubmission('entrega-1', { score: 40 }, ADMIN)).rejects.toThrow(ForbiddenException);
+    await expect(service.gradeSubmission('entrega-1', { score: 40 }, ADMIN)).rejects.toThrow(
+      'La vuelta de este alumno ya está certificada: su calificación no puede cambiarse.',
+    );
+    expect(prisma.submission.update).not.toHaveBeenCalled();
+    expect(progress.has('alumno-1|tarea-1')).toBe(true);
+    expect(recounts).toEqual([]);
+  });
 });
 
 /**
@@ -629,13 +686,30 @@ describe('entrega de una tarea: límite de subida', () => {
     status: string;
     score: number | null;
     attachmentKey: string | null;
+    attachmentName?: string;
+    filePurged?: boolean;
+  }
+
+  interface Round {
+    active: boolean;
+    completedAt: Date | null;
   }
 
   function submissionService({
     ownLimitMb = null,
     previous = null,
     failOnSave = false,
-  }: { ownLimitMb?: number | null; previous?: Previous | null; failOnSave?: boolean } = {}) {
+    round = { active: true, completedAt: null },
+    roundAtLock = round,
+  }: {
+    ownLimitMb?: number | null;
+    previous?: Previous | null;
+    failOnSave?: boolean;
+    /** La matrícula al pedir la entrega. */
+    round?: Round;
+    /** La matrícula cuando el archivo ya llegó y se bloquea para guardarlo. */
+    roundAtLock?: Round;
+  } = {}) {
     // La entrega guardada del alumno: lo que confirma un envío lo ve el siguiente.
     let stored: Record<string, unknown> | null = previous && { ...previous };
     const writes: string[] = [];
@@ -663,7 +737,8 @@ describe('entrega de una tarea: límite de subida', () => {
         findUnique: async () => ({ title: 'Informe', type: 'ASSIGNMENT', quizConfig: null, maxUploadMb: ownLimitMb }),
       },
       submission: { findFirst: async () => stored, create: save('alta'), update: save('sustitución') },
-      $queryRaw: async () => [{ active: 1, completedAt: null }],
+      enrollment: { findUnique: async () => round },
+      $queryRaw: async () => [{ active: roundAtLock.active ? 1 : 0, completedAt: roundAtLock.completedAt }],
       $transaction: (work: (client: never) => Promise<unknown>) => {
         const run = queue.then(() => work(prisma as never));
         queue = run.catch(() => undefined);
@@ -680,14 +755,8 @@ describe('entrega de una tarea: límite de subida', () => {
       downloadUrl: jest.fn(() => '/api/storage/download/entregas/nueva.pdf?exp=1&sig=x'),
     };
     const files = fileOwnershipDouble();
-    const access = {
-      unlockedResourceAccess: async () => ({
-        guid: COURSE,
-        title: 'Manejo defensivo',
-        passingScore: 80,
-        teacherGuid: 'profe-1',
-      }),
-    };
+    const course = { guid: COURSE, title: 'Manejo defensivo', passingScore: 80, teacherGuid: 'profe-1' };
+    const access = { unlockedResourceAccess: async () => course, ensureResourceAccess: async () => course };
     const settings = { getMaxUploadMb: async () => 10 };
     const received: { isResubmission: boolean }[] = [];
     const events = {
@@ -796,5 +865,50 @@ describe('entrega de una tarea: límite de subida', () => {
     await service.recordSubmission('tarea-1', receive, STUDENT);
 
     expect(storage.downloadUrl).toHaveBeenCalledWith('entregas/nueva.pdf', 'informe.pdf');
+  });
+
+  it('con la vuelta certificada no recibe el archivo: sus entregas quedaron cerradas', async () => {
+    const { service, receive, uploads } = submissionService({ round: { active: true, completedAt: new Date() } });
+
+    await expect(service.recordSubmission('tarea-1', receive, STUDENT)).rejects.toThrow(
+      'Ya terminaste este curso: tus entregas quedaron cerradas con tu certificado.',
+    );
+    expect(receive).not.toHaveBeenCalled();
+    expect(uploads).toEqual([]);
+  });
+
+  it('dado de baja tampoco recibe el archivo', async () => {
+    const { service, receive } = submissionService({ round: { active: false, completedAt: null } });
+
+    await expect(service.recordSubmission('tarea-1', receive, STUDENT)).rejects.toThrow(/dada de baja/);
+    expect(receive).not.toHaveBeenCalled();
+  });
+
+  it('si la vuelta se certifica mientras sube el archivo, no guarda la entrega y retira lo subido', async () => {
+    const { service, receive, files, writes } = submissionService({
+      roundAtLock: { active: true, completedAt: new Date() },
+    });
+
+    await expect(service.recordSubmission('tarea-1', receive, STUDENT)).rejects.toThrow(/entregas quedaron cerradas/);
+    expect(writes).toEqual([]);
+    expect(files.discarded).toHaveBeenCalledWith(['entregas/nueva.pdf']);
+  });
+
+  it('una entrega cuyo archivo se retiró se le muestra con su nombre y sin enlace de descarga', async () => {
+    const { service, storage } = submissionService({
+      previous: {
+        guid: 'entrega-0',
+        status: 'GRADED',
+        score: 90,
+        attachmentKey: 'entregas/informe.pdf',
+        attachmentName: 'informe.pdf',
+        filePurged: true,
+      },
+    });
+
+    const mine = await service.getMySubmission('tarea-1', STUDENT);
+
+    expect(mine).toMatchObject({ fileName: 'informe.pdf', fileUrl: null, filePurged: true, score: 90 });
+    expect(storage.downloadUrl).not.toHaveBeenCalled();
   });
 });

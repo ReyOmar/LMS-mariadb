@@ -6,7 +6,8 @@ import { fileOwnershipDouble } from '../common/testing/file-ownership-double';
 /**
  * Contenido de un curso: lo que se guarda al editar un recurso y lo que se borra del
  * almacenamiento al quitar contenido. Ninguna tarea periódica recoge archivos sin uso: el que
- * no se borra al desvincularlo se queda ocupando espacio para siempre.
+ * no se borra al desvincularlo se queda ocupando espacio para siempre. Qué se lleva cada
+ * borrado lo fija `content-removal.service.spec.ts`.
  */
 
 const ADMIN = sessionFor('ADMIN', 'COLOMBIA', 'admin');
@@ -20,25 +21,25 @@ function serviceWith(prisma: Record<string, unknown>) {
     editableCourseOfModule: async () => EDITABLE,
     editableCourseOfResource: async () => EDITABLE,
   };
-  const service = new CourseContentService(prisma as never, access as never, storage as never, ownership.files);
-  return { service, files: ownership, deletedFiles: ownership.retired };
+  const removal = { remove: jest.fn(async () => undefined) };
+  const service = new CourseContentService(
+    prisma as never,
+    access as never,
+    storage as never,
+    ownership.files,
+    removal as never,
+  );
+  return { service, files: ownership, deletedFiles: ownership.retired, removal };
 }
 
 describe('CourseContentService', () => {
-  it('borrar un módulo retira del almacenamiento los adjuntos y los archivos principales', async () => {
-    const { service, deletedFiles } = serviceWith({
-      resource: {
-        findMany: async () => [
-          { attachmentKey: 'recursos/guia.pdf', fileUrl: null },
-          { attachmentKey: null, fileUrl: 'recursos/video.mp4' },
-        ],
-      },
-      courseModule: { delete: async () => undefined },
-    });
+  it('borrar un módulo o una tarea se lleva sus entregas y sus archivos', async () => {
+    const { service, removal } = serviceWith({});
 
     await service.deleteModule('modulo-1', ADMIN);
+    await service.deleteResource('tarea-1', ADMIN);
 
-    expect(deletedFiles()).toEqual(['recursos/guia.pdf', 'recursos/video.mp4']);
+    expect(removal.remove.mock.calls).toEqual([[{ moduleGuid: 'modulo-1' }], [{ resourceGuid: 'tarea-1' }]]);
   });
 
   it('quitar el cuestionario con una cadena vacía guarda nulo y no un cuestionario roto', async () => {

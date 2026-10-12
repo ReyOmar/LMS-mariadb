@@ -305,15 +305,27 @@ proceso se corta a mitad, no queda ningún archivo a medias con su nombre defini
   que falte deja su enlace roto. Si falta el PDF de un certificado, la API lo recompone al
   descargarlo con los datos que guardó al emitirlo; los emitidos antes de guardarse esos
   datos sólo se recuperan de la copia.
-- **Espacio.** Cuenta con lo que ocupen las entregas y el material, más el doble del archivo
-  más grande mientras se guarda (el temporal de la subida y su copia).
+- **Espacio.** Cuenta con lo que ocupen el material de los cursos, las entregas de las
+  vueltas en curso, los PDF de los certificados, las imágenes de marca y las fotos de perfil,
+  más el doble del archivo más grande mientras se guarda (el temporal de la subida y su copia).
 - **Comprobación.** `GET /api/health` responde `storage: { status: "ok" }` si la API puede
   escribir en la carpeta. Con `error`, el registro de arranque dice por qué (ruta, permisos o
   disco lleno); la API arranca igualmente para que el resto del campus siga funcionando.
 
-La aplicación **no borra archivos por su cuenta**: sólo cuando alguien elimina, sustituye o
-quita desde el panel aquello a lo que pertenecen. Las entregas conservan su archivo después
-del certificado, así que el almacenamiento crece con el uso; tenlo en cuenta al dimensionarlo.
+**Cuándo se borra un archivo.** Ninguna tarea programada borra archivos. Lo que se borra del
+disco, y sólo eso:
+
+- **Los archivos que entrega un alumno, al emitirse su certificado.** Cada entrega conserva el
+  nombre del archivo, la nota y el comentario, y el PDF del certificado se guarda siempre. Si
+  se le vuelve a matricular, empieza de cero y al certificarse otra vez se retiran los de esa
+  vuelta. Una vuelta certificada ya no admite entregas nuevas.
+- **Lo sustituido o quitado desde el panel**: la portada, la foto de perfil, el logotipo, el
+  favicon, el fondo, la firma o el material anteriores, y la entrega que el alumno reenvía.
+- **Lo que pertenece a algo eliminado**: un recurso, un módulo o un curso, con las entregas de
+  sus tareas, o una cuenta.
+
+Las portadas, la configuración de la sede y las fotos de perfil nunca se borran solas. Detalle
+en `docs/DECISIONES.md`, «¿Cuándo se borra un archivo?».
 
 ### Tamaño máximo de los archivos
 
@@ -398,6 +410,51 @@ Reinicia siempre la API después de cambiar una variable de entorno: se leen al 
 **Despliega siempre las dos partes juntas.** El cliente y la API comparten las rutas y los
 nombres de los campos; un cliente de una versión contra la API de otra deja pantallas sin
 datos.
+
+### Al actualizar a la versión que retira las entregas al certificar
+
+- **Al emitirse un certificado se borran del disco los archivos entregados en ese curso**; las
+  entregas conservan el nombre, la nota y el comentario. Las vueltas ya certificadas se ponen
+  al día solas en el primer arranque, sin hacer nada: el registro dice cuántos archivos retiró.
+- **Una vuelta certificada queda cerrada.** La API ya no admite en ella entregas,
+  recalificaciones, intentos de cuestionario ni intentos adicionales; para repetir el curso
+  se vuelve a matricular. Un intento adicional sólo se concede a quien agotó los suyos sin
+  superar el cuestionario.
+- **Las entregas archivadas dejan de guardar archivo.** El `db push` retira la columna
+  `url_archivo_adjunto` de `lms_entregas_archivadas` y su índice. Los archivos a los que
+  apuntaba —entregas de vueltas ya certificadas de alumnos rematriculados— hay que borrarlos
+  **antes**, porque después nada los referencia:
+  1. Lista sus claves en phpMyAdmin → **SQL** y exporta el resultado como CSV, sin
+     cabecera, a `~/archivadas.txt`:
+
+     ```sql
+     SELECT a.url_archivo_adjunto FROM lms_entregas_archivadas a
+     WHERE a.url_archivo_adjunto IS NOT NULL
+       AND NOT EXISTS (SELECT 1 FROM lms_entregas e WHERE e.url_archivo_adjunto = a.url_archivo_adjunto);
+     ```
+
+  2. Borra esos archivos de `STORAGE_DIR`. Cada clave es su ruta dentro de la carpeta, y sólo
+     se admiten las de `entregas/`:
+
+     ```bash
+     cd /home/usuario/lms-data/uploads &&
+       tr -d '"\r' < ~/archivadas.txt | grep -E '^entregas/[^/]+$' | while read -r clave; do rm -f -- "$clave"; done
+     ```
+
+  3. Retira esas claves del registro de subidas y vacía la columna:
+
+     ```sql
+     DELETE FROM lms_archivos WHERE clave IN (
+       SELECT a.url_archivo_adjunto FROM lms_entregas_archivadas a
+       WHERE a.url_archivo_adjunto IS NOT NULL
+         AND NOT EXISTS (SELECT 1 FROM lms_entregas e WHERE e.url_archivo_adjunto = a.url_archivo_adjunto));
+     UPDATE lms_entregas_archivadas SET url_archivo_adjunto = NULL;
+     ```
+
+  4. `npx prisma db push`. Con la columna ya vacía no hay datos que perder.
+
+- **Retomar tras una baja conserva la fecha de inscripción** de la vuelta, que es la que imprime
+  el certificado; sólo una vuelta nueva la renueva.
 
 ### Al actualizar a la versión con los archivos sólo en el disco
 

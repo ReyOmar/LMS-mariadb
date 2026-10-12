@@ -1452,3 +1452,35 @@ La API compilada, con `STORAGE_DIR` en una carpeta nueva: crea las nueve carpeta
 de formato, uno PNG se guarda y quitarlo lo borra del disco (la descarga pasa a 404), cambiar
 la foto de perfil borra la anterior y quitarla borra la actual, y un certificado sin su PDF
 se descarga recompuesto y queda guardado de nuevo.
+
+## 44. Las entregas se retiran al certificar, y la vuelta queda cerrada
+
+La retirada de archivos al certificar que describe la sección 35 ya no estaba en el código: el
+certificado se emitía y las entregas seguían en el disco para siempre, también al pasar a
+`lms_entregas_archivadas` con la rematrícula. Vuelve sin ninguna repesca periódica.
+
+- **Al emitir.** En la transacción que registra el certificado, con la matrícula bloqueada, las
+  entregas con archivo de esa vuelta se marcan como retiradas (sin clave y con
+  `archivo_purgado`) y conservan el nombre, el estado, la nota y el comentario. Los archivos se
+  borran cuando la transacción se confirma, con la regla de siempre (`deleteUnreferenced`): si
+  la emisión se deshace no se borra nada, y un fallo del disco no deshace el certificado. El
+  personal del curso recibe `submission:files-retired` y el aviso del alumno lo explica.
+- **Vueltas ya certificadas.** Al arrancar, la API aplica la misma retirada a las que aún
+  conservan archivos. La consulta parte de las entregas con archivo, que son las de las vueltas
+  en curso, así que sin pendientes no hace nada.
+- **Rematrícula.** Las entregas se archivan sin archivo; la columna de archivo de
+  `lms_entregas_archivadas` y su índice se retiraron, con los pasos para sus archivos en
+  `DESPLIEGUE-CPANEL.md`. La segunda certificación sólo toca la vuelta nueva.
+- **Vuelta cerrada en la API.** El modo de sólo lectura de un curso terminado era sólo del
+  cliente: el examinador podía recalificar a un alumno certificado y el alumno reenviar un
+  archivo que ya nadie retiraría. Ahora, con la vuelta certificada o dada de baja, la API
+  rechaza entregas (antes de recibir el archivo y otra vez al guardarlo), recalificaciones,
+  intentos de cuestionario e intentos adicionales. Un intento adicional, además, sólo se
+  concede a quien agotó los suyos sin superar el cuestionario: antes se borraba una nota real
+  de quien aún tenía intentos.
+- **Borrar una tarea o un módulo** soltaba sus entregas (`SetNull`): quedaban sin curso y con
+  su archivo para siempre. Recurso, módulo y curso se borran ahora con una sola función que
+  se lleva las entregas de sus tareas y retira sus archivos y el material.
+- **Una sola definición de vuelta.** Ya hay certificado de la vuelta si su matrícula está
+  terminada; la vuelta empieza en `fecha_matricula`, que retomar tras una baja ya no reinicia,
+  y el tiempo de estudio del certificado se cuenta desde ahí.

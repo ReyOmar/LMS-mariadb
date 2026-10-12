@@ -7,12 +7,13 @@ import { RealtimeService } from '../realtime/realtime.service';
 import { MailService } from '../mail/mail.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { CourseAccessService } from '../courses/course-access.service';
-import { lockEnrollment } from '../enrollments/enrollment-lock';
+import { AFTER_LOCK, lockEnrollment } from '../enrollments/enrollment-lock';
 import { percent } from '../common/domain/progress';
 import { Country } from '../common/domain/country';
 import { plural } from '../common/domain/text';
 import { JwtPayload } from '../common/interfaces/jwt-payload.interface';
 import { CertificateDataService, IssuanceData, parseSnapshot } from './certificate-data.service';
+import { SubmissionFilesService } from './submission-files.service';
 import { isValid } from './validity';
 
 /**
@@ -20,6 +21,19 @@ import { isValid } from './validity';
  * del PDF en un disco compartido, que bajo carga puede pasar de los 5 s por defecto de Prisma.
  */
 const ISSUANCE_TIMEOUT_MS = 10_000;
+
+const FILES_RETIRED_NOTICE =
+  'Los archivos que entregaste en este curso se retiraron del campus; tus calificaciones se conservan.';
+
+/** Un certificado recién emitido: de quién, de qué curso y si se retiraron archivos entregados. */
+interface IssuedCertificate {
+  certificateGuid: string;
+  courseGuid: string;
+  userGuid: string;
+  country: Country;
+  data: IssuanceData;
+  filesRetired: boolean;
+}
 
 /** Resultado de comprobar si un alumno ya puede recibir su certificado. */
 export interface CompletionStatus {
@@ -38,7 +52,8 @@ export interface CompletionStatus {
  * Un certificado se emite cuando el alumno ha completado **todos** los recursos del curso
  * y **todas** sus tareas están calificadas. Es un documento con valor probatorio, así que
  * la emisión es idempotente (un certificado por alumno, curso y vuelta) y lleva un código
- * de verificación consultable públicamente.
+ * de verificación consultable públicamente. Emitirlo cierra la vuelta y retira del disco los
+ * archivos que el alumno entregó en ella; su PDF se conserva siempre.
  */
 @Injectable()
 export class CertificatesService {
@@ -53,6 +68,7 @@ export class CertificatesService {
     /** Arma lo que dice el diploma; aquí sólo se decide a quién y cuándo se le emite. */
     private readonly data: CertificateDataService,
     private readonly notifications: NotificationsService,
+    private readonly submissionFiles: SubmissionFilesService,
   ) {}
 
   // ── Comprobación de finalización ─────────────────────────────────────────
@@ -218,7 +234,7 @@ export class CertificatesService {
    * haber cerrado el curso.
    */
   async issueIfEligible(courseGuid: string, userGuid: string, country: Country): Promise<void> {
-    if (await this.currentRoundCertificate(courseGuid, userGuid)) return;
+    if (await this.isRoundClosed(courseGuid, userGuid)) return;
 
     const status = await this.checkCompletion(courseGuid, userGuid);
     if (!status.canGetCertificate) return;
@@ -228,35 +244,21 @@ export class CertificatesService {
     }
   }
 
-  /**
-   * Certificado que corresponde a la matrícula vigente del alumno, si ya lo tiene.
-   *
-   * Un alumno puede repetir el mismo curso más adelante. La vuelta actual empieza en
-   * `enrolledAt`, que se renueva al rematricular, así que un certificado anterior a esa
-   * fecha pertenece a la vuelta pasada y no impide emitir el de ésta.
-   */
-  private async currentRoundCertificate(courseGuid: string, userGuid: string) {
+  /** Si la vuelta actual ya terminó con su certificado: la misma condición que se comprueba al emitir. */
+  private async isRoundClosed(courseGuid: string, userGuid: string): Promise<boolean> {
     const enrollment = await this.prisma.enrollment.findUnique({
       where: { userGuid_courseGuid: { userGuid, courseGuid } },
-      select: { enrolledAt: true },
+      select: { completedAt: true },
     });
-
-    return this.prisma.certificate.findFirst({
-      where: {
-        userGuid,
-        courseGuid,
-        ...(enrollment ? { completedAt: { gte: enrollment.enrolledAt } } : {}),
-      },
-      orderBy: { attempt: 'desc' },
-      select: { id: true },
-    });
+    return Boolean(enrollment?.completedAt);
   }
 
   /**
-   * Compone el PDF, lo guarda y lo registra. Quien llama ya comprobó que procede.
+   * Compone el PDF, lo guarda, lo registra y retira los archivos entregados en la vuelta. Quien
+   * llama ya comprobó que procede.
    *
    * Dos emisiones casi simultáneas (el último avance y la última calificación) se ponen en fila
-   * sobre la matrícula: la segunda encuentra la vuelta cerrada y no guarda nada.
+   * sobre la matrícula: la segunda encuentra la vuelta cerrada y no guarda ni retira nada.
    *
    * @returns si se emitió.
    */
@@ -265,34 +267,53 @@ export class CertificatesService {
     const pdf = await this.data.compose(data.certificate);
     const pdfKey = `certificados/${crypto.randomUUID()}.pdf`;
 
-    let certificate: { guid: string } | null;
+    let issued: { certificateGuid: string; retiredFiles: string[] } | null;
     try {
-      certificate = await this.prisma.$transaction(
+      issued = await this.prisma.$transaction(
         async (tx) => {
           const enrollment = await lockEnrollment(tx, userGuid, courseGuid);
           if (!enrollment || enrollment.completedAt) return null;
 
           await this.storage.saveWithKey(pdfKey, pdf);
-          return this.recordIssuance(tx, { courseGuid, userGuid, country, pdfKey, data });
+          const certificate = await this.recordIssuance(tx, { courseGuid, userGuid, country, pdfKey, data });
+          const retiredFiles = await this.submissionFiles.retireRound(tx, { userGuid, courseGuid });
+          return { certificateGuid: certificate.guid, retiredFiles };
         },
-        { timeout: ISSUANCE_TIMEOUT_MS },
+        { ...AFTER_LOCK, timeout: ISSUANCE_TIMEOUT_MS },
       );
     } catch (error) {
       // También si falla al confirmar: ninguna fila llegó a usar el PDF.
       await this.storage.deleteFiles([pdfKey]);
       throw error;
     }
-    if (!certificate) return false;
+    if (!issued) return false;
 
+    await this.submissionFiles.deleteRetired(issued.retiredFiles);
+    this.announce({
+      certificateGuid: issued.certificateGuid,
+      courseGuid,
+      userGuid,
+      country,
+      data,
+      filesRetired: issued.retiredFiles.length > 0,
+    });
+    return true;
+  }
+
+  /** Avisa al momento a las pantallas abiertas del alumno y, si se retiraron archivos, a las del personal. */
+  private announce(issued: IssuedCertificate): void {
+    const { certificateGuid, courseGuid, userGuid, country, data } = issued;
     this.realtime.emitToUsers(
       'certificate:new',
-      { guid: certificate.guid, courseGuid, courseTitle: data.certificate.courseTitle },
+      { guid: certificateGuid, courseGuid, courseTitle: data.certificate.courseTitle },
       country,
       [userGuid],
     );
+    if (issued.filesRetired) {
+      this.realtime.emitToCourseStaff('submission:files-retired', { courseGuid, userGuid }, country, data.teacherGuid);
+    }
 
-    void this.notifyIssuance(certificate.guid, userGuid, data, country);
-    return true;
+    void this.notify(issued);
   }
 
   /** Registra el certificado y cierra la vuelta en la misma transacción: no hay uno sin el otro. */
@@ -331,12 +352,8 @@ export class CertificatesService {
   }
 
   /** Avisa al alumno, en la campana y por correo, y a su examinador. */
-  private async notifyIssuance(
-    certificateGuid: string,
-    userGuid: string,
-    data: IssuanceData,
-    country: Country,
-  ): Promise<void> {
+  private async notify({ certificateGuid, userGuid, country, data, filesRetired }: IssuedCertificate): Promise<void> {
+    const ready = `Terminaste "${data.certificate.courseTitle}". Tu certificado ya está listo para descargar.`;
     try {
       await Promise.all([
         this.notifications.create({
@@ -344,7 +361,7 @@ export class CertificatesService {
           country,
           type: 'BADGE_UNLOCKED',
           title: 'Certificado disponible',
-          message: `Terminaste "${data.certificate.courseTitle}". Tu certificado ya está listo para descargar.`,
+          message: filesRetired ? `${ready} ${FILES_RETIRED_NOTICE}` : ready,
           actionUrl: '/dashboard/student/certificates',
           refType: 'certificado',
           refGuid: certificateGuid,

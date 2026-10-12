@@ -5,6 +5,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { StorageService } from '../storage/storage.service';
 import { FileOwnershipService } from '../storage/file-ownership.service';
 import { CourseAccessService } from './course-access.service';
+import { ContentRemovalService } from './content-removal.service';
 import { serializeQuizConfig, validateQuizConfig } from './quiz-config';
 import { toClientResource } from './resource-view';
 import { JwtPayload } from '../common/interfaces/jwt-payload.interface';
@@ -51,6 +52,7 @@ export class CourseContentService {
     private readonly access: CourseAccessService,
     private readonly storage: StorageService,
     private readonly files: FileOwnershipService,
+    private readonly removal: ContentRemovalService,
   ) {}
 
   // ── Módulos ──────────────────────────────────────────────────────────────
@@ -77,18 +79,10 @@ export class CourseContentService {
     });
   }
 
-  /** Elimina un módulo y, con él, sus recursos y los archivos que tuvieran. */
+  /** Elimina un módulo y, con él, sus recursos, las entregas de sus tareas y sus archivos. */
   async deleteModule(moduleGuid: string, user: JwtPayload) {
     await this.access.editableCourseOfModule(moduleGuid, user);
-
-    const files = await this.prisma.resource.findMany({
-      where: { moduleGuid, OR: [{ attachmentKey: { not: null } }, { fileUrl: { not: null } }] },
-      select: { attachmentKey: true, fileUrl: true },
-    });
-
-    await this.prisma.courseModule.delete({ where: { guid: moduleGuid } });
-    await this.files.deleteUnreferenced(files.flatMap((resource) => [resource.attachmentKey, resource.fileUrl]));
-
+    await this.removal.remove({ moduleGuid });
     return { message: 'Módulo eliminado.' };
   }
 
@@ -149,17 +143,10 @@ export class CourseContentService {
     return toClientResource(updated, this.storage);
   }
 
+  /** Elimina un recurso y, si es una tarea, sus entregas; con ellos, sus archivos. */
   async deleteResource(resourceGuid: string, user: JwtPayload) {
     await this.access.editableCourseOfResource(resourceGuid, user);
-
-    const resource = await this.prisma.resource.findUnique({
-      where: { guid: resourceGuid },
-      select: { attachmentKey: true, fileUrl: true },
-    });
-
-    await this.prisma.resource.delete({ where: { guid: resourceGuid } });
-    await this.files.deleteUnreferenced([resource?.attachmentKey, resource?.fileUrl]);
-
+    await this.removal.remove({ resourceGuid });
     return { message: 'Bloque eliminado.' };
   }
 

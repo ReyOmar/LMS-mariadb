@@ -11,8 +11,8 @@ import { sessionFor } from '../common/testing/test-campus';
  *    baja administrativa no puede costarle el trabajo hecho, aunque tenga el certificado
  *    de una vuelta anterior.
  *  - A quien terminó su vuelta y vuelve —otra infracción, años después— hay que **ponerlo a
- *    cero**, o se encontrará el curso aprobado sin haberlo repetido. Sus entregas no se
- *    pierden: se archivan con sus archivos, como evidencia de la formación acreditada.
+ *    cero**, o se encontrará el curso aprobado sin haberlo repetido. Sus notas no se
+ *    pierden: las entregas se archivan sin archivo, que se borró al emitirse su certificado.
  *
  * Equivocarse en cualquiera de las dos direcciones se nota tarde y mal, así que las dos
  * quedan fijadas aquí.
@@ -30,22 +30,30 @@ interface State {
   maxStudents?: number | null;
   enrolled?: number;
   courseStatus?: 'DRAFT' | 'PUBLISHED';
+  /** Archivos de la vuelta certificada que la puesta al día del arranque aún no retiró. */
+  leftoverFiles?: string[];
 }
 
-/** Una entrega de la vuelta anterior tal y como la lee el servicio. */
-function previousSubmission(index: number) {
+/** Una entrega de la vuelta anterior, cuyo archivo se borró al emitirse el certificado. */
+function previousSubmission(index: number): Record<string, unknown> {
   return {
     guid: `entrega-${index}`,
     assignmentGuid: `tarea-${index}`,
-    attachmentKey: `entregas/informe-${index}.pdf`,
+    attachmentKey: null,
     attachmentName: 'informe.pdf',
+    filePurged: true,
     status: 'GRADED',
     attemptNumber: 1,
     submittedAt: new Date(2025, 0, index + 1),
     score: 90,
-    feedback: null,
+    feedback: 'Bien argumentado.',
     assignment: { title: `Informe ${index}` },
   };
+}
+
+/** Sólo los campos que pide la consulta, como hace la base. */
+function selected(row: Record<string, unknown>, select: Record<string, unknown>) {
+  return Object.fromEntries(Object.keys(select).map((field) => [field, row[field]]));
 }
 
 /**
@@ -59,8 +67,10 @@ function baseWith({
   maxStudents = null,
   enrolled = 0,
   courseStatus = 'PUBLISHED',
+  leftoverFiles = [],
 }: State = {}) {
   const steps: string[] = [];
+  const lifecycle: string[] = [];
   const deleted = { progress: 0, submissions: [] as string[] };
   const archived: Record<string, unknown>[] = [];
   let updatedEnrollment: Record<string, unknown> | null = null;
@@ -93,7 +103,8 @@ function baseWith({
       },
     },
     submission: {
-      findMany: async () => Array.from({ length: submissions }, (_, i) => previousSubmission(i)),
+      findMany: async ({ select }: { select: Record<string, unknown> }) =>
+        Array.from({ length: submissions }, (_, i) => selected(previousSubmission(i), select)),
       deleteMany: async ({ where }: { where: { guid: { in: string[] } } }) => {
         deleted.submissions.push(...where.guid.in);
         return { count: where.guid.in.length };
@@ -108,7 +119,11 @@ function baseWith({
     user: {
       findFirst: async () => ({ guid: STUDENT_ID, email: 'alumno@pesv.test', firstName: 'Ana' }),
     },
-    $transaction: async (work: (tx: unknown) => Promise<unknown>) => work(prisma),
+    $transaction: async (work: (tx: unknown) => Promise<unknown>) => {
+      const result = await work(prisma);
+      lifecycle.push('confirmada');
+      return result;
+    },
   };
 
   const access = {
@@ -123,12 +138,20 @@ function baseWith({
   const mail = { sendEnrollment: jest.fn(async () => true) };
   const notifications = { create: jest.fn(async () => ({ id: 1 })) };
 
+  const submissionFiles = {
+    retireRound: jest.fn(async () => leftoverFiles),
+    deleteRetired: jest.fn(async (keys: string[]) => {
+      lifecycle.push(`borrado: ${keys.join(', ')}`);
+    }),
+  };
+
   const service = new EnrollmentsService(
     prisma as never,
     access as never,
     realtime as never,
     mail as never,
     notifications as never,
+    submissionFiles as never,
   );
   jest.spyOn(service['logger'], 'log').mockImplementation(() => undefined);
   jest.spyOn(service['logger'], 'error').mockImplementation(() => undefined);
@@ -136,6 +159,7 @@ function baseWith({
   return {
     service,
     steps,
+    lifecycle,
     deleted,
     archived,
     mail,
@@ -144,6 +168,8 @@ function baseWith({
     created: () => createdEnrollment,
   };
 }
+
+const NO_FILES_TO_RETIRE = { retireRound: async () => [], deleteRetired: async () => undefined };
 
 const FINISHED = { active: false, completedAt: new Date(2025, 5, 1) };
 const HALFWAY = { active: false, completedAt: null };
@@ -178,7 +204,7 @@ describe('EnrollmentsService · volver a matricular', () => {
     expect(deleted).toEqual({ progress: 5, submissions: ['entrega-0', 'entrega-1'] });
   });
 
-  it('al empezar de cero sus entregas se archivan con el título de la actividad y el archivo', async () => {
+  it('al empezar de cero sus entregas se archivan sin archivo y con su nota y su comentario', async () => {
     const { service, archived } = baseWith({ previous: FINISHED, submissions: 2 });
 
     await service.enroll(COURSE, STUDENT_ID, ADMIN, true);
@@ -190,28 +216,43 @@ describe('EnrollmentsService · volver a matricular', () => {
       courseGuid: COURSE,
       assignmentGuid: 'tarea-0',
       assignmentTitle: 'Informe 0',
-      attachmentKey: 'entregas/informe-0.pdf',
       attachmentName: 'informe.pdf',
       status: 'GRADED',
       attemptNumber: 1,
       submittedAt: new Date(2025, 0, 1),
       score: 90,
-      feedback: null,
+      feedback: 'Bien argumentado.',
     });
   });
 
-  it('la matrícula queda activa, en curso y con fecha nueva en los dos casos', async () => {
-    for (const [previous, confirmRestart] of [
-      [HALFWAY, false],
-      [FINISHED, true],
-    ] as const) {
-      const { service, enrollment } = baseWith({ previous, progress: 3, submissions: 1 });
+  it('los archivos que la vuelta certificada aún conservaba se retiran, y sólo tras confirmar', async () => {
+    const { service, lifecycle } = baseWith({
+      previous: FINISHED,
+      submissions: 1,
+      leftoverFiles: ['entregas/vieja.pdf'],
+    });
 
-      await service.enroll(COURSE, STUDENT_ID, ADMIN, confirmRestart);
+    await service.enroll(COURSE, STUDENT_ID, ADMIN, true);
 
-      expect(enrollment()).toMatchObject({ active: true, unenrolledAt: null, completedAt: null });
-      expect(enrollment()?.enrolledAt).toBeInstanceOf(Date);
-    }
+    expect(lifecycle).toEqual(['confirmada', 'borrado: entregas/vieja.pdf']);
+  });
+
+  it('quien empieza de cero abre su vuelta con fecha nueva', async () => {
+    const { service, enrollment } = baseWith({ previous: FINISHED, progress: 3, submissions: 1 });
+
+    await service.enroll(COURSE, STUDENT_ID, ADMIN, true);
+
+    expect(enrollment()).toMatchObject({ active: true, unenrolledAt: null, completedAt: null });
+    expect(enrollment()?.enrolledAt).toBeInstanceOf(Date);
+  });
+
+  it('quien retoma tras una baja conserva la fecha en que empezó su vuelta', async () => {
+    // Es la «fecha de inscripción» de su certificado: las notas y las horas vienen de antes de la baja.
+    const { service, enrollment } = baseWith({ previous: HALFWAY, progress: 3, submissions: 1 });
+
+    await service.enroll(COURSE, STUDENT_ID, ADMIN);
+
+    expect(enrollment()).toEqual({ active: true, unenrolledAt: null });
   });
 
   it('quien empieza de cero también empieza con el recuento de avance a cero; quien retoma lo conserva', async () => {
@@ -310,6 +351,7 @@ describe('EnrollmentsService · dar de baja', () => {
       realtime as never,
       {} as never,
       {} as never,
+      NO_FILES_TO_RETIRE as never,
     );
 
     await service.unenroll(COURSE, STUDENT_ID, ADMIN);
@@ -353,7 +395,14 @@ describe('EnrollmentsService · matriculados por página', () => {
       },
     };
     const access = { managedCourse: async () => ({ guid: COURSE }) };
-    const service = new EnrollmentsService(prisma as never, access as never, {} as never, {} as never, {} as never);
+    const service = new EnrollmentsService(
+      prisma as never,
+      access as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      NO_FILES_TO_RETIRE as never,
+    );
 
     return { service, queries, countQueries, counts: () => countQueries.length };
   }
@@ -413,7 +462,14 @@ describe('EnrollmentsService · matriculados por página', () => {
         throw new Error('curso de otra sede');
       },
     };
-    const service = new EnrollmentsService(prisma as never, access as never, {} as never, {} as never, {} as never);
+    const service = new EnrollmentsService(
+      prisma as never,
+      access as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      NO_FILES_TO_RETIRE as never,
+    );
 
     await expect(service.getEnrolledStudents('curso-ajeno', ADMIN)).rejects.toThrow(/otra sede/);
     expect(queries).toHaveLength(0);
@@ -441,7 +497,14 @@ describe('EnrollmentsService · candidatos', () => {
       },
     };
     const access = { managedCourse: async () => ({ guid: COURSE }) };
-    const service = new EnrollmentsService(prisma as never, access as never, {} as never, {} as never, {} as never);
+    const service = new EnrollmentsService(
+      prisma as never,
+      access as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      NO_FILES_TO_RETIRE as never,
+    );
     return { service, queries };
   }
 
@@ -488,7 +551,14 @@ describe('EnrollmentsService · candidatos ya certificados', () => {
       },
     };
     const access = { managedCourse: async () => ({ guid: COURSE }) };
-    const service = new EnrollmentsService(prisma as never, access as never, {} as never, {} as never, {} as never);
+    const service = new EnrollmentsService(
+      prisma as never,
+      access as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      NO_FILES_TO_RETIRE as never,
+    );
 
     const candidates = await service.getCandidates(COURSE, ADMIN);
 
