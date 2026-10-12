@@ -174,13 +174,24 @@ pantalla.
 ### ¿Cuándo se borra un archivo?
 
 Sólo cuando alguien lo pide: al eliminar el curso, el módulo, el recurso o la cuenta a los
-que pertenece, o al sustituirlo por otro —una portada o un logotipo nuevos, otra foto, una
-entrega corregida—. **Ninguna tarea automática borra archivos.** Las entregas conservan el
-suyo después del certificado, y no hay limpieza de «huérfanos»: decidir que un archivo sobra
-comparándolo con la base basta con que falle una referencia —una imagen o un enlace dentro
-de un texto, una base restaurada de una copia, otro entorno que comparta el bucket— para
-llevarse algo en uso. El precio es que puede quedar algún archivo sin uso, como una portada
-subida y no guardada.
+que pertenece, o al sustituirlo o quitarlo —una portada o un logotipo nuevos, otra foto, una
+firma retirada, una entrega corregida—. Todas siguen la misma regla
+(`FileOwnershipService.replace` y `adoptUpload`): se guarda la fila y después se borra el
+archivo anterior si ninguna otra fila lo usa. **Ninguna tarea automática borra archivos.**
+Las entregas conservan el suyo después del certificado, y no hay limpieza de «huérfanos»:
+decidir que un archivo sobra comparándolo con la base basta con que falle una referencia
+—una imagen o un enlace dentro de un texto, una base restaurada de una copia, una carpeta de
+archivos restaurada de otra fecha— para llevarse algo en uso. El precio es que puede quedar
+algún archivo sin uso, como una portada subida y no guardada.
+
+### ¿Por qué los archivos se guardan sólo en el disco del servidor?
+
+Porque el campus se despliega en cPanel y el disco de la cuenta es lo único que hay seguro:
+el soporte de Cloudflare R2 duplicaba cada lectura, escritura y borrado con una segunda
+rama que nadie usaba, y al definir sus variables los archivos ya guardados en disco dejaban
+de encontrarse. La carpeta se fija con `STORAGE_DIR`, fuera de la aplicación para que un
+despliegue no la toque, y cada archivo se escribe en `.tmp` y se renombra a su sitio cuando
+está entero.
 
 Tampoco los borra **volver a matricular a quien ya se certificó**: la nueva vuelta empieza
 de cero, pero sus entregas anteriores de ese curso no se borran, pasan a

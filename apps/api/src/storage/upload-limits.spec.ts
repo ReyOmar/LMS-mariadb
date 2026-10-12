@@ -31,7 +31,7 @@ describe('tope técnico (MAX_UPLOAD_MB)', () => {
     expect(warning).toMatch(/MAX_UPLOAD_MB/);
   });
 
-  it('no pasa del máximo que R2 admite en una sola subida', () => {
+  it('no pasa del máximo que admite la plataforma', () => {
     const { mb, warning } = readUploadCeiling('100000');
 
     expect(mb).toBe(MAX_UPLOAD_CEILING_MB);

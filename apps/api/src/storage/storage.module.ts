@@ -4,9 +4,8 @@ import { StorageController } from './storage.controller';
 import { FileOwnershipService } from './file-ownership.service';
 import { SettingsModule } from '../settings/settings.module';
 
-// La referencia diferida rompe el ciclo con configuración: el almacenamiento necesita
-// saber el límite de subida de la sede y la configuración necesita borrar los archivos
-// que reemplaza.
+// El almacenamiento necesita el límite de subida de la sede y la configuración retira los
+// archivos que sustituye: la referencia diferida rompe ese ciclo.
 @Module({
   imports: [forwardRef(() => SettingsModule)],
   controllers: [StorageController],

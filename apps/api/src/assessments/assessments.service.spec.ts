@@ -2,6 +2,7 @@ import { ForbiddenException } from '@nestjs/common';
 import { AssessmentsService } from './assessments.service';
 import { encodeCursor, MAX_PER_PAGE } from '../common/domain/pagination';
 import { sessionFor } from '../common/testing/test-campus';
+import { fileOwnershipDouble } from '../common/testing/file-ownership-double';
 import { MIB, UploadLimit } from '../storage/upload-limits';
 
 /**
@@ -677,9 +678,8 @@ describe('entrega de una tarea: límite de subida', () => {
         return 'entregas/nueva.pdf';
       },
       downloadUrl: jest.fn(() => '/api/storage/download/entregas/nueva.pdf?exp=1&sig=x'),
-      deleteFiles: jest.fn(async () => undefined),
     };
-    const files = { deleteUnreferenced: jest.fn(async () => undefined) };
+    const files = fileOwnershipDouble();
     const access = {
       unlockedResourceAccess: async () => ({
         guid: COURSE,
@@ -701,7 +701,7 @@ describe('entrega de una tarea: límite de subida', () => {
       settings as never,
       {} as never,
       events as never,
-      files as never,
+      files.files,
     );
     const receive = jest.fn(async (_limit: UploadLimit) => ({ name: 'informe.pdf', filePath: '/tmp/subida' }));
 
@@ -774,10 +774,10 @@ describe('entrega de una tarea: límite de subida', () => {
   });
 
   it('retira el archivo guardado si no se puede registrar la entrega', async () => {
-    const { service, receive, storage } = submissionService({ failOnSave: true });
+    const { service, receive, files } = submissionService({ failOnSave: true });
 
     await expect(service.recordSubmission('tarea-1', receive, STUDENT)).rejects.toThrow('base de datos caída');
-    expect(storage.deleteFiles).toHaveBeenCalledWith(['entregas/nueva.pdf']);
+    expect(files.discarded).toHaveBeenCalledWith(['entregas/nueva.pdf']);
   });
 
   it('al reenviar retira el archivo anterior sólo si ya no lo usa nadie', async () => {
@@ -787,7 +787,7 @@ describe('entrega de una tarea: límite de subida', () => {
 
     await service.recordSubmission('tarea-1', receive, STUDENT);
 
-    expect(files.deleteUnreferenced).toHaveBeenCalledWith(['entregas/vieja.pdf']);
+    expect(files.retired()).toEqual(['entregas/vieja.pdf']);
   });
 
   it('el enlace de descarga lleva el nombre original del archivo', async () => {

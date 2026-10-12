@@ -24,6 +24,20 @@ function assertLinkAddress(type: string | undefined, address: string | undefined
   }
 }
 
+/** Lo que el DTO cambia de un recurso, con la configuración del cuestionario ya validada. */
+function resourceChanges(dto: UpdateResourceDto, quizConfig: string | null): Prisma.ResourceUpdateInput {
+  return {
+    ...(dto.title !== undefined && { title: dto.title }),
+    ...(dto.contentHtml !== undefined && { contentHtml: dto.contentHtml }),
+    ...(dto.referenceUrl !== undefined && { referenceUrl: dto.referenceUrl }),
+    ...(dto.attachmentKey !== undefined && { attachmentKey: dto.attachmentKey }),
+    ...(dto.attachmentName !== undefined && { attachmentName: dto.attachmentName }),
+    ...(dto.quizConfig !== undefined && { quizConfig }),
+    ...(dto.maxUploadMb !== undefined && { maxUploadMb: dto.maxUploadMb }),
+    ...(dto.readingMinutes !== undefined && { readingMinutes: dto.readingMinutes }),
+  };
+}
+
 /**
  * Contenido de un curso: módulos y los recursos que cuelgan de ellos.
  *
@@ -73,7 +87,7 @@ export class CourseContentService {
     });
 
     await this.prisma.courseModule.delete({ where: { guid: moduleGuid } });
-    void this.files.deleteUnreferenced(files.flatMap((resource) => [resource.attachmentKey, resource.fileUrl]));
+    await this.files.deleteUnreferenced(files.flatMap((resource) => [resource.attachmentKey, resource.fileUrl]));
 
     return { message: 'Módulo eliminado.' };
   }
@@ -94,18 +108,10 @@ export class CourseContentService {
   async createResource(moduleGuid: string, dto: CreateResourceDto, user: JwtPayload) {
     await this.access.editableCourseOfModule(moduleGuid, user);
     assertLinkAddress(dto.type, dto.contentHtml);
-    await this.files.assertCanUse(dto.fileUrl, null, 'recursos', { uploader: user.sub });
 
     const position = await this.prisma.resource.count({ where: { moduleGuid } });
     return this.prisma.resource.create({
-      data: {
-        moduleGuid,
-        title: dto.title || 'Nuevo bloque',
-        type: dto.type,
-        contentHtml: dto.contentHtml,
-        fileUrl: dto.fileUrl,
-        position,
-      },
+      data: { moduleGuid, title: dto.title || 'Nuevo bloque', type: dto.type, contentHtml: dto.contentHtml, position },
     });
   }
 
@@ -132,35 +138,14 @@ export class CourseContentService {
 
     const previous = await this.prisma.resource.findUnique({
       where: { guid: resourceGuid },
-      select: { type: true, attachmentKey: true, fileUrl: true },
+      select: { type: true, attachmentKey: true },
     });
     assertLinkAddress(previous?.type, dto.contentHtml);
-    const owner = { uploader: user.sub };
-    await this.files.assertCanUse(dto.attachmentKey, previous?.attachmentKey, 'recursos', owner);
-    await this.files.assertCanUse(dto.fileUrl, previous?.fileUrl, 'recursos', owner);
+    const attachment = { folder: 'recursos' as const, current: previous?.attachmentKey, next: dto.attachmentKey };
 
-    const updated = await this.prisma.resource.update({
-      where: { guid: resourceGuid },
-      data: {
-        ...(dto.title !== undefined && { title: dto.title }),
-        ...(dto.contentHtml !== undefined && { contentHtml: dto.contentHtml }),
-        ...(dto.fileUrl !== undefined && { fileUrl: dto.fileUrl }),
-        ...(dto.referenceUrl !== undefined && { referenceUrl: dto.referenceUrl }),
-        ...(dto.attachmentKey !== undefined && { attachmentKey: dto.attachmentKey }),
-        ...(dto.attachmentName !== undefined && { attachmentName: dto.attachmentName }),
-        ...(dto.quizConfig !== undefined && { quizConfig }),
-        ...(dto.maxUploadMb !== undefined && { maxUploadMb: dto.maxUploadMb }),
-        ...(dto.readingMinutes !== undefined && { readingMinutes: dto.readingMinutes }),
-      },
-    });
-
-    // Los archivos sustituidos se borran después de guardar, y sólo si nadie más los usa: si
-    // el borrado falla, el recurso ya está bien y sólo queda un archivo sin uso.
-    void this.files.deleteUnreferenced([
-      replacedKey(previous?.attachmentKey, dto.attachmentKey),
-      replacedKey(previous?.fileUrl, dto.fileUrl),
-    ]);
-
+    const updated = await this.files.replace([attachment], { uploader: user.sub }, () =>
+      this.prisma.resource.update({ where: { guid: resourceGuid }, data: resourceChanges(dto, quizConfig) }),
+    );
     return toClientResource(updated, this.storage);
   }
 
@@ -173,7 +158,7 @@ export class CourseContentService {
     });
 
     await this.prisma.resource.delete({ where: { guid: resourceGuid } });
-    void this.files.deleteUnreferenced([resource?.attachmentKey, resource?.fileUrl]);
+    await this.files.deleteUnreferenced([resource?.attachmentKey, resource?.fileUrl]);
 
     return { message: 'Bloque eliminado.' };
   }
@@ -206,10 +191,4 @@ export class CourseContentService {
 
     await this.prisma.$transaction(ordered.map((guid, position) => update(guid, position)));
   }
-}
-
-/** Devuelve la clave anterior sólo si el campo se está sustituyendo por otra distinta. */
-function replacedKey(previous: string | null | undefined, next: string | null | undefined): string | null {
-  if (next === undefined || !previous || previous === next) return null;
-  return previous;
 }

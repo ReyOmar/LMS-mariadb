@@ -10,9 +10,6 @@ export type ResourceType = (typeof TYPES)[number];
 /** Tope del contenido enriquecido. Evita que un pegado accidental llene la columna TEXT. */
 const MAX_HTML = 100_000;
 
-/** Material del curso: sólo puede apuntar a archivos de la carpeta de recursos. */
-const resourceFile = () => IsStorageKey(['recursos'], { message: 'El archivo del recurso no es válido.' });
-
 export class CreateResourceDto {
   @IsIn(TYPES, { message: `El tipo de bloque debe ser uno de: ${TYPES.join(', ')}.` })
   type: ResourceType;
@@ -27,13 +24,6 @@ export class CreateResourceDto {
   @IsString()
   @MaxLength(MAX_HTML, { message: 'El contenido no puede superar los 100 000 caracteres.' })
   contentHtml?: string;
-
-  /** Clave del archivo principal en el almacenamiento. */
-  @IsOptional()
-  @IsString()
-  @MaxLength(512)
-  @resourceFile()
-  fileUrl?: string;
 }
 
 export class UpdateResourceDto {
@@ -49,13 +39,6 @@ export class UpdateResourceDto {
   @MaxLength(MAX_HTML, { message: 'El contenido no puede superar los 100 000 caracteres.' })
   contentHtml?: string;
 
-  /** Clave del archivo principal en el almacenamiento. */
-  @IsOptional()
-  @IsString()
-  @MaxLength(512)
-  @resourceFile()
-  fileUrl?: string | null;
-
   @IsOptional()
   @IsUrl({ require_protocol: true }, { message: 'El enlace de referencia debe ser una URL completa (https://…).' })
   @MaxLength(2048)
@@ -65,7 +48,7 @@ export class UpdateResourceDto {
   @IsOptional()
   @IsString()
   @MaxLength(512)
-  @resourceFile()
+  @IsStorageKey(['recursos'], { message: 'El archivo del recurso no es válido.' })
   attachmentKey?: string | null;
 
   /** Nombre original del adjunto. Uno muy largo se recorta conservando la extensión. */

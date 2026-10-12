@@ -33,17 +33,17 @@ Sobre esas tres bases se apoyan el resto de hallazgos.
 
 Patrón repetido: `const guid = usuario_guid || user.sub;`
 
-| Endpoint | Efecto de la suplantación |
-|---|---|
-| `GET /estudiantes/student/progreso` | Leer el progreso de cualquier alumno |
-| `POST /estudiantes/student/completar-recurso` | **Marcar recursos como completados en nombre de otro** |
-| `GET /estudiantes/student/dias-activos` | Leer actividad ajena |
-| `GET /estudiantes/student/notificaciones` | Leer notificaciones ajenas |
-| `GET /estudiantes/student/metricas` | Leer métricas ajenas |
-| `POST /estudiantes/student/heartbeat` | Inflar el tiempo activo de otro usuario |
-| `POST /estudiantes/student/certificados/generar` | **Emitir un certificado a nombre de otro** |
-| `GET /estudiantes/student/certificados/verificar/:curso` | Leer estado de curso ajeno |
-| `GET /estudiantes/student/certificados` | Listar certificados ajenos |
+| Endpoint                                                 | Efecto de la suplantación                                 |
+| -------------------------------------------------------- | --------------------------------------------------------- |
+| `GET /estudiantes/student/progreso`                      | Leer el progreso de cualquier alumno                      |
+| `POST /estudiantes/student/completar-recurso`            | **Marcar recursos como completados en nombre de otro**    |
+| `GET /estudiantes/student/dias-activos`                  | Leer actividad ajena                                      |
+| `GET /estudiantes/student/notificaciones`                | Leer notificaciones ajenas                                |
+| `GET /estudiantes/student/metricas`                      | Leer métricas ajenas                                      |
+| `POST /estudiantes/student/heartbeat`                    | Inflar el tiempo activo de otro usuario                   |
+| `POST /estudiantes/student/certificados/generar`         | **Emitir un certificado a nombre de otro**                |
+| `GET /estudiantes/student/certificados/verificar/:curso` | Leer estado de curso ajeno                                |
+| `GET /estudiantes/student/certificados`                  | Listar certificados ajenos                                |
 | `GET /configuracion/firma` · `POST /configuracion/firma` | **Leer y sobrescribir la firma digital de un examinador** |
 
 El último es especialmente grave: la firma es lo que da validez al certificado emitido.
@@ -52,7 +52,7 @@ El último es especialmente grave: la firma es lo que da validez al certificado 
 
 `GET /cursos/:guid` devuelve el curso completo, incluido `recursos.quiz_config`, que es un JSON con
 `opciones[].es_correcta`. El componente `QuizPlayer` recibe ese JSON crudo (`quiz_config_raw`) y sólo
-*omite* el campo en su interfaz TypeScript. Las respuestas viajan al navegador: son visibles en la
+_omite_ el campo en su interfaz TypeScript. Las respuestas viajan al navegador: son visibles en la
 pestaña Red del inspector antes de contestar. Toda evaluación del sistema es trivialmente superable.
 
 ### SEC-03 — `GET /cursos/:guid` sin verificación de matrícula (alto)
@@ -139,8 +139,9 @@ Con R2 activo el archivo no existe en disco y el logo se omite silenciosamente.
 ### BUG-04 — Métrica `profesoresActivos` sin sentido
 
 ```ts
-[...profGuids].filter((g) => cursos.some((c) => allMatriculas.some((m) => m.curso_guid === c.guid)))
+[...profGuids].filter((g) => cursos.some((c) => allMatriculas.some((m) => m.curso_guid === c.guid)));
 ```
+
 El predicado no usa `g`: devuelve todos los profesores o ninguno. El dashboard de administración
 muestra un número que no significa nada.
 
@@ -208,7 +209,7 @@ de guardar los valores estructurados en `calificacion` y `comentario_calificacio
 
 El cliente **no usa los campos estructurados**: los reconstruye parseando la cadena en cinco sitios
 (`AssignmentPlayer`, `examiner/calificaciones`, `examiner/pruebas`, la página de tarea y el listado).
-`replace('NOTA: ', '').split(' | ')` se rompe en cuanto un comentario contenga ` | `, y `parseFloat`
+`replace('NOTA: ', '').split(' | ')` se rompe en cuanto un comentario contenga `|`, y `parseFloat`
 sobre un texto ausente produce `NaN` que acaba pintado en pantalla. Es un formato serializado ad-hoc
 allí donde ya existen dos columnas tipadas.
 
@@ -286,7 +287,7 @@ Para que la refactorización no destruya valor existente, conviene dejar constan
 - Separación por módulos de dominio en NestJS, con DTOs y `class-validator` donde existen.
 - `AllExceptionsFilter` global con formato de respuesta consistente y correlación por `X-Request-ID`.
 - Validación de `JWT_SECRET` al arranque, que aborta el proceso ante valores inseguros.
-- Validación de *magic bytes* en las subidas para evitar suplantación de extensión.
+- Validación de _magic bytes_ en las subidas para evitar suplantación de extensión.
 - `helmet`, `compress`, rate limiting global y CORS explícito.
 - Sanitización con DOMPurify y lista blanca restrictiva en el cliente.
 - `AlertContext` con interfaces de error amigables, que es la base sobre la que construir el manejo de
@@ -299,16 +300,16 @@ Para que la refactorización no destruya valor existente, conviene dejar constan
 
 Orden elegido para que cada fase deje el sistema en estado funcional:
 
-| Fase | Contenido | Hallazgos que cierra |
-|---|---|---|
-| A | Dominio único: escala de notas 0–100, umbral 80, países | BUG-07, BUG-10, ARQ-04 |
-| B | Multi-país en esquema, JWT y consultas | (nueva funcionalidad) |
-| C | Autorización: fin de la suplantación, propiedad de recursos | SEC-01 … SEC-08, SEC-12 |
-| D | Tiempo real sobre SSE | CP-01, SEC-13, ARQ-07 |
-| E | Almacenamiento y ficheros | BUG-01, BUG-03, BUG-08, SEC-09, SEC-10, ARQ-05 |
-| F | Simplificación: lecciones, scheduler, estado de quiz | ARQ-01, ARQ-02, ARQ-03 |
-| G | Cliente: selector de país, escala 0–100, transporte SSE | (nueva funcionalidad) |
-| H | Limpieza, documentación y despliegue | CP-02, CP-03, COD-* |
+| Fase | Contenido                                                   | Hallazgos que cierra                           |
+| ---- | ----------------------------------------------------------- | ---------------------------------------------- |
+| A    | Dominio único: escala de notas 0–100, umbral 80, países     | BUG-07, BUG-10, ARQ-04                         |
+| B    | Multi-país en esquema, JWT y consultas                      | (nueva funcionalidad)                          |
+| C    | Autorización: fin de la suplantación, propiedad de recursos | SEC-01 … SEC-08, SEC-12                        |
+| D    | Tiempo real sobre SSE                                       | CP-01, SEC-13, ARQ-07                          |
+| E    | Almacenamiento y ficheros                                   | BUG-01, BUG-03, BUG-08, SEC-09, SEC-10, ARQ-05 |
+| F    | Simplificación: lecciones, scheduler, estado de quiz        | ARQ-01, ARQ-02, ARQ-03                         |
+| G    | Cliente: selector de país, escala 0–100, transporte SSE     | (nueva funcionalidad)                          |
+| H    | Limpieza, documentación y despliegue                        | CP-02, CP-03, COD-\*                           |
 
 ---
 
@@ -318,62 +319,62 @@ Estado de cada hallazgo tras la refactorización.
 
 ### Seguridad
 
-| Id | Hallazgo | Cómo quedó |
-|---|---|---|
-| SEC-01 | Suplantación vía `?usuario_guid=` | Cerrado. El patrón desapareció de los diez endpoints; la identidad sale del token y `@CurrentUser()` falla si no hay sesión en lugar de devolver `undefined` |
-| SEC-02 | Respuestas del cuestionario expuestas | Cerrado. Dos proyecciones del curso; las preguntas se piden al abrir el intento y salen sin `es_correcta` |
-| SEC-03 | Ficha de curso sin matrícula | Cerrado. `getCursoParaEstudiante` exige matrícula y curso publicado |
-| SEC-04 | Calificar entregas ajenas | Cerrado. `cursoDeEntregaQueGestiona` comprueba la propiedad |
-| SEC-05 | Monitoreo de alumnos ajenos | Cerrado. El endpoint ya no acepta `profesor_guid` |
-| SEC-06 | IDOR en certificados | Cerrado. Sólo el titular o un administrador de su sede |
-| SEC-07 | Notificaciones ajenas | Cerrado. El filtro incluye al propietario |
-| SEC-08 | Mensajería sin contacto aceptado | Cerrado. `asegurarContactoAceptado` en envío y lectura |
-| SEC-09 | Archivos públicos | Cerrado. URL firmada con caducidad para entregas, certificados, firmas y material de curso |
-| SEC-10 | SVG servido en línea | Mitigado. Se conserva el formato para los logotipos, pero se sirve con una CSP que impide ejecutar scripts |
-| SEC-11 | Enumeración de usuarios | Cerrado. Un solo mensaje para correo inexistente, contraseña incorrecta y sede equivocada |
-| SEC-12 | Endpoints sin DTO | Cerrado. Todos los cuerpos tienen clase con `class-validator` |
-| SEC-13 | Token en la query del WebSocket | Cerrado. SSE leído con `fetch` y cabecera `Authorization` |
+| Id     | Hallazgo                              | Cómo quedó                                                                                                                                                   |
+| ------ | ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| SEC-01 | Suplantación vía `?usuario_guid=`     | Cerrado. El patrón desapareció de los diez endpoints; la identidad sale del token y `@CurrentUser()` falla si no hay sesión en lugar de devolver `undefined` |
+| SEC-02 | Respuestas del cuestionario expuestas | Cerrado. Dos proyecciones del curso; las preguntas se piden al abrir el intento y salen sin `es_correcta`                                                    |
+| SEC-03 | Ficha de curso sin matrícula          | Cerrado. `getCursoParaEstudiante` exige matrícula y curso publicado                                                                                          |
+| SEC-04 | Calificar entregas ajenas             | Cerrado. `cursoDeEntregaQueGestiona` comprueba la propiedad                                                                                                  |
+| SEC-05 | Monitoreo de alumnos ajenos           | Cerrado. El endpoint ya no acepta `profesor_guid`                                                                                                            |
+| SEC-06 | IDOR en certificados                  | Cerrado. Sólo el titular o un administrador de su sede                                                                                                       |
+| SEC-07 | Notificaciones ajenas                 | Cerrado. El filtro incluye al propietario                                                                                                                    |
+| SEC-08 | Mensajería sin contacto aceptado      | Cerrado. `asegurarContactoAceptado` en envío y lectura                                                                                                       |
+| SEC-09 | Archivos públicos                     | Cerrado. URL firmada con caducidad para entregas, certificados, firmas y material de curso                                                                   |
+| SEC-10 | SVG servido en línea                  | Mitigado. Se conserva el formato para los logotipos, pero se sirve con una CSP que impide ejecutar scripts                                                   |
+| SEC-11 | Enumeración de usuarios               | Cerrado. Un solo mensaje para correo inexistente, contraseña incorrecta y sede equivocada                                                                    |
+| SEC-12 | Endpoints sin DTO                     | Cerrado. Todos los cuerpos tienen clase con `class-validator`                                                                                                |
+| SEC-13 | Token en la query del WebSocket       | Cerrado. SSE leído con `fetch` y cabecera `Authorization`                                                                                                    |
 
 ### Corrección
 
-| Id | Hallazgo | Cómo quedó |
-|---|---|---|
-| BUG-01 | Borrado de archivos en uso | Cerrado. Disco y base usan la misma clave `carpeta/nombre` |
-| BUG-02 | Borrar profesor arrastraba sus cursos | Cerrado. Relación `Restrict` y traspaso explícito, con selector en la interfaz |
-| BUG-03 | Certificado sin logotipo | Cerrado. Las imágenes se leen del almacenamiento, no del disco |
-| BUG-04 | Métrica `profesoresActivos` sin sentido | Cerrado. Recuentos con agregados de base de datos |
-| BUG-05 | `rejectRequest` borraba la solicitud | Cerrado. Queda como `RECHAZADA`, con motivo |
-| BUG-06 | `logout` cerraba todas las sesiones | Resuelto de otra forma. Se mantiene una sola sesión por cuenta, pero ahora es explícito y persistente; cerrar sesión libera el registro |
-| BUG-07 | `escala` decorativa | Cerrado. Se retiró la columna y su enum: el sistema tiene una única escala |
-| BUG-08 | Límite de archivo ignorado | Cerrado. Se aplica el del recurso, si no el de la sede, y nunca por encima del tope del servidor |
-| BUG-09 | Verificación de correo sin consumir | Cerrado. Se consume al crear la solicitud y caduca |
-| BUG-10 | `@Max(5)` en el DTO | Cerrado. Los límites salen del dominio |
+| Id     | Hallazgo                                | Cómo quedó                                                                                                                              |
+| ------ | --------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| BUG-01 | Borrado de archivos en uso              | Cerrado. Disco y base usan la misma clave `carpeta/nombre`                                                                              |
+| BUG-02 | Borrar profesor arrastraba sus cursos   | Cerrado. Relación `Restrict` y traspaso explícito, con selector en la interfaz                                                          |
+| BUG-03 | Certificado sin logotipo                | Cerrado. Las imágenes se leen del almacenamiento, no del disco                                                                          |
+| BUG-04 | Métrica `profesoresActivos` sin sentido | Cerrado. Recuentos con agregados de base de datos                                                                                       |
+| BUG-05 | `rejectRequest` borraba la solicitud    | Cerrado. Queda como `RECHAZADA`, con motivo                                                                                             |
+| BUG-06 | `logout` cerraba todas las sesiones     | Resuelto de otra forma. Se mantiene una sola sesión por cuenta, pero ahora es explícito y persistente; cerrar sesión libera el registro |
+| BUG-07 | `escala` decorativa                     | Cerrado. Se retiró la columna y su enum: el sistema tiene una única escala                                                              |
+| BUG-08 | Límite de archivo ignorado              | Cerrado. Se aplica el del recurso, si no el de la sede, y nunca por encima del tope del servidor                                        |
+| BUG-09 | Verificación de correo sin consumir     | Cerrado. Se consume al crear la solicitud y caduca                                                                                      |
+| BUG-10 | `@Max(5)` en el DTO                     | Cerrado. Los límites salen del dominio                                                                                                  |
 
 ### Arquitectura
 
-| Id | Hallazgo | Cómo quedó |
-|---|---|---|
-| ARQ-01 | Capa `lms_lecciones` vestigial | Eliminada. Los recursos cuelgan del módulo |
-| ARQ-02 | Republicación por sondeo | Eliminado. `updateCurso` avisa en el momento del cambio |
-| ARQ-03 | Estado obsoleto del quiz | Eliminado. Los intentos se conservan y el reinicio afecta al progreso del módulo, no al contador |
-| ARQ-04 | La nota como texto parseable | Cerrado. Campos propios; se retiró `contenido_texto` |
-| ARQ-05 | Columna `TEXT` para una clave | Cerrado. Columna dimensionada y comentario corregido |
-| ARQ-06 | Dashboards cargando tablas enteras | Cerrado. Agregados en base de datos |
-| ARQ-07 | Difusión indiscriminada | Cerrado. Todo evento exige destino con país y rol |
-| ARQ-08 | Tres fuentes para la URL de la API | Cerrado. Sólo `lib/env.ts` |
+| Id     | Hallazgo                           | Cómo quedó                                                                                       |
+| ------ | ---------------------------------- | ------------------------------------------------------------------------------------------------ |
+| ARQ-01 | Capa `lms_lecciones` vestigial     | Eliminada. Los recursos cuelgan del módulo                                                       |
+| ARQ-02 | Republicación por sondeo           | Eliminado. `updateCurso` avisa en el momento del cambio                                          |
+| ARQ-03 | Estado obsoleto del quiz           | Eliminado. Los intentos se conservan y el reinicio afecta al progreso del módulo, no al contador |
+| ARQ-04 | La nota como texto parseable       | Cerrado. Campos propios; se retiró `contenido_texto`                                             |
+| ARQ-05 | Columna `TEXT` para una clave      | Cerrado. Columna dimensionada y comentario corregido                                             |
+| ARQ-06 | Dashboards cargando tablas enteras | Cerrado. Agregados en base de datos                                                              |
+| ARQ-07 | Difusión indiscriminada            | Cerrado. Todo evento exige destino con país y rol                                                |
+| ARQ-08 | Tres fuentes para la URL de la API | Cerrado. Sólo `lib/env.ts`                                                                       |
 
 ### Despliegue y calidad
 
-| Id | Hallazgo | Cómo quedó |
-|---|---|---|
-| CP-01 | WebSockets bloqueados | Resuelto. Tiempo real sobre SSE; no hace falta pedir nada al hosting |
-| CP-02 | Artefactos versionados | Cerrado. `prod/` y el zip fuera del repositorio |
-| CP-03 | README desactualizado | Reescrito, junto con la guía de cPanel y un documento de decisiones |
-| COD-01 | `any` en fronteras | Reducido en la API; el cliente conserva `any` en estructuras de pantalla |
-| COD-02 | Páginas de más de mil líneas | Parcial. Se dividieron login, menú lateral y las pantallas de configuración; el constructor de cursos y el panel de calificaciones siguen siendo grandes |
-| COD-03 | `catch {}` vacíos | Cerrado en los caminos que ocultaban fallos; se conservan donde la operación es prescindible, con el motivo escrito |
-| COD-04 | Comentarios con identificadores muertos | Cerrado |
-| COD-05 | `seedMatriculas` expuesto | Eliminado |
+| Id     | Hallazgo                                | Cómo quedó                                                                                                                                               |
+| ------ | --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| CP-01  | WebSockets bloqueados                   | Resuelto. Tiempo real sobre SSE; no hace falta pedir nada al hosting                                                                                     |
+| CP-02  | Artefactos versionados                  | Cerrado. `prod/` y el zip fuera del repositorio                                                                                                          |
+| CP-03  | README desactualizado                   | Reescrito, junto con la guía de cPanel y un documento de decisiones                                                                                      |
+| COD-01 | `any` en fronteras                      | Reducido en la API; el cliente conserva `any` en estructuras de pantalla                                                                                 |
+| COD-02 | Páginas de más de mil líneas            | Parcial. Se dividieron login, menú lateral y las pantallas de configuración; el constructor de cursos y el panel de calificaciones siguen siendo grandes |
+| COD-03 | `catch {}` vacíos                       | Cerrado en los caminos que ocultaban fallos; se conservan donde la operación es prescindible, con el motivo escrito                                      |
+| COD-04 | Comentarios con identificadores muertos | Cerrado                                                                                                                                                  |
+| COD-05 | `seedMatriculas` expuesto               | Eliminado                                                                                                                                                |
 
 ## 10. Segunda pasada
 
@@ -392,12 +393,12 @@ El filtro global sólo entendía las excepciones de Nest. Todo lo demás —un c
 una clave ajena rota, la base de datos apagada— salía como error 500 con un texto que no
 ayudaba a nadie.
 
-| Situación | Antes | Ahora |
-|---|---|---|
-| Correo o matrícula duplicados | 500 «error interno» | 409 «Ya existe un registro con ese correo» |
-| Registro borrado mientras se editaba | 500 | 404 «El registro que intentas modificar ya no existe» |
-| Base de datos caída | 500 | 503 «La base de datos no está disponible… inténtalo en unos minutos» |
-| Dirección inexistente | `Cannot GET /api/x` | «La dirección solicitada no existe en la API» |
+| Situación                            | Antes               | Ahora                                                                |
+| ------------------------------------ | ------------------- | -------------------------------------------------------------------- |
+| Correo o matrícula duplicados        | 500 «error interno» | 409 «Ya existe un registro con ese correo»                           |
+| Registro borrado mientras se editaba | 500                 | 404 «El registro que intentas modificar ya no existe»                |
+| Base de datos caída                  | 500                 | 503 «La base de datos no está disponible… inténtalo en unos minutos» |
+| Dirección inexistente                | `Cannot GET /api/x` | «La dirección solicitada no existe en la API»                        |
 
 Comprobado en ejecución con la base apagada: el mensaje del 503 llega hasta la pantalla de
 acceso. El filtro tiene 17 pruebas propias.
@@ -436,14 +437,14 @@ acceso. El filtro tiene 17 pruebas propias.
 
 ### Código que sobraba
 
-| Qué | Dónde |
-|---|---|
-| `@nestjs/websockets`, `@nestjs/platform-ws`, `ws`, `@types/ws` | Declaradas tras migrar a SSE, sin un solo uso |
-| `@fastify/static`, `chokidar`, `@types/dompurify` | Nunca importadas |
-| Petición a `/auth/usuarios/por-rol` en cada carga del constructor | El resultado no se leía en ninguna parte |
-| Tres copias del bucle «borrar archivos ignorando fallos» | Ahora `StorageService.borrarVarios` |
-| Dos consultas del panel del examinador casi idénticas | Selección y proyección compartidas |
-| Estado muerto del constructor (`bloqueBase64`, `savingBlock`, subidas a `/storage/upload` cuyo resultado se descartaba) | Eliminado |
+| Qué                                                                                                                     | Dónde                                         |
+| ----------------------------------------------------------------------------------------------------------------------- | --------------------------------------------- |
+| `@nestjs/websockets`, `@nestjs/platform-ws`, `ws`, `@types/ws`                                                          | Declaradas tras migrar a SSE, sin un solo uso |
+| `@fastify/static`, `chokidar`, `@types/dompurify`                                                                       | Nunca importadas                              |
+| Petición a `/auth/usuarios/por-rol` en cada carga del constructor                                                       | El resultado no se leía en ninguna parte      |
+| Tres copias del bucle «borrar archivos ignorando fallos»                                                                | Ahora `StorageService.borrarVarios`           |
+| Dos consultas del panel del examinador casi idénticas                                                                   | Selección y proyección compartidas            |
+| Estado muerto del constructor (`bloqueBase64`, `savingBlock`, subidas a `/storage/upload` cuyo resultado se descartaba) | Eliminado                                     |
 
 ### Comportamiento corregido
 
@@ -502,21 +503,21 @@ dueño», así que basta con mirarla.
 
 ### Lo que sí se comportó como se esperaba
 
-| Comprobación | Resultado |
-|---|---|
-| Cuenta de una sede intentando entrar en la otra | 401 con el mismo texto que una contraseña incorrecta |
-| Curso de la otra sede pedido por identificador directo | 404 en leer, editar y borrar |
-| Listados de cursos y de usuarios | Cada sede ve sólo lo suyo |
-| Matricular a un alumno de la otra sede | 400 explicando el motivo |
-| Matrícula o correo repetidos | 409, ya no 500 |
-| Nota 79 / 80 / 150 sobre el umbral de 80 | Suspenso / aprobado / rechazada por fuera de escala |
-| Descarga de una entrega sin firma o con la firma alterada | 403 |
-| Examinador de la otra sede calificando | 404 |
-| Alumno calificándose a sí mismo | 403 |
-| Editar contenido de un curso publicado | 400 indicando que pase a Borrador |
-| Certificado | Emitido solo al aprobar, PDF válido, verificación pública sin datos de más |
-| Segundo inicio de sesión | El token anterior queda revocado al instante |
-| Desactivar una cuenta | Su token deja de valer en la siguiente petición |
+| Comprobación                                              | Resultado                                                                  |
+| --------------------------------------------------------- | -------------------------------------------------------------------------- |
+| Cuenta de una sede intentando entrar en la otra           | 401 con el mismo texto que una contraseña incorrecta                       |
+| Curso de la otra sede pedido por identificador directo    | 404 en leer, editar y borrar                                               |
+| Listados de cursos y de usuarios                          | Cada sede ve sólo lo suyo                                                  |
+| Matricular a un alumno de la otra sede                    | 400 explicando el motivo                                                   |
+| Matrícula o correo repetidos                              | 409, ya no 500                                                             |
+| Nota 79 / 80 / 150 sobre el umbral de 80                  | Suspenso / aprobado / rechazada por fuera de escala                        |
+| Descarga de una entrega sin firma o con la firma alterada | 403                                                                        |
+| Examinador de la otra sede calificando                    | 404                                                                        |
+| Alumno calificándose a sí mismo                           | 403                                                                        |
+| Editar contenido de un curso publicado                    | 400 indicando que pase a Borrador                                          |
+| Certificado                                               | Emitido solo al aprobar, PDF válido, verificación pública sin datos de más |
+| Segundo inicio de sesión                                  | El token anterior queda revocado al instante                               |
+| Desactivar una cuenta                                     | Su token deja de valer en la siguiente petición                            |
 
 Registro de la API durante todo el recorrido: **0 errores y 0 peticiones lentas**. Consola
 del navegador en una pestaña limpia: **sin mensajes**.
@@ -528,13 +529,13 @@ inexistentes**. Ninguna daba error: al llegar la respuesta como `any`, leer una 
 que no está devuelve `undefined` y la interfaz simplemente hace lo contrario de lo previsto,
 en silencio.
 
-| Se leía | La API devuelve | Qué estaba roto |
-|---|---|---|
-| `entrega.archivo_servidor` | `archivo_url` | **El examinador no podía descargar lo que calificaba.** El botón no se dibujaba nunca y el panel decía siempre «Sin archivo adjunto» |
-| `progreso.desbloqueados_por_tiempo` | `desbloqueados_por_espera` | El desbloqueo por espera no se aplicaba: un alumno con una tarea sin calificar quedaba parado indefinidamente |
-| `progreso.tareas_pendientes_calificacion` | `tareas_pendientes` | El aviso de «tienes tareas esperando calificación» **no se mostró nunca** |
-| `tarea.tarea_titulo` | `titulo` | Y si se hubiera mostrado, habría salido sin nombres |
-| `finalizacion.puede_generar_certificado` | `puede_certificarse` | La pantalla de «curso ya finalizado» tampoco aparecía |
+| Se leía                                   | La API devuelve            | Qué estaba roto                                                                                                                      |
+| ----------------------------------------- | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `entrega.archivo_servidor`                | `archivo_url`              | **El examinador no podía descargar lo que calificaba.** El botón no se dibujaba nunca y el panel decía siempre «Sin archivo adjunto» |
+| `progreso.desbloqueados_por_tiempo`       | `desbloqueados_por_espera` | El desbloqueo por espera no se aplicaba: un alumno con una tarea sin calificar quedaba parado indefinidamente                        |
+| `progreso.tareas_pendientes_calificacion` | `tareas_pendientes`        | El aviso de «tienes tareas esperando calificación» **no se mostró nunca**                                                            |
+| `tarea.tarea_titulo`                      | `titulo`                   | Y si se hubiera mostrado, habría salido sin nombres                                                                                  |
+| `finalizacion.puede_generar_certificado`  | `puede_certificarse`       | La pantalla de «curso ya finalizado» tampoco aparecía                                                                                |
 
 Los cinco se corrigieron y se comprobaron con el campus en marcha: la descarga vuelve a
 aparecer con su URL firmada, el visor retoma por la tarea pendiente en vez de por una ya
@@ -549,11 +550,11 @@ del navegador, donde nadie los ve. Ahora se muestran.
 
 ## 13. Pantallas divididas
 
-| Pantalla | Antes | Después |
-|---|---|---|
-| Constructor de cursos | 1564 | 610 + 9 piezas |
-| Calificación manual | 1101 | 225 + 4 piezas |
-| Visor de curso del alumno | 1027 | 761 + 2 piezas |
+| Pantalla                  | Antes | Después        |
+| ------------------------- | ----- | -------------- |
+| Constructor de cursos     | 1564  | 610 + 9 piezas |
+| Calificación manual       | 1101  | 225 + 4 piezas |
+| Visor de curso del alumno | 1027  | 761 + 2 piezas |
 
 En los tres casos lo que permitió el recorte no fue mover marcado de sitio, sino separar lo
 que se puede razonar solo:
@@ -582,11 +583,11 @@ const Cell = dynamic(() => import('recharts').then((m) => m.Cell), { ssr: false 
 Recharts reconoce a sus hijos **por el tipo del componente**, y el envoltorio que devuelve
 `dynamic()` no coincide con ninguno. El efecto medido en el navegador:
 
-| Pantalla | Qué salía |
-|---|---|
+| Pantalla                | Qué salía                                                                             |
+| ----------------------- | ------------------------------------------------------------------------------------- |
 | Panel de administración | El anillo se dibujaba en gris `#808080`, el color por defecto, ignorando los `<Cell>` |
-| Calificación manual | La tarta no dibujaba **nada**: el grupo del sector quedaba vacío |
-| Monitoreo y pruebas | Lo mismo, barras incluidas |
+| Calificación manual     | La tarta no dibujaba **nada**: el grupo del sector quedaba vacío                      |
+| Monitoreo y pruebas     | Lo mismo, barras incluidas                                                            |
 
 A eso se sumaba que Recharts 3 deja el trazo vacío si el contenedor se mide después del
 primer render —justo lo que pasa con la carga diferida—, y que una tarta de una sola
@@ -631,12 +632,12 @@ pantalla vacía o creía que algo se había guardado.
 
 La regla quedó escrita en `AlertContext`, que es donde la busca quien vaya a usarla:
 
-| Situación | Herramienta | Por qué |
-|---|---|---|
-| Algo salió bien | `showToast.success` | No interrumpe |
-| No cargó la pantalla | `showToast.error` | El hueco se nota; no hace falta bloquear |
-| Falló lo que el usuario pidió | `showAlert.error` | Creyó que se guardó: hay que detenerlo |
-| Hay que decidir antes de seguir | `showConfirm` | Borrados y acciones sin vuelta atrás |
+| Situación                       | Herramienta         | Por qué                                  |
+| ------------------------------- | ------------------- | ---------------------------------------- |
+| Algo salió bien                 | `showToast.success` | No interrumpe                            |
+| No cargó la pantalla            | `showToast.error`   | El hueco se nota; no hace falta bloquear |
+| Falló lo que el usuario pidió   | `showAlert.error`   | Creyó que se guardó: hay que detenerlo   |
+| Hay que decidir antes de seguir | `showConfirm`       | Borrados y acciones sin vuelta atrás     |
 
 Se aplicó en los 31 sitios. Los que callan a propósito —un avisador complementario, un
 suscriptor de tiempo real— llevan ahora escrito por qué.
@@ -656,13 +657,13 @@ suscriptor de tiempo real— llevan ahora escrito por qué.
 
 ## 17. Basura retirada
 
-| Qué | Dónde |
-|---|---|
-| `Badge.tsx`, `ProgressBar.tsx` | 93 líneas de componentes que nadie usaba |
-| `generar-certificado.dto.ts`, `heartbeat.dto.ts` | Duplicados de `EmitirCertificadoDto` y `LatidoDto`, sobrantes de un renombrado |
-| `MENSAJE_POR_REVOCACION` | Repetía el mapa que ya tiene `RealtimeContext` |
-| `esLimiteDePeticiones`, `umbralAprobacion`, `PAIS_POR_DEFECTO`, `useStableCallback`, `CurrentUserOptional` | Exportaciones sin un solo uso |
-| `hexAHsl` | Dejó de exportarse: sólo se usa dentro de su módulo |
+| Qué                                                                                                        | Dónde                                                                          |
+| ---------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| `Badge.tsx`, `ProgressBar.tsx`                                                                             | 93 líneas de componentes que nadie usaba                                       |
+| `generar-certificado.dto.ts`, `heartbeat.dto.ts`                                                           | Duplicados de `EmitirCertificadoDto` y `LatidoDto`, sobrantes de un renombrado |
+| `MENSAJE_POR_REVOCACION`                                                                                   | Repetía el mapa que ya tiene `RealtimeContext`                                 |
+| `esLimiteDePeticiones`, `umbralAprobacion`, `PAIS_POR_DEFECTO`, `useStableCallback`, `CurrentUserOptional` | Exportaciones sin un solo uso                                                  |
+| `hexAHsl`                                                                                                  | Dejó de exportarse: sólo se usa dentro de su módulo                            |
 
 ## 18. El alumno no podía empezar ningún cuestionario
 
@@ -673,8 +674,8 @@ El cliente crea su instancia de axios con `Content-Type: application/json` por d
 Dos llamadas no llevan cuerpo:
 
 ```ts
-api.post(`/cursos/quiz/${recurso_guid}/iniciar`);   // empezar un cuestionario
-api.post(`/realtime/cursos/${cursoGuid}/bloqueo`);  // tomar el aviso de edición
+api.post(`/cursos/quiz/${recurso_guid}/iniciar`); // empezar un cuestionario
+api.post(`/realtime/cursos/${cursoGuid}/bloqueo`); // tomar el aviso de edición
 ```
 
 Axios **conserva la cabecera** aunque no haya datos, y Fastify rechaza entonces la petición
@@ -682,10 +683,10 @@ con `400 Body cannot be empty when content-type is set to 'application/json'`.
 
 Consecuencias reales:
 
-| Llamada | Qué estaba roto |
-|---|---|
-| `quiz/:guid/iniciar` | **Ningún alumno podía empezar un cuestionario.** El botón «Comenzar intento» devolvía un error |
-| `realtime/cursos/:guid/bloqueo` | El aviso de «curso en edición» nunca se tomaba: dos editores podían pisarse sin enterarse |
+| Llamada                         | Qué estaba roto                                                                                |
+| ------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `quiz/:guid/iniciar`            | **Ningún alumno podía empezar un cuestionario.** El botón «Comenzar intento» devolvía un error |
+| `realtime/cursos/:guid/bloqueo` | El aviso de «curso en edición» nunca se tomaba: dos editores podían pisarse sin enterarse      |
 
 Comprobado reproduciendo la instancia exacta del cliente contra la API en marcha:
 
@@ -758,15 +759,15 @@ bien construidas y sin errores en consola.
 `admin/usuarios/page.tsx` era la última pantalla grande: 889 líneas con la lista, tres
 ventanas y toda la lógica mezclada. Quedó en 227 más siete piezas con nombre propio:
 
-| Pieza | Qué hace |
-|---|---|
-| `cuentas.ts` | Tipos, vocabulario de cada rol y los dos cálculos comprobables: «cuándo entró» y el filtro |
-| `ListaDeCuentas` | Pestañas, buscador, tabla de escritorio y tarjetas de móvil |
-| `FichaDeUsuario` | Los datos de una cuenta y sus cursos |
-| `AltaDeAdministrador` | El alta directa, con su propio formulario |
-| `TraspasoDeCursos` | A quién pasan los cursos de quien se elimina |
-| `AvatarDeCuenta` | Foto o iniciales sobre el color del rol |
-| `UltimoAcceso` | «En línea», «sin acceso» o la fecha relativa |
+| Pieza                 | Qué hace                                                                                   |
+| --------------------- | ------------------------------------------------------------------------------------------ |
+| `cuentas.ts`          | Tipos, vocabulario de cada rol y los dos cálculos comprobables: «cuándo entró» y el filtro |
+| `ListaDeCuentas`      | Pestañas, buscador, tabla de escritorio y tarjetas de móvil                                |
+| `FichaDeUsuario`      | Los datos de una cuenta y sus cursos                                                       |
+| `AltaDeAdministrador` | El alta directa, con su propio formulario                                                  |
+| `TraspasoDeCursos`    | A quién pasan los cursos de quien se elimina                                               |
+| `AvatarDeCuenta`      | Foto o iniciales sobre el color del rol                                                    |
+| `UltimoAcceso`        | «En línea», «sin acceso» o la fecha relativa                                               |
 
 De paso: el contador de cada pestaña recorría la lista tres veces, el color del rol estaba
 escrito en cuatro sitios —y en la ficha el administrador salía verde en vez de rojo—, y el
@@ -956,15 +957,15 @@ Se montó el mismo arranque que usa la API —Jest con `ts-jest`, una configurac
 líneas y el mismo alias `@/`— y se cubrieron los módulos puros, que es donde viven las
 decisiones que se equivocan en silencio:
 
-| Módulo | Qué protege |
-|---|---|
-| `lib/recursos.ts` | Qué hay detrás de un enlace: imagen, vídeo o página. El fallo de la sección 23 |
-| `lib/calificacion.ts` | La escala 0–100 y el umbral 80, incluidas las notas que llegan como cadena |
-| `cursos/[curso_id]/components/recorrido.ts` | Que no se salte contenido: lo que sostiene el certificado |
-| `admin/usuarios/components/cuentas.ts` | Búsqueda por pestaña y «cuándo entró por última vez» |
+| Módulo                                      | Qué protege                                                                    |
+| ------------------------------------------- | ------------------------------------------------------------------------------ |
+| `lib/recursos.ts`                           | Qué hay detrás de un enlace: imagen, vídeo o página. El fallo de la sección 23 |
+| `lib/calificacion.ts`                       | La escala 0–100 y el umbral 80, incluidas las notas que llegan como cadena     |
+| `cursos/[curso_id]/components/recorrido.ts` | Que no se salte contenido: lo que sostiene el certificado                      |
+| `admin/usuarios/components/cuentas.ts`      | Búsqueda por pestaña y «cuándo entró por última vez»                           |
 
 **61 pruebas en medio segundo.** Comprobadas por mutación: al abrir un módulo con que
-*alguno* de los recursos anteriores esté hecho —en vez de todos— y al olvidar que una
+_alguno_ de los recursos anteriores esté hecho —en vez de todos— y al olvidar que una
 imagen puede venir subida y no sólo incrustada, fallan cinco.
 
 No cubren pantallas: para eso se sigue ejecutando la aplicación. Cubren las reglas, que es
@@ -1006,8 +1007,8 @@ persona conservará su copia.»
 
 ## 32. «Un administrador cerró tu sesión» cuando nadie lo había hecho
 
-Al iniciar sesión en otro dispositivo, la sesión anterior recibía *«Tu acceso fue retirado
-— Un administrador cerró tu sesión o dio de baja tu cuenta»*. Alarmante y falso.
+Al iniciar sesión en otro dispositivo, la sesión anterior recibía _«Tu acceso fue retirado
+— Un administrador cerró tu sesión o dio de baja tu cuenta»_. Alarmante y falso.
 
 La causa era el orden de las comprobaciones: al entrar de nuevo, la sesión anterior queda
 también en la lista de revocadas, y esa lista se consultaba **antes** que la comprobación
@@ -1025,11 +1026,11 @@ La pregunta era si el campus aguanta varias subidas y descargas a la vez. La res
 medida contra la API en marcha, era que no: **cada archivo se materializaba entero en
 memoria**, tanto al subir como al descargar.
 
-| Escenario | Antes | Ahora |
-|---|---|---|
-| 12 descargas de 20 MB | **+241 MB** de RAM | **+4,7 MB** |
-| 40 descargas de 20 MB | (no se llegó a probar) | **+37,5 MB** |
-| 8 subidas de 20 MB rechazadas por tamaño | **+193 MB** | **+27 MB** |
+| Escenario                                | Antes                  | Ahora        |
+| ---------------------------------------- | ---------------------- | ------------ |
+| 12 descargas de 20 MB                    | **+241 MB** de RAM     | **+4,7 MB**  |
+| 40 descargas de 20 MB                    | (no se llegó a probar) | **+37,5 MB** |
+| 8 subidas de 20 MB rechazadas por tamaño | **+193 MB**            | **+27 MB**   |
 
 Con material de 50 MB y una docena de alumnos abriéndolo a la vez, el proceso pasaba de
 600 MB. En un alojamiento compartido eso no es lentitud: es el proceso reiniciándose.
@@ -1154,7 +1155,7 @@ la envía.
 El diploma imprimía «Duración» con esta fórmula:
 
 ```ts
-tiempoHoras: segundosActivos > 0 ? horasReales : (curso.duracion_horas ?? 1)
+tiempoHoras: segundosActivos > 0 ? horasReales : (curso.duracion_horas ?? 1);
 ```
 
 Es decir: **el tiempo que el alumno estuvo con la pantalla abierta**. Quien iba rápido
@@ -1163,10 +1164,10 @@ la interfaz**, la otra rama nunca se usaba.
 
 Son dos conceptos distintos y sólo uno se certifica:
 
-| | Qué es | Dónde vive |
-|---|---|---|
-| **Duración del programa** | Las horas que acredita el diploma | `lms_cursos.duracion_horas` |
-| **Tiempo del alumno** | Lo que estuvo dentro de verdad | `lms_certificados.tiempo_activo_seg` |
+|                           | Qué es                            | Dónde vive                           |
+| ------------------------- | --------------------------------- | ------------------------------------ |
+| **Duración del programa** | Las horas que acredita el diploma | `lms_cursos.duracion_horas`          |
+| **Tiempo del alumno**     | Lo que estuvo dentro de verdad    | `lms_certificados.tiempo_activo_seg` |
 
 Ahora el certificado acredita las horas del programa, el tiempo real se guarda aparte —le
 sirve al examinador para seguir el avance— y la ficha del curso tiene el campo para
@@ -1205,13 +1206,14 @@ Una sola regla, fácil de contar: **la vuelta actual del alumno empieza en su
   administrativa, a veces por error— le costaba todo el trabajo hecho. Ahora se distingue
   por una sola cosa, si llegó a certificarse:
 
-  | Situación | Al readmitirlo |
-  |---|---|
-  | No se certificó: se quedó a medias | **Retoma donde lo dejó**; su avance y sus entregas siguen ahí |
+  | Situación                                    | Al readmitirlo                                                |
+  | -------------------------------------------- | ------------------------------------------------------------- |
+  | No se certificó: se quedó a medias           | **Retoma donde lo dejó**; su avance y sus entregas siguen ahí |
   | Ya se certificó: vuelve a necesitar el curso | **Empieza de cero**; los cuestionarios recuperan sus intentos |
 
   El reinicio va en una transacción: o queda la matrícula al día con el recorrido que le
   corresponde, o no cambia nada.
+
 - **Cada vuelta emite su propio certificado**, numerado (`intento`). El anterior se queda
   como histórico y su código sigue verificándose.
 - **Cada sede puede declarar una vigencia** en meses, y **lo recomendado es no ponerla**.
@@ -1266,10 +1268,10 @@ y cuándo** se le emite un certificado, y **qué dice** el documento. La segunda
 `datos-certificado.service.ts`, que reúne los datos del alumno, del curso y de la marca de
 la sede, carga las imágenes y genera el código de verificación.
 
-| | Antes | Ahora |
-|---|---|---|
-| `certificados.service.ts` | 600 | **447** |
-| `datos-certificado.service.ts` | — | 198 |
+|                                | Antes | Ahora   |
+| ------------------------------ | ----- | ------- |
+| `certificados.service.ts`      | 600   | **447** |
+| `datos-certificado.service.ts` | —     | 198     |
 
 Ahora se puede cambiar lo que dice el diploma —añadir un dato, cambiar el texto legal— sin
 tocar las reglas de emisión, y al revés. Comprobado emitiendo un certificado real después
@@ -1347,12 +1349,12 @@ pase lo que pase en el `.env`. Y, ya que el mismo mensaje aparece con artefactos
 
 Comprobado de punta a punta, que es lo que faltaba por hacer desde el principio:
 
-| Paso | Resultado |
-|---|---|
-| `npm run build` desde la raíz | correcto, con el servidor de desarrollo abierto |
-| `node dist/main.js` con `NODE_ENV=production` | `healthy`, entorno `production`, base `ok` |
-| `node server.js` del paquete `prod/` | listo en 238 ms, `/login` responde 200 |
-| La portada en el navegador | selector de sede, sin un solo error de consola |
+| Paso                                          | Resultado                                       |
+| --------------------------------------------- | ----------------------------------------------- |
+| `npm run build` desde la raíz                 | correcto, con el servidor de desarrollo abierto |
+| `node dist/main.js` con `NODE_ENV=production` | `healthy`, entorno `production`, base `ok`      |
+| `node server.js` del paquete `prod/`          | listo en 238 ms, `/login` responde 200          |
+| La portada en el navegador                    | selector de sede, sin un solo error de consola  |
 
 ### Basura retirada
 
@@ -1390,3 +1392,63 @@ Queda, visto y decidido no tocar por ahora:
    instantáneas; conviene medirlas cuando haya años de uso.
 5. **Campos que se guardan sin efecto**: el código de acceso y las fechas de inicio y fin
    de un curso se editan, pero nada los aplica.
+
+## 43. Los archivos, sólo en el disco del servidor
+
+El despliegue real es cPanel, y el soporte de Cloudflare R2 que describen las secciones
+anteriores era una segunda rama en cada lectura, escritura y borrado que nadie usaba. Peor:
+bastaba con definir sus variables para que los archivos ya guardados en el disco dejaran de
+encontrarse. Se retiró entero —código, pruebas, la dependencia `@aws-sdk/client-s3` con sus
+cien paquetes y las variables `R2_*`—; las URLs firmadas de las descargas son propias de la
+API y se mantienen.
+
+### Cómo quedó el almacenamiento
+
+- **Fuera de la aplicación.** La carpeta se fija con `STORAGE_DIR`; sin ella se usa
+  `apps/api/uploads`, que sólo vale en desarrollo y en producción se avisa al arrancar.
+- **Escritura atómica.** Las subidas y el PDF del certificado se escriben en `<raíz>/.tmp` y
+  se renombran a su carpeta cuando están enteros. Los antiguos `*.parcial` vivían junto al
+  destino, eran claves válidas y nada los retiraba tras un corte; `.tmp` no es una carpeta de
+  claves y se vacía de restos al arrancar.
+- **Fallos de disco con nombre.** Sin espacio o sin cuota, la subida responde 507 con un
+  mensaje que dice a quién avisar; sin permiso de escritura, 503, y el registro nombra la
+  carpeta. Antes llegaban como «error interno».
+- **Arranque y salud.** La API crea las carpetas sin permisos para otras cuentas, comprueba que
+  puede escribir sin impedir el arranque y lo expone en `/api/health` (`storage`).
+- **Rutas.** Además de validar la forma de la clave, la ruta resuelta tiene que quedar dentro
+  de la raíz. Borrar es idempotente.
+- **Pruebas en una carpeta temporal.** Las del almacenamiento escribían en la carpeta real.
+
+### Una sola regla para sustituir o quitar un archivo
+
+Portada, foto de perfil, logotipo, favicon, fondo, firma, material de un recurso y entrega
+reenviada repetían cada uno a su manera «borra el anterior», y quitar una imagen no tenía
+ninguna prueba. Ahora pasan todos por `FileOwnershipService.replace` (la fila apunta a un
+archivo ya subido) o `adoptUpload` (se sube y se asigna en un paso): se guarda la fila y
+después se borra el anterior si ninguna otra lo usa; si no se puede guardar, se retira lo
+recién subido. Cada pantalla tiene su prueba de que quitar la imagen la borra, y la regla se
+prueba contra un disco de verdad.
+
+### Certificados
+
+- **El logotipo sólo admite PNG o JPG**, como ya la firma: un SVG se aceptaba y desaparecía en
+  silencio de todos los certificados (y de los correos). Los ya subidos se omiten con un aviso
+  que dice qué formato usar.
+- **Un PDF perdido se recompone.** Cada certificado guarda en `datos_pdf` lo que imprime; si
+  falta el archivo, la descarga lo vuelve a componer, lo guarda con la misma clave y lo
+  sirve. Antes se pedía al administrador «que lo vuelva a emitir», algo que no existe.
+- **El PDF ya no queda huérfano** si la base no llega a confirmar la emisión.
+
+### Una dependencia que no compilaba
+
+`RateLimitGuard` sobrescribe `setResponseHeader`, que `@nestjs/throttler` sólo tiene desde la
+6.7.1, pero el lock fijaba la 6.5.0: con `npm ci` la API no compilaba. Se subió la
+dependencia, y el lock, regenerado con el npm de Node 22, vuelve a pasar `npm ci`.
+
+### Comprobado ejecutando
+
+La API compilada, con `STORAGE_DIR` en una carpeta nueva: crea las nueve carpetas con
+`rwxr-x---`, `/api/health` responde `storage: ok`, un logotipo SVG se rechaza con el mensaje
+de formato, uno PNG se guarda y quitarlo lo borra del disco (la descarga pasa a 404), cambiar
+la foto de perfil borra la anterior y quitarla borra la actual, y un certificado sin su PDF
+se descarga recompuesto y queda guardado de nuevo.

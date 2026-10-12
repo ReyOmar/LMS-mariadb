@@ -1,6 +1,7 @@
 import { ForbiddenException } from '@nestjs/common';
 import { CoursesService } from './courses.service';
 import { sessionFor } from '../common/testing/test-campus';
+import { fileOwnershipDouble } from '../common/testing/file-ownership-double';
 
 const ADMIN = sessionFor('ADMIN', 'COLOMBIA', 'admin');
 const DRAFT = { guid: 'curso-1', country: 'COLOMBIA', title: 'Curso', status: 'DRAFT', teacherGuid: 'admin' };
@@ -11,13 +12,7 @@ const PUBLISHED = { ...DRAFT, status: 'PUBLISHED', teacherGuid: 'profe' };
  * consultas que una prueba necesite se pasan en `prisma` y sustituyen a las de serie.
  */
 function serviceWith(prisma: Record<string, unknown>, course: Record<string, unknown> = DRAFT) {
-  const deletedFiles: (string | null | undefined)[] = [];
-  const files = {
-    assertCanUse: jest.fn(async () => undefined),
-    deleteUnreferenced: async (keys: (string | null | undefined)[]) => {
-      deletedFiles.push(...keys);
-    },
-  };
+  const ownership = fileOwnershipDouble();
   const access = {
     managedCourse: async () => course,
     courseInCountry: async () => course,
@@ -51,9 +46,9 @@ function serviceWith(prisma: Record<string, unknown>, course: Record<string, unk
     mail as never,
     realtime as never,
     notifications as never,
-    files as never,
+    ownership.files,
   );
-  return { service, files, emitted, notifications, mail, deletedFiles: () => deletedFiles.filter(Boolean) };
+  return { service, files: ownership, emitted, notifications, mail, deletedFiles: ownership.retired };
 }
 
 /** Espera a que terminen los avisos que el servicio lanza sin bloquear la respuesta. */
@@ -123,6 +118,18 @@ describe('CoursesService · archivos del curso', () => {
     );
     expect(update).not.toHaveBeenCalled();
     expect(deletedFiles()).toEqual([]);
+  });
+
+  it('quitar la portada la retira del almacenamiento y deja de mostrarse', async () => {
+    const update = jest.fn(async () => ({ guid: 'curso-1', title: 'Curso', status: 'DRAFT', coverImage: null }));
+    const { service, deletedFiles } = serviceWith({
+      course: { findUnique: async () => ({ coverImage: 'portadas/vieja.jpg' }), update },
+    });
+
+    await service.updateCourse('curso-1', { coverImage: null }, ADMIN);
+
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({ data: { coverImage: null } }));
+    expect(deletedFiles()).toEqual(['portadas/vieja.jpg']);
   });
 
   it('guardar la ficha sin tocar la portada no borra nada', async () => {

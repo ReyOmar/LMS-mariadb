@@ -1,34 +1,27 @@
 import { ForbiddenException } from '@nestjs/common';
 import { CourseContentService } from './course-content.service';
 import { sessionFor } from '../common/testing/test-campus';
+import { fileOwnershipDouble } from '../common/testing/file-ownership-double';
 
 /**
  * Contenido de un curso: lo que se guarda al editar un recurso y lo que se borra del
- * almacenamiento al quitar contenido.
- *
- * Con R2 no hay limpieza nocturna de huérfanos, así que un archivo que no se borra al
- * desvincularlo se queda ocupando espacio para siempre.
+ * almacenamiento al quitar contenido. Ninguna tarea periódica recoge archivos sin uso: el que
+ * no se borra al desvincularlo se queda ocupando espacio para siempre.
  */
 
 const ADMIN = sessionFor('ADMIN', 'COLOMBIA', 'admin');
 const EDITABLE = { guid: 'curso-1', country: 'COLOMBIA', title: 'Curso', status: 'DRAFT', teacherGuid: 'admin' };
 
 function serviceWith(prisma: Record<string, unknown>) {
-  const deletedFiles: (string | null | undefined)[] = [];
   const storage = { downloadUrl: (key: string) => `https://archivos/${key}` };
-  const files = {
-    assertCanUse: jest.fn(async () => undefined),
-    deleteUnreferenced: async (keys: (string | null | undefined)[]) => {
-      deletedFiles.push(...keys);
-    },
-  };
+  const ownership = fileOwnershipDouble();
   const access = {
     editableCourse: async () => EDITABLE,
     editableCourseOfModule: async () => EDITABLE,
     editableCourseOfResource: async () => EDITABLE,
   };
-  const service = new CourseContentService(prisma as never, access as never, storage as never, files as never);
-  return { service, files, deletedFiles: () => deletedFiles.filter(Boolean) };
+  const service = new CourseContentService(prisma as never, access as never, storage as never, ownership.files);
+  return { service, files: ownership, deletedFiles: ownership.retired };
 }
 
 describe('CourseContentService', () => {
@@ -52,7 +45,7 @@ describe('CourseContentService', () => {
     let saved: Record<string, unknown> = {};
     const { service } = serviceWith({
       resource: {
-        findUnique: async () => ({ attachmentKey: null, fileUrl: null }),
+        findUnique: async () => ({ attachmentKey: null }),
         update: async ({ data }: { data: Record<string, unknown> }) => {
           saved = data;
           return { guid: 'r1', attachmentKey: null, fileUrl: null, quizConfig: null };
@@ -68,13 +61,8 @@ describe('CourseContentService', () => {
   it('sustituir el adjunto comprueba quién subió el nuevo y borra el anterior', async () => {
     const { service, files, deletedFiles } = serviceWith({
       resource: {
-        findUnique: async () => ({ attachmentKey: 'recursos/viejo.pdf', fileUrl: 'recursos/video.mp4' }),
-        update: async () => ({
-          guid: 'r1',
-          attachmentKey: 'recursos/nuevo.pdf',
-          fileUrl: 'recursos/video.mp4',
-          quizConfig: null,
-        }),
+        findUnique: async () => ({ attachmentKey: 'recursos/viejo.pdf' }),
+        update: async () => ({ guid: 'r1', attachmentKey: 'recursos/nuevo.pdf', fileUrl: null, quizConfig: null }),
       },
     });
 
@@ -83,16 +71,41 @@ describe('CourseContentService', () => {
     expect(files.assertCanUse).toHaveBeenCalledWith('recursos/nuevo.pdf', 'recursos/viejo.pdf', 'recursos', {
       uploader: 'admin',
     });
-    expect(files.assertCanUse).toHaveBeenCalledWith(undefined, 'recursos/video.mp4', 'recursos', {
-      uploader: 'admin',
+    expect(deletedFiles()).toEqual(['recursos/viejo.pdf']);
+  });
+
+  it('quitar el adjunto lo retira del almacenamiento', async () => {
+    const update = jest.fn(async () => ({ guid: 'r1', attachmentKey: null, fileUrl: null, quizConfig: null }));
+    const { service, deletedFiles } = serviceWith({
+      resource: { findUnique: async () => ({ attachmentKey: 'recursos/viejo.pdf' }), update },
+    });
+
+    await service.updateResource('r1', { attachmentKey: null, attachmentName: null }, ADMIN);
+
+    expect(update).toHaveBeenCalledWith({
+      where: { guid: 'r1' },
+      data: { attachmentKey: null, attachmentName: null },
     });
     expect(deletedFiles()).toEqual(['recursos/viejo.pdf']);
+  });
+
+  it('editar el texto sin tocar el adjunto no borra nada', async () => {
+    const { service, deletedFiles } = serviceWith({
+      resource: {
+        findUnique: async () => ({ attachmentKey: 'recursos/viejo.pdf' }),
+        update: async () => ({ guid: 'r1', attachmentKey: 'recursos/viejo.pdf', fileUrl: null, quizConfig: null }),
+      },
+    });
+
+    await service.updateResource('r1', { title: 'Lectura' }, ADMIN);
+
+    expect(deletedFiles()).toEqual([]);
   });
 
   it('un archivo ajeno no se guarda en el recurso ni se borra el anterior', async () => {
     const update = jest.fn();
     const { service, files, deletedFiles } = serviceWith({
-      resource: { findUnique: async () => ({ attachmentKey: 'recursos/viejo.pdf', fileUrl: null }), update },
+      resource: { findUnique: async () => ({ attachmentKey: 'recursos/viejo.pdf' }), update },
     });
     files.assertCanUse.mockRejectedValueOnce(new ForbiddenException('ajeno'));
 
@@ -103,21 +116,11 @@ describe('CourseContentService', () => {
     expect(deletedFiles()).toEqual([]);
   });
 
-  it('crear un recurso con archivo exige que lo haya subido quien lo crea', async () => {
-    const create = jest.fn(async () => ({ guid: 'r1' }));
-    const { service, files } = serviceWith({ resource: { count: async () => 0, create } });
-
-    await service.createResource('modulo-1', { type: 'PDF', fileUrl: 'recursos/manual.pdf' }, ADMIN);
-
-    expect(files.assertCanUse).toHaveBeenCalledWith('recursos/manual.pdf', null, 'recursos', { uploader: 'admin' });
-    expect(create).toHaveBeenCalled();
-  });
-
   describe('la dirección de un enlace', () => {
     function linkService() {
       const update = jest.fn(async () => ({ guid: 'r1', attachmentKey: null, fileUrl: null, quizConfig: null }));
       const { service } = serviceWith({
-        resource: { findUnique: async () => ({ type: 'LINK', attachmentKey: null, fileUrl: null }), update },
+        resource: { findUnique: async () => ({ type: 'LINK', attachmentKey: null }), update },
       });
       return { service, update };
     }

@@ -298,7 +298,7 @@ export class UserService {
     const updated = await this.prisma.user.update({ where: { guid }, data, select: PUBLIC_FIELDS });
 
     if (roleChanges) this.realtime.revokeSession(guid, 'role_changed');
-    this.realtime.emitToRole('user:updated', { guid }, country, 'ADMIN');
+    this.notifyAccountChanged(guid, country);
 
     return { message: 'Cuenta actualizada.', user: updated };
   }
@@ -353,46 +353,43 @@ export class UserService {
     const updated = await this.prisma.user.update({ where: { guid }, data, select: PUBLIC_FIELDS });
 
     if (newPassword) this.realtime.revokeSession(guid, 'password_changed');
-
-    this.realtime.emitToRole('user:updated', { guid }, updated.country, 'ADMIN');
+    this.notifyAccountChanged(guid, updated.country);
 
     return { message: 'Perfil actualizado correctamente.', user: updated };
   }
 
   // ── Foto de perfil ───────────────────────────────────────────────────────
 
-  /**
-   * Sustituye la foto de perfil y borra la anterior del almacenamiento. El tamaño lo acota
-   * el tope fijo de la carpeta `avatars`.
-   */
+  /** Sustituye la foto de perfil y retira la anterior del almacenamiento. */
   async uploadProfilePhoto(guid: string, filePath: string, originalName: string) {
-    const user = await this.prisma.user.findUnique({
-      where: { guid },
-      select: { photoUrl: true, country: true },
-    });
+    const user = await this.prisma.user.findUnique({ where: { guid }, select: { country: true } });
     if (!user) throw new NotFoundException('Usuario no encontrado.');
 
-    // Se sube antes de borrar la anterior: si la subida falla, el usuario conserva su foto.
     const key = await this.storage.uploadFromDisk(filePath, originalName, 'avatars', {
       sub: guid,
       country: user.country,
     });
+    await this.files.adoptUpload(
+      key,
+      () => this.swapPhoto(guid, key),
+      (previousPhoto) => previousPhoto,
+    );
 
-    try {
-      await this.prisma.user.update({ where: { guid }, data: { photoUrl: key } });
-    } catch (error) {
-      // Sin fila que la referencie, la foto nueva sería un archivo huérfano.
-      await this.storage.deleteFiles([key]);
-      throw error;
-    }
-
-    await this.files.deleteUnreferenced([user.photoUrl]);
-
-    this.realtime.emitToUsers('user:updated', { guid }, user.country, [guid]);
+    this.notifyAccountChanged(guid, user.country);
     return { message: 'Foto de perfil actualizada.', photoUrl: key };
   }
 
-  /** Elimina la foto de perfil. */
+  /** Con la fila bloqueada, para que dos cambios a la vez no retiren la misma foto anterior y dejen otra sin dueño. */
+  private swapPhoto(guid: string, photoUrl: string): Promise<string | null> {
+    return this.prisma.$transaction(async (tx) => {
+      const [current] = await tx.$queryRaw<{ photoUrl: string | null }[]>`
+        SELECT foto_url AS photoUrl FROM usuarios WHERE guid = ${guid} FOR UPDATE`;
+      await tx.user.update({ where: { guid }, data: { photoUrl } });
+      return current?.photoUrl ?? null;
+    });
+  }
+
+  /** Quita la foto de perfil y la retira del almacenamiento. */
   async deleteProfilePhoto(guid: string) {
     const user = await this.prisma.user.findUnique({
       where: { guid },
@@ -401,11 +398,18 @@ export class UserService {
     if (!user) throw new NotFoundException('Usuario no encontrado.');
     if (!user.photoUrl) throw new BadRequestException('No tienes foto de perfil.');
 
-    await this.prisma.user.update({ where: { guid }, data: { photoUrl: null } });
-    await this.files.deleteUnreferenced([user.photoUrl]);
+    const photo = { folder: 'avatars' as const, current: user.photoUrl, next: null };
+    await this.files.replace([photo], { uploader: guid }, () =>
+      this.prisma.user.update({ where: { guid }, data: { photoUrl: null } }),
+    );
 
-    this.realtime.emitToUsers('user:updated', { guid }, user.country, [guid]);
+    this.notifyAccountChanged(guid, user.country);
     return { message: 'Foto de perfil eliminada.' };
+  }
+
+  /** La lista de cuentas de los administradores es la que enseña nombre, rol y foto. */
+  private notifyAccountChanged(guid: string, country: Country): void {
+    this.realtime.emitToRole('user:updated', { guid }, country, 'ADMIN');
   }
 
   // ── Baja ─────────────────────────────────────────────────────────────────
@@ -482,7 +486,7 @@ export class UserService {
     this.realtime.revokeSession(guid, 'account_deleted');
     this.realtime.emitToRole('user:deleted', { guid }, country, 'ADMIN');
 
-    void this.files.deleteUnreferenced([
+    await this.files.deleteUnreferenced([
       user.photoUrl,
       user.signatureUrl,
       ...[...submissions, ...archivedSubmissions].map((submission) => submission.attachmentKey),

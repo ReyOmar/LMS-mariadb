@@ -7,13 +7,11 @@ export const MIB = 1024 * 1024;
 export const DEFAULT_UPLOAD_CEILING_MB = 2048;
 
 /**
- * Máximo que admite `MAX_UPLOAD_MB`.
- *
- * Cloudflare R2 no acepta más de 5 GiB en una sola petición de subida, y el almacenamiento
- * sube cada archivo de una vez. Por encima haría falta la subida por partes, que en un
- * alojamiento cPanel no tiene sentido.
+ * Máximo que admite `MAX_UPLOAD_MB`: 4 GB. Mientras se guarda, un archivo ocupa el doble en el
+ * disco de la cuenta (el temporal de la subida y su copia), y en un alojamiento cPanel la cuota
+ * es de pocas decenas de GB.
  */
-export const MAX_UPLOAD_CEILING_MB = 5000;
+export const MAX_UPLOAD_CEILING_MB = 4096;
 
 /**
  * Topes fijos de las carpetas de imágenes. Son logotipos, fondos, portadas, fotos y firmas,

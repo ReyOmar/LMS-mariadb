@@ -1,4 +1,5 @@
 import { ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import * as crypto from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { StorageService } from '../storage/storage.service';
@@ -11,15 +12,14 @@ import { percent } from '../common/domain/progress';
 import { Country } from '../common/domain/country';
 import { plural } from '../common/domain/text';
 import { JwtPayload } from '../common/interfaces/jwt-payload.interface';
-import { composeCertificate } from './certificate-pdf';
-import { CertificateDataService, IssuanceData } from './certificate-data.service';
+import { CertificateDataService, IssuanceData, parseSnapshot } from './certificate-data.service';
 import { isValid } from './validity';
 
 /**
- * Tope de la transacción de emisión. Dentro se guarda el PDF, que con R2 es una subida por
- * red: el tope por defecto de Prisma (5 s) la cortaría a medias en una conexión lenta.
+ * Tope de la transacción de emisión: cubre la espera por la matrícula bloqueada y la escritura
+ * del PDF en un disco compartido, que bajo carga puede pasar de los 5 s por defecto de Prisma.
  */
-const ISSUANCE_TIMEOUT_MS = 30_000;
+const ISSUANCE_TIMEOUT_MS = 10_000;
 
 /** Resultado de comprobar si un alumno ya puede recibir su certificado. */
 export interface CompletionStatus {
@@ -255,65 +255,33 @@ export class CertificatesService {
   /**
    * Compone el PDF, lo guarda y lo registra. Quien llama ya comprobó que procede.
    *
-   * El último avance y la última calificación pueden llegar casi a la vez y lanzar dos
-   * emisiones. Se ponen en fila sobre la matrícula: la segunda espera a que la primera
-   * confirme, encuentra la vuelta cerrada y no hace nada. El PDF se compone antes, en
-   * memoria, y sólo se guarda cuando ya es seguro que se registra, así que la emisión que
-   * llega tarde no deja ningún archivo.
+   * Dos emisiones casi simultáneas (el último avance y la última calificación) se ponen en fila
+   * sobre la matrícula: la segunda encuentra la vuelta cerrada y no guarda nada.
    *
    * @returns si se emitió.
    */
   private async issue(courseGuid: string, userGuid: string, country: Country): Promise<boolean> {
     const data = await this.data.gather(courseGuid, userGuid, country);
-    const pdf = await composeCertificate(data.certificate);
+    const pdf = await this.data.compose(data.certificate);
+    const pdfKey = `certificados/${crypto.randomUUID()}.pdf`;
 
-    const certificate = await this.prisma.$transaction(
-      async (tx) => {
-        // Quien esperaba el bloqueo lee lo que dejó la emisión anterior: si ya cerró la
-        // vuelta, no hay nada que emitir. Sin matrícula, tampoco.
-        const enrollment = await lockEnrollment(tx, userGuid, courseGuid);
-        if (!enrollment || enrollment.completedAt) return null;
+    let certificate: { guid: string } | null;
+    try {
+      certificate = await this.prisma.$transaction(
+        async (tx) => {
+          const enrollment = await lockEnrollment(tx, userGuid, courseGuid);
+          if (!enrollment || enrollment.completedAt) return null;
 
-        // Cuántas vueltas lleva el alumno por este curso. La primera es la 1.
-        const attempt = (await tx.certificate.count({ where: { userGuid, courseGuid } })) + 1;
-
-        const key = `certificados/${crypto.randomUUID()}.pdf`;
-        await this.storage.saveWithKey(key, pdf, 'application/pdf');
-        try {
-          const created = await tx.certificate.create({
-            data: {
-              userGuid,
-              holderName: data.certificate.studentName,
-              country,
-              courseGuid,
-              courseTitle: data.certificate.courseTitle,
-              attempt,
-              verificationCode: data.certificate.verificationCode,
-              pdfKey: key,
-              startedAt: data.certificate.startedAt,
-              completedAt: data.certificate.completedAt,
-              validUntil: data.certificate.validUntil,
-              totalHours: data.certificate.totalHours,
-              activeSeconds: data.activeSeconds,
-              averageScore: data.certificate.averageScore,
-            },
-            select: { guid: true },
-          });
-          // El certificado cierra la vuelta: la matrícula queda terminada en la misma
-          // transacción, para que no haya certificado sin matrícula terminada ni al revés.
-          await tx.enrollment.updateMany({
-            where: { userGuid, courseGuid },
-            data: { completedAt: data.certificate.completedAt },
-          });
-          return created;
-        } catch (error) {
-          // La transacción se deshace: ninguna fila llega a referenciar el PDF recién guardado.
-          await this.storage.deleteFile(key).catch(() => undefined);
-          throw error;
-        }
-      },
-      { timeout: ISSUANCE_TIMEOUT_MS },
-    );
+          await this.storage.saveWithKey(pdfKey, pdf);
+          return this.recordIssuance(tx, { courseGuid, userGuid, country, pdfKey, data });
+        },
+        { timeout: ISSUANCE_TIMEOUT_MS },
+      );
+    } catch (error) {
+      // También si falla al confirmar: ninguna fila llegó a usar el PDF.
+      await this.storage.deleteFiles([pdfKey]);
+      throw error;
+    }
     if (!certificate) return false;
 
     this.realtime.emitToUsers(
@@ -325,6 +293,41 @@ export class CertificatesService {
 
     void this.notifyIssuance(certificate.guid, userGuid, data, country);
     return true;
+  }
+
+  /** Registra el certificado y cierra la vuelta en la misma transacción: no hay uno sin el otro. */
+  private async recordIssuance(
+    tx: Prisma.TransactionClient,
+    issuance: { courseGuid: string; userGuid: string; country: Country; pdfKey: string; data: IssuanceData },
+  ): Promise<{ guid: string }> {
+    const { courseGuid, userGuid, country, pdfKey, data } = issuance;
+    const attempt = (await tx.certificate.count({ where: { userGuid, courseGuid } })) + 1;
+
+    const created = await tx.certificate.create({
+      data: {
+        userGuid,
+        holderName: data.certificate.studentName,
+        country,
+        courseGuid,
+        courseTitle: data.certificate.courseTitle,
+        attempt,
+        verificationCode: data.certificate.verificationCode,
+        pdfKey,
+        pdfData: JSON.stringify(data.certificate),
+        startedAt: data.certificate.startedAt,
+        completedAt: data.certificate.completedAt,
+        validUntil: data.certificate.validUntil,
+        totalHours: data.certificate.totalHours,
+        activeSeconds: data.activeSeconds,
+        averageScore: data.certificate.averageScore,
+      },
+      select: { guid: true },
+    });
+    await tx.enrollment.updateMany({
+      where: { userGuid, courseGuid },
+      data: { completedAt: data.certificate.completedAt },
+    });
+    return created;
   }
 
   /** Avisa al alumno, en la campana y por correo, y a su examinador. */
@@ -385,12 +388,7 @@ export class CertificatesService {
   async getPdf(guid: string, user: JwtPayload): Promise<{ content: Buffer; fileName: string }> {
     const certificate = await this.prisma.certificate.findUnique({
       where: { guid },
-      select: {
-        userGuid: true,
-        pdfKey: true,
-        courseTitle: true,
-        country: true,
-      },
+      select: { userGuid: true, pdfKey: true, pdfData: true, courseTitle: true, country: true },
     });
     if (!certificate) throw new NotFoundException('Certificado no encontrado.');
 
@@ -400,15 +398,33 @@ export class CertificatesService {
       throw new ForbiddenException('No tienes permiso para consultar este certificado.');
     }
 
-    const file = await this.storage.readFile(certificate.pdfKey);
-    if (!file) {
+    const content = (await this.storage.readFile(certificate.pdfKey)) ?? (await this.recomposePdf(guid, certificate));
+    const courseName = certificate.courseTitle.replace(/[^\p{L}\p{N} _-]/gu, '').trim() || 'Curso';
+    return { content, fileName: `Certificado - ${courseName}.pdf` };
+  }
+
+  /**
+   * El PDF se conserva para descargarlo siempre; si el archivo se perdió (una copia de seguridad
+   * restaurada a medias), se recompone con lo que se guardó al emitirlo y se vuelve a guardar.
+   */
+  private async recomposePdf(guid: string, certificate: { pdfKey: string; pdfData: string | null }): Promise<Buffer> {
+    if (!certificate.pdfData) {
+      this.logger.error(
+        `Falta el PDF del certificado ${guid} (${certificate.pdfKey}) y no hay datos para recomponerlo`,
+      );
       throw new NotFoundException(
-        'El archivo del certificado no está disponible. Avisa al administrador para que lo vuelva a emitir.',
+        'El archivo de este certificado no está en el servidor. Avisa al administrador de la plataforma: tiene que restaurarlo desde la copia de seguridad de los archivos.',
       );
     }
 
-    const courseName = certificate.courseTitle.replace(/[^\p{L}\p{N} _-]/gu, '').trim() || 'Curso';
-    return { content: file.content, fileName: `Certificado - ${courseName}.pdf` };
+    const pdf = await this.data.compose(parseSnapshot(certificate.pdfData));
+    try {
+      await this.storage.saveWithKey(certificate.pdfKey, pdf);
+      this.logger.warn(`Recompuesto el PDF del certificado ${guid}, que faltaba en ${certificate.pdfKey}`);
+    } catch (error) {
+      this.logger.error(`Se recompuso el PDF del certificado ${guid}, pero no se pudo guardar`, error);
+    }
+    return pdf;
   }
 
   /**

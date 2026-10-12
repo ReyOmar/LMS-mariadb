@@ -78,7 +78,6 @@ const FIELD_LABELS: Record<string, string> = {
   type: 'tipo',
   content: 'contenido',
   contentHtml: 'contenido',
-  fileUrl: 'archivo',
   referenceUrl: 'enlace de referencia',
   readingMinutes: 'minutos de lectura',
   quizConfig: 'configuración del cuestionario',

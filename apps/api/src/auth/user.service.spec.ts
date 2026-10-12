@@ -1,5 +1,6 @@
 import { BadRequestException } from '@nestjs/common';
 import { UserService } from './user.service';
+import { fileOwnershipDouble } from '../common/testing/file-ownership-double';
 
 /** Versión vigente de la política de datos en todas las pruebas. */
 const settings = { legalVersion: async () => '2026-09-25' };
@@ -448,51 +449,44 @@ describe('UserService · perfil propio', () => {
     expect(updates[0]).toMatchObject({ usesDefaultPassword: false, currentSessionJti: null });
     expect(realtime.revokeSession).toHaveBeenCalledWith('usuario-1', 'password_changed');
   });
+});
 
-  it('si la foto nueva no se puede guardar en la cuenta, se borra del almacenamiento', async () => {
-    const prisma = {
+describe('UserService · foto de perfil', () => {
+  /** Cuenta con foto `current`; la fila se bloquea y se reescribe dentro de una transacción. */
+  function photoService(current: string | null, { failUpdate = false } = {}) {
+    const updates: Record<string, unknown>[] = [];
+    const tx = {
+      $queryRaw: async () => [{ photoUrl: current }],
       user: {
-        findUnique: async () => ({ photoUrl: null, country: 'MEXICO' }),
-        update: async () => {
-          throw new Error('la base no responde');
+        update: async ({ data }: { data: Record<string, unknown> }) => {
+          if (failUpdate) throw new Error('la base no responde');
+          updates.push(data);
         },
       },
     };
-    const storage = {
-      uploadFromDisk: async () => 'avatars/nueva.png',
-      deleteFiles: jest.fn().mockResolvedValue(undefined),
-    };
-    const service = new UserService(
-      prisma as never,
-      storage as never,
-      {} as never,
-      settings as never,
-      {} as never,
-      {} as never,
-    );
-
-    await expect(service.uploadProfilePhoto('usuario-1', '/tmp/foto', 'foto.png')).rejects.toThrow();
-    expect(storage.deleteFiles).toHaveBeenCalledWith(['avatars/nueva.png']);
-  });
-
-  it('anota la foto a nombre de su dueño y retira la anterior sólo si nadie más la usa', async () => {
     const prisma = {
       user: {
-        findUnique: async () => ({ photoUrl: 'avatars/vieja.png', country: 'MEXICO' }),
-        update: async () => ({}),
+        findUnique: async () => ({ photoUrl: current, country: 'MEXICO' }),
+        update: tx.user.update,
       },
+      $transaction: async <T>(work: (client: typeof tx) => Promise<T>) => work(tx),
     };
     const storage = { uploadFromDisk: jest.fn().mockResolvedValue('avatars/nueva.png') };
-    const files = { deleteUnreferenced: jest.fn().mockResolvedValue(undefined) };
-    const realtime = { emitToUsers: () => undefined };
+    const realtime = { emitToRole: jest.fn() };
+    const files = fileOwnershipDouble();
     const service = new UserService(
       prisma as never,
       storage as never,
       realtime as never,
       settings as never,
       {} as never,
-      files as never,
+      files.files,
     );
+    return { service, storage, realtime, files, updates };
+  }
+
+  it('anota la foto a nombre de su dueño y retira la que tenía al guardarla', async () => {
+    const { service, storage, files, updates } = photoService('avatars/vieja.png');
 
     await service.uploadProfilePhoto('usuario-1', '/tmp/foto', 'foto.png');
 
@@ -500,7 +494,39 @@ describe('UserService · perfil propio', () => {
       sub: 'usuario-1',
       country: 'MEXICO',
     });
-    expect(files.deleteUnreferenced).toHaveBeenCalledWith(['avatars/vieja.png']);
+    expect(updates).toEqual([{ photoUrl: 'avatars/nueva.png' }]);
+    expect(files.retired()).toEqual(['avatars/vieja.png']);
+  });
+
+  it('si la foto nueva no se puede guardar en la cuenta, se borra del almacenamiento', async () => {
+    const { service, files } = photoService(null, { failUpdate: true });
+
+    await expect(service.uploadProfilePhoto('usuario-1', '/tmp/foto', 'foto.png')).rejects.toThrow(
+      'la base no responde',
+    );
+    expect(files.discarded).toHaveBeenCalledWith(['avatars/nueva.png']);
+    expect(files.retired()).toEqual([]);
+  });
+
+  it('quitar la foto la retira del almacenamiento y la cuenta deja de mostrarla', async () => {
+    const { service, files, updates } = photoService('avatars/vieja.png');
+
+    await service.deleteProfilePhoto('usuario-1');
+
+    expect(updates).toEqual([{ photoUrl: null }]);
+    expect(files.retired()).toEqual(['avatars/vieja.png']);
+  });
+
+  it('avisa a los administradores de la sede, cuya lista de cuentas enseña la foto', async () => {
+    const { service, realtime } = photoService('avatars/vieja.png');
+
+    await service.uploadProfilePhoto('usuario-1', '/tmp/foto', 'foto.png');
+    await service.deleteProfilePhoto('usuario-1');
+
+    expect(realtime.emitToRole.mock.calls).toEqual([
+      ['user:updated', { guid: 'usuario-1' }, 'MEXICO', 'ADMIN'],
+      ['user:updated', { guid: 'usuario-1' }, 'MEXICO', 'ADMIN'],
+    ]);
   });
 });
 

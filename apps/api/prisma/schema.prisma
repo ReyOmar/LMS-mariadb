@@ -555,6 +555,9 @@ model Certificate {
   attempt          Int       @default(1) @map("intento")
   verificationCode String    @unique @map("codigo_verificacion")
   pdfKey           String    @map("archivo_pdf") // Clave en el almacenamiento
+  /// Lo que imprime el PDF, en JSON (`CertificateSnapshot`), para recomponerlo si el archivo se
+  /// pierde. Nulo en los certificados anteriores a esta columna.
+  pdfData          String?   @map("datos_pdf") @db.Text
   startedAt        DateTime  @map("fecha_inicio")
   completedAt      DateTime  @default(now()) @map("fecha_completado")
   /**

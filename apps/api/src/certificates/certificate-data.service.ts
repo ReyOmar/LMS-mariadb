@@ -7,23 +7,19 @@ import { CourseAccessService } from '../courses/course-access.service';
 import { averageOfScores } from '../common/domain/grading';
 import { Country } from '../common/domain/country';
 import { plural } from '../common/domain/text';
-import { CertificateData } from './certificate-pdf';
+import { canEmbedInPdf } from '../storage/file-formats';
+import { CertificateContent, composeCertificate } from './certificate-pdf';
 import { computeValidUntil } from './validity';
 
 /**
- * Horas que se acreditan cuando el curso no las declara.
- *
- * Un diploma dice cuántas horas dura el programa, no cuánto tardó esta persona en pasar
- * por él: son dos cosas distintas y sólo la primera se certifica. Mientras un curso no
- * declare su duración se acredita ésta, y queda avisado en el registro.
+ * Horas que se acreditan si el curso no declara su duración: el diploma acredita lo que dura
+ * el programa, no lo que tardó el alumno. Queda avisado en el registro.
  */
 const DEFAULT_HOURS = 1;
 
 /**
- * Texto legal del diploma cuando la sede no escribe el suyo.
- *
- * Las evaluaciones son cuestionarios, que corrige la plataforma, y tareas, que califica el
- * examinador: de todas ellas lo que se puede afirmar es que se superaron.
+ * Texto legal cuando la sede no escribe el suyo. De cuestionarios (los corrige la plataforma) y
+ * tareas (las califica el examinador) sólo se puede afirmar que se superaron.
  */
 export function defaultLegalText(modules: number, resources: number, assessments: number): string {
   const program =
@@ -46,6 +42,26 @@ export interface CertificateIssuer {
   platformName: string;
 }
 
+/**
+ * Lo que dice un certificado y de dónde salen sus imágenes. Se guarda con él para poder
+ * recomponer el PDF si el archivo se pierde.
+ */
+export interface CertificateSnapshot extends CertificateContent {
+  logoKey: string | null;
+  signatureKey: string | null;
+}
+
+/** Lee la instantánea guardada con un certificado, con sus fechas. */
+export function parseSnapshot(json: string): CertificateSnapshot {
+  const stored = JSON.parse(json) as CertificateSnapshot;
+  return {
+    ...stored,
+    startedAt: new Date(stored.startedAt),
+    completedAt: new Date(stored.completedAt),
+    validUntil: stored.validUntil ? new Date(stored.validUntil) : null,
+  };
+}
+
 /** Todo lo que hace falta para emitir: el documento y a quién hay que avisar. */
 export interface IssuanceData {
   /** Tiempo real del alumno dentro del curso. Se guarda, pero no es lo que se acredita. */
@@ -54,16 +70,12 @@ export interface IssuanceData {
   studentName: string;
   teacherEmail: string;
   teacherName: string;
-  certificate: CertificateData;
+  certificate: CertificateSnapshot;
 }
 
 /**
- * Reúne lo que se imprime en un certificado.
- *
- * `CertificatesService` decide **a quién y cuándo** se le emite —requisitos cumplidos,
- * vuelta actual, avisos—; éste arma **qué dice el documento**: los datos del alumno y del
- * curso, la marca de la sede, las imágenes y el código de verificación. Así el contenido
- * del diploma puede cambiar sin tocar las reglas de emisión.
+ * Arma **qué dice** un certificado —datos del alumno y del curso, marca de la sede, imágenes y
+ * código de verificación— y compone su PDF. A quién y cuándo se emite lo decide `CertificatesService`.
  */
 @Injectable()
 export class CertificateDataService {
@@ -108,49 +120,12 @@ export class CertificateDataService {
       this.settings.getSettings(country),
       this.access.getCourseResources(courseGuid),
     ]);
-
     if (!user || !course) throw new NotFoundException('No se encontró el alumno o el curso.');
 
-    // Tras una certificación anterior empieza una vuelta nueva: sólo cuenta lo de ésta.
-    const previousCertificate = await this.prisma.certificate.findFirst({
-      where: { userGuid, courseGuid },
-      orderBy: { completedAt: 'desc' },
-      select: { completedAt: true },
-    });
-
-    const [bestScores, studyTime] = await Promise.all([
-      // La mejor nota de cada evaluación: los intentos suspendidos antes de aprobar no
-      // rebajan el promedio que acredita el diploma.
-      this.prisma.submission.groupBy({
-        by: ['assignmentGuid'],
-        where: {
-          userGuid,
-          status: 'GRADED',
-          score: { not: null },
-          assignment: { module: { courseGuid } },
-          ...(previousCertificate && { createdAt: { gt: previousCertificate.completedAt } }),
-        },
-        _max: { score: true },
-      }),
-      this.prisma.studySession.aggregate({
-        where: {
-          userGuid,
-          courseGuid,
-          ...(previousCertificate && { startedAt: { gt: previousCertificate.completedAt } }),
-        },
-        _sum: { durationSeconds: true },
-      }),
-    ]);
-
-    const activeSeconds = studyTime._sum.durationSeconds ?? 0;
-    const totalAssessments = resources.filter((resource) => resource.type === 'ASSIGNMENT').length;
-    const creditedHours = this.creditedHoursFor(course.title, course.durationHours);
+    const { averageScore, activeSeconds } = await this.roundResults(courseGuid, userGuid);
+    const modules = course._count.modules;
+    const assessments = resources.filter((resource) => resource.type === 'ASSIGNMENT').length;
     const issuedAt = new Date();
-
-    const [logo, signature] = await Promise.all([
-      this.loadImage(config.logoUrl),
-      config.certShowSignature ? this.loadImage(course.teacher.signatureUrl) : Promise.resolve(null),
-    ]);
 
     return {
       activeSeconds,
@@ -164,16 +139,16 @@ export class CertificateDataService {
         startedAt: enrollment?.enrolledAt ?? issuedAt,
         completedAt: issuedAt,
         validUntil: computeValidUntil(issuedAt, config.certValidityMonths),
-        totalHours: creditedHours,
-        averageScore: averageOfScores(bestScores.map((assessment) => assessment._max.score)),
+        totalHours: this.creditedHoursFor(course.title, course.durationHours),
+        averageScore,
         verificationCode: this.generateCode(),
         teacherName: `${course.teacher.firstName} ${course.teacher.lastName}`,
         platformName: config.platformName,
         primaryColor: config.primaryColor,
         secondaryColor: config.secondaryColor,
-        totalModules: course._count.modules,
+        totalModules: modules,
         totalResources: resources.length,
-        legalText: config.certLegalText || defaultLegalText(course._count.modules, resources.length, totalAssessments),
+        legalText: config.certLegalText || defaultLegalText(modules, resources.length, assessments),
         customTitle: config.certCustomTitle,
         subtitle: config.certSubtitle,
         showModules: config.certShowModules,
@@ -183,10 +158,55 @@ export class CertificateDataService {
         showEnrollmentDate: config.certShowEnrollmentDate,
         signatureName: course.teacher.signatureName,
         signatureTitle: course.teacher.signatureTitle,
-        logo,
-        signature,
+        logoKey: config.logoUrl,
+        signatureKey: course.teacher.signatureUrl,
       },
     };
+  }
+
+  /**
+   * Nota media y tiempo de estudio de la vuelta actual, que empieza tras la certificación
+   * anterior. La nota es la mejor de cada evaluación: los suspensos previos no la rebajan.
+   */
+  private async roundResults(courseGuid: string, userGuid: string) {
+    const previousCertificate = await this.prisma.certificate.findFirst({
+      where: { userGuid, courseGuid },
+      orderBy: { completedAt: 'desc' },
+      select: { completedAt: true },
+    });
+    const after = previousCertificate && { gt: previousCertificate.completedAt };
+
+    const [bestScores, studyTime] = await Promise.all([
+      this.prisma.submission.groupBy({
+        by: ['assignmentGuid'],
+        where: {
+          userGuid,
+          status: 'GRADED',
+          score: { not: null },
+          assignment: { module: { courseGuid } },
+          ...(after && { createdAt: after }),
+        },
+        _max: { score: true },
+      }),
+      this.prisma.studySession.aggregate({
+        where: { userGuid, courseGuid, ...(after && { startedAt: after }) },
+        _sum: { durationSeconds: true },
+      }),
+    ]);
+
+    return {
+      averageScore: averageOfScores(bestScores.map((assessment) => assessment._max.score)),
+      activeSeconds: studyTime._sum.durationSeconds ?? 0,
+    };
+  }
+
+  /** Compone el PDF con las imágenes que aún estén en el almacenamiento; sin ellas también se emite. */
+  async compose(snapshot: CertificateSnapshot): Promise<Buffer> {
+    const [logo, signature] = await Promise.all([
+      this.loadImage(snapshot.logoKey),
+      snapshot.showSignature ? this.loadImage(snapshot.signatureKey) : null,
+    ]);
+    return composeCertificate({ ...snapshot, logo, signature });
   }
 
   /** La plataforma y la sede que emiten los certificados de `country`. */
@@ -213,23 +233,18 @@ export class CertificateDataService {
     return DEFAULT_HOURS;
   }
 
-  /**
-   * Carga una imagen del almacenamiento para incrustarla en el PDF.
-   * Devuelve `null` si no está: un certificado sin logotipo es preferible a no poder
-   * emitirlo, pero el fallo se registra para que alguien lo corrija.
-   */
+  /** Mejor un certificado sin logotipo que no poder emitirlo, pero el fallo queda registrado para corregirlo. */
   private async loadImage(key: string | null): Promise<Buffer | null> {
     if (!key) return null;
-    try {
-      const file = await this.storage.readFile(key);
-      if (!file) {
-        this.logger.warn(`Imagen del certificado no encontrada: ${key}`);
-        return null;
-      }
-      return file.content;
-    } catch (error) {
-      this.logger.warn(`No se pudo cargar la imagen ${key} para el certificado`, error);
+    if (!canEmbedInPdf(key)) {
+      this.logger.warn(
+        `El certificado no puede incrustar ${key}: sólo admite PNG o JPG. Súbela de nuevo en uno de esos formatos.`,
+      );
       return null;
     }
+
+    const image = await this.storage.readFile(key);
+    if (!image) this.logger.warn(`Imagen del certificado no encontrada: ${key}`);
+    return image;
   }
 }
