@@ -39,6 +39,7 @@ function serviceWith(prisma: Record<string, unknown>, course: Record<string, unk
     enrollment: { findMany: async () => [] },
     $transaction: (operations: Promise<unknown>[]) => Promise.all(operations),
   };
+  const removal = { remove: jest.fn(async () => undefined) };
   const service = new CoursesService(
     { ...defaults, ...prisma } as never,
     access as never,
@@ -47,8 +48,9 @@ function serviceWith(prisma: Record<string, unknown>, course: Record<string, unk
     realtime as never,
     notifications as never,
     ownership.files,
+    removal as never,
   );
-  return { service, files: ownership, emitted, notifications, mail, deletedFiles: ownership.retired };
+  return { service, files: ownership, emitted, notifications, mail, removal, deletedFiles: ownership.retired };
 }
 
 /** Espera a que terminen los avisos que el servicio lanza sin bloquear la respuesta. */
@@ -56,38 +58,19 @@ const flushPromises = () => new Promise((resolve) => setImmediate(resolve));
 
 /** Lo que deja de usarse al tocar un curso tiene que salir también del almacenamiento. */
 describe('CoursesService · archivos del curso', () => {
-  it('borrar un curso retira portada, material, adjuntos y entregas, también las archivadas', async () => {
-    const deletedSubmissions = jest.fn(async () => ({ count: 1 }));
-    const { service, deletedFiles } = serviceWith({
-      course: {
-        findUnique: async () => ({ coverImage: 'portadas/curso.jpg' }),
-        delete: async () => undefined,
-      },
-      resource: {
-        findMany: async () => [
-          { attachmentKey: 'recursos/guia.pdf', fileUrl: 'recursos/video.mp4' },
-          { attachmentKey: null, fileUrl: 'recursos/lectura.pdf' },
-        ],
-      },
-      submission: {
-        findMany: async () => [{ attachmentKey: 'entregas/informe.pdf' }],
-        deleteMany: deletedSubmissions,
-      },
-      archivedSubmission: { findMany: async () => [{ attachmentKey: 'entregas/vuelta-anterior.pdf' }] },
-    });
+  it('borrar un curso se lleva su contenido, sus entregas y sus archivos', async () => {
+    const { service, removal } = serviceWith({});
 
     await service.deleteCourse('curso-1', ADMIN);
 
-    expect(deletedFiles()).toEqual([
-      'portadas/curso.jpg',
-      'recursos/guia.pdf',
-      'recursos/video.mp4',
-      'recursos/lectura.pdf',
-      'entregas/informe.pdf',
-      'entregas/vuelta-anterior.pdf',
-    ]);
-    // Las filas se borran con sus archivos: no quedan entregas sin curso apuntando a la nada.
-    expect(deletedSubmissions).toHaveBeenCalledWith({ where: { assignment: { module: { courseGuid: 'curso-1' } } } });
+    expect(removal.remove).toHaveBeenCalledWith({ courseGuid: 'curso-1' });
+  });
+
+  it('un curso publicado no se borra', async () => {
+    const { service, removal } = serviceWith({}, PUBLISHED);
+
+    await expect(service.deleteCourse('curso-1', ADMIN)).rejects.toThrow(/Borrador/);
+    expect(removal.remove).not.toHaveBeenCalled();
   });
 
   it('cambiar la portada comprueba que la nueva la subió quien guarda y retira la anterior', async () => {
@@ -363,13 +346,7 @@ describe('CoursesService · avisos en tiempo real', () => {
   });
 
   it('borrar el curso avisa al personal y a quienes estaban matriculados', async () => {
-    const { service, emitted } = serviceWith({
-      enrollment: enrolled,
-      course: { findUnique: async () => null, delete: async () => undefined },
-      resource: { findMany: async () => [] },
-      submission: { findMany: async () => [], deleteMany: async () => ({ count: 0 }) },
-      archivedSubmission: { findMany: async () => [] },
-    });
+    const { service, emitted } = serviceWith({ enrollment: enrolled });
 
     await service.deleteCourse('curso-1', ADMIN);
 

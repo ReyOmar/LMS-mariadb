@@ -447,14 +447,12 @@ export class UserService {
       await this.checkCourseTransferTarget(guid, courses, country, courseTargetGuid);
     }
 
-    // Las entregas —las vigentes y las archivadas de rondas anteriores— guardan archivos en
-    // el almacenamiento; se recogen antes de borrar las filas para no dejar archivos sin
-    // dueño. Los PDF de sus certificados no: se conservan.
-    const withAttachment = { userGuid: guid, attachmentKey: { not: null } };
-    const [submissions, archivedSubmissions] = await Promise.all([
-      this.prisma.submission.findMany({ where: withAttachment, select: { attachmentKey: true } }),
-      this.prisma.archivedSubmission.findMany({ where: withAttachment, select: { attachmentKey: true } }),
-    ]);
+    // Se recogen antes de borrar las filas para no dejar archivos sin dueño. Los PDF de sus
+    // certificados no: se conservan.
+    const submissions = await this.prisma.submission.findMany({
+      where: { userGuid: guid, attachmentKey: { not: null } },
+      select: { attachmentKey: true },
+    });
 
     // Sus secretos pendientes se van con él. Un enlace de recuperación se resuelve por
     // correo, así que si la cuenta se borra y alguien registra ese mismo correo, un enlace
@@ -489,7 +487,7 @@ export class UserService {
     await this.files.deleteUnreferenced([
       user.photoUrl,
       user.signatureUrl,
-      ...[...submissions, ...archivedSubmissions].map((submission) => submission.attachmentKey),
+      ...submissions.map((submission) => submission.attachmentKey),
     ]);
 
     return { message: 'Cuenta eliminada correctamente.', deletedGuid: guid };

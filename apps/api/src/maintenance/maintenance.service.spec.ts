@@ -5,14 +5,14 @@ import { StorageService } from '../storage/storage.service';
 /**
  * Ninguna tarea programada borra archivos.
  *
- * Una portada, una entrega o un certificado sólo desaparecen cuando alguien los elimina o
- * los sustituye. Una tarea nocturna no puede decidir que un archivo sobra: basta una
- * referencia que no sepa leer —una imagen dentro de un texto, un enlace, una base
- * restaurada— para llevarse algo que se está usando.
+ * Una portada o un certificado sólo desaparecen cuando alguien los elimina o los sustituye, y
+ * una entrega, además, al emitirse el certificado de su vuelta. Una tarea nocturna no puede
+ * decidir que un archivo sobra: basta una referencia que no sepa leer —una imagen dentro de
+ * un texto, un enlace, una base restaurada— para llevarse algo que se está usando.
  */
-describe('MaintenanceService — ninguna tarea borra archivos', () => {
-  /** Tablas cuyas filas guardan claves o enlaces de archivos. */
-  const FILE_MODELS = ['resource', 'submission', 'certificate', 'user', 'course', 'countrySettings', 'emailTemplate'];
+describe('MaintenanceService — ninguna tarea borra archivos ni información de usuarios', () => {
+  /** Tablas cuyas filas guardan claves o enlaces de archivos, y el registro de subidas. */
+  const FILE_MODELS = ['resource', 'submission', 'certificate', 'user', 'course', 'countrySettings', 'storedFile'];
 
   const WRITES = ['create', 'createMany', 'update', 'updateMany', 'upsert', 'delete', 'deleteMany'];
 
@@ -121,6 +121,12 @@ describe('MaintenanceService — ninguna tarea borra archivos', () => {
     );
     // …y ninguna escritura ha ido a una tabla que referencie archivos.
     expect(writes.filter((write) => FILE_MODELS.includes(write.split('.')[0]))).toEqual([]);
+    // Lo único que borran son códigos y enlaces caducados y mensajes que las dos partes vaciaron.
+    expect(writes.filter((write) => /\.delete(Many)?$/.test(write)).sort()).toEqual([
+      'emailVerification.deleteMany',
+      'message.deleteMany',
+      'passwordReset.deleteMany',
+    ]);
   });
 });
 

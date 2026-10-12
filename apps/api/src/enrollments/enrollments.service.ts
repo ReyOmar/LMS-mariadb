@@ -10,6 +10,7 @@ import { JwtPayload } from '../common/interfaces/jwt-payload.interface';
 import { MIN_SEARCH_LENGTH, searchTerm } from '../common/domain/search';
 import { MIN_SCORE } from '../common/domain/grading';
 import { plural } from '../common/domain/text';
+import { SubmissionFilesService } from '../certificates/submission-files.service';
 
 /** Candidatos que se ofrecen de una vez; con más, se afina la búsqueda. */
 const VISIBLE_CANDIDATES = 50;
@@ -21,8 +22,8 @@ const CLOSED_ATTEMPT_FEEDBACK = 'Intento cerrado por la baja de la matrícula.';
  * Matrículas de alumnos en cursos.
  *
  * La invariante que se defiende aquí es que **alumno y curso pertenecen a la misma sede**.
- * Es el único punto del sistema donde podrían cruzarse los datos de Colombia y México, ya
- * que todo lo demás (progreso, entregas, certificados) cuelga de una matrícula.
+ * Es el único punto del sistema donde podrían cruzarse los datos de Colombia y México: el
+ * progreso, las entregas y los certificados sólo se crean para quien está matriculado.
  *
  * Una baja no borra la fila, sólo la desactiva: para todo lo demás —listados, contenido,
  * paneles— quien está de baja no está matriculado.
@@ -37,6 +38,7 @@ export class EnrollmentsService {
     private readonly realtime: RealtimeService,
     private readonly mail: MailService,
     private readonly notifications: NotificationsService,
+    private readonly submissionFiles: SubmissionFilesService,
   ) {}
 
   /**
@@ -85,9 +87,9 @@ export class EnrollmentsService {
    * de baja: es la vía para volver a matricularlos.
    *
    * `certified` avisa de que el alumno terminó su vuelta en el curso: matricularlo otra vez
-   * abre una vuelta nueva, que reinicia su avance y archiva sus entregas (ver
-   * `startNewRound`), así que la pantalla lo pide confirmar antes. Un certificado de una
-   * vuelta anterior no cuenta: quien se quedó a medias en la siguiente la retoma.
+   * abre una vuelta nueva, que reinicia su avance y archiva sus notas (ver `startNewRound`),
+   * así que la pantalla lo pide confirmar antes. Un certificado de una vuelta anterior no
+   * cuenta: quien se quedó a medias en la siguiente la retoma.
    *
    * Sin texto se listan los primeros de la sede; con una sola letra no se busca: casa con
    * casi todos y recorre la sede entera para devolver lo mismo que sin filtro.
@@ -146,7 +148,7 @@ export class EnrollmentsService {
       throw new BadRequestException('El alumno debe ser un estudiante de tu misma sede.');
     }
 
-    const enrollment = await this.prisma.$transaction(async (tx) => {
+    const { enrollment, retiredFiles } = await this.prisma.$transaction(async (tx) => {
       const maxStudents = await this.lockCourse(tx, courseGuid);
 
       const previous = await tx.enrollment.findUnique({
@@ -165,13 +167,19 @@ export class EnrollmentsService {
       await this.checkCapacity(tx, courseGuid, maxStudents);
 
       if (!previous) {
-        return tx.enrollment.create({ data: { userGuid: studentGuid, courseGuid, type: 'MANUAL' } });
+        const created = await tx.enrollment.create({ data: { userGuid: studentGuid, courseGuid, type: 'MANUAL' } });
+        return { enrollment: created, retiredFiles: [] };
       }
       if (previous.completedAt) return this.startNewRound(tx, previous.id, courseGuid, studentGuid);
 
       this.logger.log(`Matrícula reactivada de ${studentGuid} en ${courseGuid}: retoma donde lo dejó`);
-      return tx.enrollment.update({ where: { id: previous.id }, data: this.reopened() });
+      const resumed = await tx.enrollment.update({
+        where: { id: previous.id },
+        data: { active: true, unenrolledAt: null },
+      });
+      return { enrollment: resumed, retiredFiles: [] };
     });
+    await this.submissionFiles.deleteRetired(retiredFiles);
 
     this.realtime.emitToUsers(
       'enrollment:changed',
@@ -228,8 +236,8 @@ export class EnrollmentsService {
   /**
    * Da de baja a un alumno conservando su historial.
    *
-   * No se borra la fila: el progreso, las entregas y los certificados cuelgan de ella y
-   * eliminarla destruiría el registro documental de una capacitación ya realizada.
+   * No se borra la fila: sus fechas de alta, de baja y de fin de vuelta son el registro de la
+   * capacitación, y el avance y las entregas siguen ahí por si retoma.
    *
    * Un intento de cuestionario que tuviera abierto se cierra como uno que se quedó sin
    * tiempo: cuenta como gastado y sin aciertos. Ya vio las preguntas, y un intento abierto
@@ -274,15 +282,15 @@ export class EnrollmentsService {
    * Necesita la capacitación otra vez —otra infracción, años después— y tiene que **volver
    * a hacerla**, no encontrársela aprobada. Empieza de cero: se retira su avance y sus
    * entregas pasan a `lms_entregas_archivadas`, con lo que los cuestionarios recuperan sus
-   * intentos y la nota se calculará sólo con esta vuelta. Las entregas archivadas conservan
-   * sus archivos y el título de la actividad: son la evidencia de la formación acreditada.
+   * intentos y la nota se calculará sólo con esta vuelta. Se archivan sin archivo —se borró al
+   * emitirse el certificado— y con el nombre, la nota, el estado y el comentario.
    *
    * Quien no terminó retoma donde lo dejó (ver `enroll`): borrarle el trabajo sería
    * castigarle por una baja administrativa.
    *
    * El certificado anterior **no se toca**. Su código de verificación es público y puede
    * estar impreso en un documento ya entregado; anularlo haría desaparecer una formación
-   * que sí ocurrió. Al terminar la nueva vuelta se emite otro, que lo sustituye.
+   * que sí ocurrió. Al terminar la nueva vuelta se emite otro y los dos conviven.
    */
   private async startNewRound(
     tx: Prisma.TransactionClient,
@@ -290,12 +298,13 @@ export class EnrollmentsService {
     courseGuid: string,
     studentGuid: string,
   ) {
+    // La vuelta ya certificada pudo conservar archivos si la puesta al día del arranque aún no la alcanzó.
+    const retiredFiles = await this.submissionFiles.retireRound(tx, { userGuid: studentGuid, courseGuid });
     const submissions = await tx.submission.findMany({
       where: { userGuid: studentGuid, assignment: { module: { courseGuid } } },
       select: {
         guid: true,
         assignmentGuid: true,
-        attachmentKey: true,
         attachmentName: true,
         status: true,
         attemptNumber: true,
@@ -327,15 +336,11 @@ export class EnrollmentsService {
         `${submissions.length} entregas archivadas`,
     );
 
-    return tx.enrollment.update({
+    const enrollment = await tx.enrollment.update({
       where: { id: enrollmentId },
-      data: { ...this.reopened(), completedResources: 0 },
+      data: { active: true, unenrolledAt: null, enrolledAt: new Date(), completedAt: null, completedResources: 0 },
     });
-  }
-
-  /** La matrícula vuelve a estar activa y en curso, con la vuelta empezando ahora. */
-  private reopened() {
-    return { active: true, unenrolledAt: null, enrolledAt: new Date(), completedAt: null };
+    return { enrollment, retiredFiles };
   }
 
   /**

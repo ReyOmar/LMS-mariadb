@@ -29,8 +29,9 @@ const DAY_MS = 24 * 60 * 60 * 1000;
  * Tareas de mantenimiento.
  *
  * **Ninguna borra archivos.** Un archivo sólo se retira cuando alguien elimina o sustituye
- * aquello a lo que pertenece (ver «¿Cuándo se borra un archivo?» en `docs/DECISIONES.md`),
- * y por eso este servicio no recibe el almacenamiento.
+ * aquello a lo que pertenece o, si es una entrega, al emitirse el certificado de su vuelta
+ * (ver «¿Cuándo se borra un archivo?» en `docs/DECISIONES.md`), y por eso este servicio no
+ * recibe el almacenamiento.
  *
  * Todas llevan un candado en memoria que evita que una ejecución arranque mientras la
  * anterior sigue viva. En cPanel sólo corre una instancia del proceso, así que basta;

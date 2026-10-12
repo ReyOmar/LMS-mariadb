@@ -173,30 +173,50 @@ pantalla.
 
 ### ¿Cuándo se borra un archivo?
 
-Sólo cuando alguien lo pide: al eliminar el curso, el módulo, el recurso o la cuenta a los
-que pertenece, o al sustituirlo o quitarlo —una portada o un logotipo nuevos, otra foto, una
-firma retirada, una entrega corregida—. Todas siguen la misma regla
-(`FileOwnershipService.replace` y `adoptUpload`): se guarda la fila y después se borra el
-archivo anterior si ninguna otra fila lo usa. **Ninguna tarea automática borra archivos.**
-Las entregas conservan el suyo después del certificado, y no hay limpieza de «huérfanos»:
-decidir que un archivo sobra comparándolo con la base basta con que falle una referencia
-—una imagen o un enlace dentro de un texto, una base restaurada de una copia, una carpeta de
-archivos restaurada de otra fecha— para llevarse algo en uso. El precio es que puede quedar
-algún archivo sin uso, como una portada subida y no guardada.
+Nunca por una tarea programada. Las nocturnas no borran archivos ni información de nadie:
+sólo los códigos de verificación y los enlaces de recuperación caducados y los mensajes que
+las dos partes ya vaciaron de su bandeja. Un archivo sale del disco en estos casos y en
+ningún otro:
+
+- **Al emitirse un certificado**, los archivos que el alumno entregó en esa vuelta del curso.
+  Las entregas se quedan con el nombre del archivo, el estado, la nota y el comentario, y las
+  pantallas dicen que el archivo se retiró. Se marcan en la misma transacción que registra el
+  certificado y se borran del disco cuando está confirmada: si la emisión se deshace no se
+  borra nada, y si el disco falla al borrar, el certificado sigue emitido y el fallo queda en
+  el registro. El PDF del certificado se guarda siempre.
+- **Al volver a certificarse** quien se rematriculó: su vuelta nueva empieza de cero, las
+  entregas de la anterior pasan a `lms_entregas_archivadas` con su nota y sin archivo, y al
+  terminar se retiran los archivos de la vuelta nueva.
+- **Al sustituir o quitar** una portada, una foto de perfil, un logotipo, el favicon, el
+  fondo del acceso, una firma, el material de un recurso o una entrega reenviada. Todas
+  siguen la misma regla (`FileOwnershipService.replace` y `adoptUpload`): se guarda la fila
+  y después se borra el archivo anterior si ninguna otra fila lo usa. Lo quitado deja de
+  mostrarse.
+- **Al eliminar** un recurso, un módulo o un curso, con las entregas de sus tareas
+  (`ContentRemovalService`), o una cuenta, con sus entregas, su foto y su firma.
+
+Una vuelta certificada o dada de baja queda cerrada: la API no admite en ella entregas,
+recalificaciones ni intentos de cuestionario, así que nada entra después de retirar sus
+archivos ni cambia lo que respalda el certificado. Al arrancar, la API aplica la misma
+retirada a cualquier vuelta certificada que aún conserve archivos entregados; si no hay
+ninguna, no hace nada.
+
+Las portadas, la configuración de la sede (tema, logotipos, ajustes) y las fotos de perfil no
+se borran nunca solas, y los PDF de los certificados no se borran nunca, tampoco al eliminar
+el curso o la cuenta. No hay limpieza de «huérfanos»: decidir que un archivo sobra
+comparándolo con la base basta con que falle una referencia —una imagen o un enlace dentro de
+un texto, una base restaurada de una copia, una carpeta de archivos restaurada de otra
+fecha— para llevarse algo en uso. El precio es que puede quedar algún archivo sin uso, como
+una portada subida y no guardada.
 
 ### ¿Por qué los archivos se guardan sólo en el disco del servidor?
 
 Porque el campus se despliega en cPanel y el disco de la cuenta es lo único que hay seguro:
-el soporte de Cloudflare R2 duplicaba cada lectura, escritura y borrado con una segunda
-rama que nadie usaba, y al definir sus variables los archivos ya guardados en disco dejaban
-de encontrarse. La carpeta se fija con `STORAGE_DIR`, fuera de la aplicación para que un
-despliegue no la toque, y cada archivo se escribe en `.tmp` y se renombra a su sitio cuando
-está entero.
-
-Tampoco los borra **volver a matricular a quien ya se certificó**: la nueva vuelta empieza
-de cero, pero sus entregas anteriores de ese curso no se borran, pasan a
-`lms_entregas_archivadas` con sus archivos, que son la evidencia de la formación ya
-acreditada. El certificado emitido también se conserva.
+un segundo destino, como Cloudflare R2, duplicaría cada lectura, escritura y borrado con otra
+rama, y bastaría con que una configuración apuntara a él para que los archivos guardados en
+disco dejaran de encontrarse. La carpeta se fija con `STORAGE_DIR`, fuera de la aplicación
+para que un despliegue no la toque, y cada archivo se escribe en `.tmp` y se renombra a su
+sitio cuando está entero.
 
 ---
 
@@ -248,8 +268,10 @@ daría con «Martínez». MariaDB no tiene el analizador _ngram_ de MySQL, que l
 ### ¿Por qué la aplicación no borra registros antiguos?
 
 Porque la regla del propietario es que **nada se borra si no lo borra alguien**: una
-formación, una entrega o un aviso siguen ahí hasta que una persona elimina el curso, la
-cuenta o la conversación. No hay tareas que purguen historial por antigüedad.
+formación, una nota o un aviso siguen ahí hasta que una persona elimina el curso, la cuenta o
+la conversación. No hay tareas que purguen historial por antigüedad. Los archivos entregados
+son la excepción decidida: se retiran al emitirse el certificado, y la entrega se queda con
+su nota (ver «¿Cuándo se borra un archivo?»).
 
 El crecimiento lo permite. Medido con 5 000 alumnos nuevos al año, cada año añade más o
 menos:
@@ -275,12 +297,10 @@ Fijar un plazo de conservación es una decisión del propietario, a tomar con as
 - **Detalle de las sesiones de estudio** de cursos ya certificados. Ojo: las horas del
   certificado y de los paneles se suman de ese detalle al vuelo, así que antes habría que
   guardar el total en otro sitio.
-- **Archivos de entregas** de cursos certificados hace años. La fila con la nota puede
-  quedarse; el archivo es lo que ocupa.
 - **Solicitudes de acceso rechazadas**: son datos de personas que no llegaron a tener cuenta.
-- **Cuentas sin actividad** durante años. Borrar una cuenta se lleva también sus
-  certificados, así que no es un plazo sin más: habría que decidir qué se conserva como
-  prueba de la formación.
+- **Cuentas sin actividad** durante años. Borrar una cuenta conserva sus certificados, pero
+  se lleva su avance, sus notas y sus entregas, así que no es un plazo sin más: habría que
+  decidir qué se conserva como prueba de la formación.
 
 ---
 
@@ -303,8 +323,8 @@ exigiendo que todas las tareas estén calificadas, así que nadie se certifica p
 Se le devuelve al principio del módulo: se borra su progreso en los recursos de estudio de
 ese módulo para que los repase antes de volver a intentarlo. **Los intentos se conservan**,
 de modo que el límite configurado se respeta; antes cada suspenso borraba el contador y el
-límite no limitaba nada. Si agota los intentos, el examinador puede concederle uno más y
-queda registrado quién lo hizo.
+límite no limitaba nada. Si agota los intentos sin superarlo, el examinador puede concederle
+uno más —se retira su último intento, nunca uno aprobado— y queda registrado quién lo hizo.
 
 ### ¿Qué pasa si se cierra la pestaña a mitad de un examen?
 

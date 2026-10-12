@@ -59,7 +59,6 @@ function createService({ taughtCourses = 0, photo = 'avatars/foto.png', signatur
       ]),
     ),
     submission: { findMany: async () => [{ attachmentKey: 'entregas/b.pdf' }] },
-    archivedSubmission: { findMany: async () => [{ attachmentKey: 'entregas/ronda-anterior.pdf' }] },
     passwordReset: {
       deleteMany: async ({ where }: { where: { email: string } }) => {
         deleted.emails.push(`reset:${where.email}`);
@@ -138,15 +137,6 @@ describe('UserService · borrar una cuenta', () => {
     await service.deleteUser(GUID, 'COLOMBIA', ADMIN);
 
     expect(deleted.files).toEqual(expect.arrayContaining(['avatars/foto.png', 'firmas/f.png', 'entregas/b.pdf']));
-  });
-
-  it('también borra los archivos de sus entregas archivadas de rondas anteriores', async () => {
-    // Las filas caen en cascada con la cuenta; sus archivos no, y quedarían sin dueño.
-    const { service, deleted } = createService();
-
-    await service.deleteUser(GUID, 'COLOMBIA', ADMIN);
-
-    expect(deleted.files).toContain('entregas/ronda-anterior.pdf');
   });
 
   it('conserva sus certificados y sus PDF', async () => {

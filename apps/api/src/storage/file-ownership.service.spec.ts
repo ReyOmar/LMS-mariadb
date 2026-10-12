@@ -43,7 +43,6 @@ function campusRows({ failQueries = false }: { failQueries?: boolean } = {}) {
     user: table([{ photoUrl: 'avatars/foto.png', signatureUrl: 'firmas/firma.png' }]),
     countrySettings: table([{ logoUrl: 'logos/colombia.png', faviconUrl: null, loginBackgroundUrl: null }]),
     submission: table([{ attachmentKey: 'entregas/actual.pdf' }]),
-    archivedSubmission: table([{ attachmentKey: 'entregas/archivada.pdf' }]),
     certificate: table([{ pdfKey: 'certificados/c1.pdf' }]),
   };
   if (failQueries) {
@@ -154,7 +153,6 @@ describe('FileOwnershipService · retirar archivos', () => {
       'firmas/firma.png',
       'logos/colombia.png',
       'entregas/actual.pdf',
-      'entregas/archivada.pdf',
       'certificados/c1.pdf',
       'recursos/suelto.pdf',
     ]);
@@ -180,7 +178,7 @@ describe('FileOwnershipService · retirar archivos', () => {
       inFlight--;
       return [];
     };
-    const models = ['course', 'resource', 'user', 'countrySettings', 'submission', 'archivedSubmission', 'certificate'];
+    const models = ['course', 'resource', 'user', 'countrySettings', 'submission', 'certificate'];
     const prisma = Object.fromEntries(models.map((model) => [model, { findMany }]));
     const storage = { deleteFiles: jest.fn(async () => undefined) };
     const service = new FileOwnershipService(prisma as never, storage as never);

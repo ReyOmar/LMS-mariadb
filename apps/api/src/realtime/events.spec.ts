@@ -7,8 +7,9 @@ import { REALTIME_EVENTS } from './events';
  *
  * No hay paquete compartido entre las dos aplicaciones —montarlo por un fichero de
  * literales costaría más de lo que resuelve—, así que la coincidencia se comprueba aquí.
- * Sin esta prueba, el único aviso de que las listas se han separado sería un aviso que
- * nunca llega a la pantalla, y eso no se nota hasta que alguien lo reporta.
+ * Un evento que el cliente espera y el servidor no emite es un aviso que nunca llega a la
+ * pantalla, y eso no se nota hasta que alguien lo reporta. El servidor sí puede adelantarse
+ * con uno que el cliente aún no escucha, como cuando la API se despliega antes: se avisa.
  */
 
 const CLIENT_CATALOG = join(__dirname, '../../../client/src/lib/realtime/events.ts');
@@ -25,7 +26,7 @@ describe('Catálogo de eventos en tiempo real', () => {
     expect(new Set(REALTIME_EVENTS).size).toBe(REALTIME_EVENTS.length);
   });
 
-  it('coincide con el del cliente', () => {
+  it('el cliente sólo espera eventos que el servidor emite', () => {
     if (!existsSync(CLIENT_CATALOG)) {
       // La API puede desplegarse sola; entonces no hay nada con lo que comparar.
       console.warn('No está el cliente; se omite la comparación del catálogo.');
@@ -33,7 +34,11 @@ describe('Catálogo de eventos en tiempo real', () => {
     }
 
     const fromClient = clientEvents(readFileSync(CLIENT_CATALOG, 'utf8'));
+    const fromServer: readonly string[] = REALTIME_EVENTS;
 
-    expect([...fromClient].sort()).toEqual([...REALTIME_EVENTS].sort());
+    expect(fromClient.filter((event) => !fromServer.includes(event))).toEqual([]);
+
+    const unheard = fromServer.filter((event) => !fromClient.includes(event));
+    if (unheard.length > 0) console.warn(`El cliente aún no escucha: ${unheard.join(', ')}`);
   });
 });

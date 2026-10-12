@@ -68,6 +68,7 @@ export interface IssuanceData {
   activeSeconds: number;
   studentEmail: string;
   studentName: string;
+  teacherGuid: string;
   teacherEmail: string;
   teacherName: string;
   certificate: CertificateSnapshot;
@@ -100,6 +101,7 @@ export class CertificateDataService {
         select: {
           title: true,
           durationHours: true,
+          teacherGuid: true,
           teacher: {
             select: {
               firstName: true,
@@ -122,21 +124,23 @@ export class CertificateDataService {
     ]);
     if (!user || !course) throw new NotFoundException('No se encontró el alumno o el curso.');
 
-    const { averageScore, activeSeconds } = await this.roundResults(courseGuid, userGuid);
+    const issuedAt = new Date();
+    const roundStart = enrollment?.enrolledAt ?? issuedAt;
+    const { averageScore, activeSeconds } = await this.roundResults(courseGuid, userGuid, roundStart);
     const modules = course._count.modules;
     const assessments = resources.filter((resource) => resource.type === 'ASSIGNMENT').length;
-    const issuedAt = new Date();
 
     return {
       activeSeconds,
       studentEmail: user.email,
       studentName: user.firstName,
+      teacherGuid: course.teacherGuid,
       teacherEmail: course.teacher.email,
       teacherName: course.teacher.firstName,
       certificate: {
         studentName: `${user.firstName} ${user.lastName}`.trim(),
         courseTitle: course.title,
-        startedAt: enrollment?.enrolledAt ?? issuedAt,
+        startedAt: roundStart,
         completedAt: issuedAt,
         validUntil: computeValidUntil(issuedAt, config.certValidityMonths),
         totalHours: this.creditedHoursFor(course.title, course.durationHours),
@@ -165,31 +169,18 @@ export class CertificateDataService {
   }
 
   /**
-   * Nota media y tiempo de estudio de la vuelta actual, que empieza tras la certificación
-   * anterior. La nota es la mejor de cada evaluación: los suspensos previos no la rebajan.
+   * Nota media y tiempo de estudio de la vuelta actual. La nota es la mejor de cada evaluación:
+   * los suspensos previos no la rebajan, y las de vueltas anteriores ya están archivadas.
    */
-  private async roundResults(courseGuid: string, userGuid: string) {
-    const previousCertificate = await this.prisma.certificate.findFirst({
-      where: { userGuid, courseGuid },
-      orderBy: { completedAt: 'desc' },
-      select: { completedAt: true },
-    });
-    const after = previousCertificate && { gt: previousCertificate.completedAt };
-
+  private async roundResults(courseGuid: string, userGuid: string, roundStart: Date) {
     const [bestScores, studyTime] = await Promise.all([
       this.prisma.submission.groupBy({
         by: ['assignmentGuid'],
-        where: {
-          userGuid,
-          status: 'GRADED',
-          score: { not: null },
-          assignment: { module: { courseGuid } },
-          ...(after && { createdAt: after }),
-        },
+        where: { userGuid, status: 'GRADED', score: { not: null }, assignment: { module: { courseGuid } } },
         _max: { score: true },
       }),
       this.prisma.studySession.aggregate({
-        where: { userGuid, courseGuid, ...(after && { startedAt: after }) },
+        where: { userGuid, courseGuid, startedAt: { gte: roundStart } },
         _sum: { durationSeconds: true },
       }),
     ]);

@@ -1,10 +1,10 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { PrismaService } from '../prisma/prisma.service';
-import { CourseAccessInfo, CourseAccessService } from './course-access.service';
+import { CourseAccessInfo, CourseAccessService, UNENROLLED_MESSAGE } from './course-access.service';
 import { QuizConfig, parseQuizConfig, correctAnswers, withoutAnswers, quizDisplayTitle } from './quiz-config';
 import { recordCompletion, refreshCompletedResources } from './resource-progress';
-import { AFTER_LOCK, lockEnrollment } from '../enrollments/enrollment-lock';
+import { AFTER_LOCK, ClosedRoundMessages, assertRoundOpen, lockEnrollment } from '../enrollments/enrollment-lock';
 import { isPassing, quizScore, passingThreshold } from '../common/domain/grading';
 import { JwtPayload } from '../common/interfaces/jwt-payload.interface';
 import { emitEvent } from '../common/domain/domain-events';
@@ -18,6 +18,11 @@ const GRACE_PERIOD_MS = 30_000;
  * —el alumno puede retomarlo—, pero ya no cuenta como alguien examinándose ahora mismo.
  */
 const UNTIMED_ATTEMPT_WINDOW_MS = 3 * 60 * 60 * 1000;
+
+const ATTEMPTS_CLOSED: ClosedRoundMessages = {
+  unenrolled: UNENROLLED_MESSAGE,
+  certified: 'Ya terminaste este curso: sus cuestionarios quedaron cerrados con tu certificado.',
+};
 
 /**
  * Si un intento abierto sigue en marcha: dentro de su tiempo más la gracia o, sin límite,
@@ -34,11 +39,11 @@ export function isAttemptLive(startedAt: Date | null, timeLimitMinutes: number, 
  * Es la misma condición al abrir un intento, al calificarlo y al informar de los que
  * quedan, para que la pantalla no prometa intentos que el servidor no va a conceder.
  */
-function usedAttempts(resourceGuid: string, userGuid: string) {
+export function usedAttempts(resourceGuid: string, userGuid: string) {
   return { assignmentGuid: resourceGuid, userGuid, status: { not: 'DRAFT' as const } };
 }
 
-function attemptsExhausted(config: QuizConfig, used: number): boolean {
+export function attemptsExhausted(config: QuizConfig, used: number): boolean {
   return config.allowedAttempts > 0 && used >= config.allowedAttempts;
 }
 
@@ -105,7 +110,7 @@ export class QuizService {
     return this.prisma.$transaction(async (tx) => {
       // Con la matrícula bloqueada, dos aperturas simultáneas no cuentan los mismos intentos
       // previos ni abren uno por encima del límite.
-      await lockEnrollment(tx, user.sub, course.guid);
+      assertRoundOpen(await lockEnrollment(tx, user.sub, course.guid), ATTEMPTS_CLOSED);
 
       const inProgress = await tx.submission.findFirst({
         where: { assignmentGuid: resourceGuid, userGuid: user.sub, status: 'DRAFT' },
@@ -161,7 +166,7 @@ export class QuizService {
     const total = config.questions.length;
 
     const graded = await this.prisma.$transaction(async (tx) => {
-      await lockEnrollment(tx, user.sub, course.guid);
+      assertRoundOpen(await lockEnrollment(tx, user.sub, course.guid), ATTEMPTS_CLOSED);
 
       const attempt = await tx.submission.findFirst({
         where: { assignmentGuid: resourceGuid, userGuid: user.sub, status: 'DRAFT' },

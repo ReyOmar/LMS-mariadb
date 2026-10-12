@@ -25,14 +25,17 @@ describe('defaultLegalText', () => {
 });
 
 /**
- * La nota media del diploma.
+ * La nota media y el tiempo de estudio del diploma.
  *
  * Se promedia la mejor nota de cada evaluación de la vuelta actual: los intentos
  * suspendidos antes de aprobar no la rebajan, y lo de una vuelta anterior no cuenta.
  */
-describe('CertificateDataService — nota media del certificado', () => {
-  function setup({ previousCertificate = null as Date | null } = {}) {
+describe('CertificateDataService — resultados de la vuelta', () => {
+  const ROUND_START = new Date('2026-01-10T00:00:00Z');
+
+  function setup() {
     const scoreQueries: unknown[] = [];
+    const studyQueries: unknown[] = [];
     const prisma = {
       user: { findUnique: async () => ({ firstName: 'Ana', lastName: 'Ramírez', email: 'ana@ejemplo.com' }) },
       course: {
@@ -43,8 +46,7 @@ describe('CertificateDataService — nota media del certificado', () => {
           _count: { modules: 2 },
         }),
       },
-      enrollment: { findUnique: async () => ({ enrolledAt: new Date('2026-01-10T00:00:00Z') }) },
-      certificate: { findFirst: async () => previousCertificate && { completedAt: previousCertificate } },
+      enrollment: { findUnique: async () => ({ enrolledAt: ROUND_START }) },
       submission: {
         // La base devuelve la mejor nota de cada evaluación.
         groupBy: async (query: unknown) => {
@@ -55,7 +57,12 @@ describe('CertificateDataService — nota media del certificado', () => {
           ];
         },
       },
-      studySession: { aggregate: async () => ({ _sum: { durationSeconds: 3600 } }) },
+      studySession: {
+        aggregate: async (query: unknown) => {
+          studyQueries.push(query);
+          return { _sum: { durationSeconds: 3600 } };
+        },
+      },
     };
     const settings = {
       getSettings: async () => ({
@@ -73,7 +80,7 @@ describe('CertificateDataService — nota media del certificado', () => {
       ],
     };
     const service = new CertificateDataService(prisma as never, {} as never, settings as never, access as never);
-    return { service, scoreQueries };
+    return { service, scoreQueries, studyQueries };
   }
 
   it('promedia la mejor nota de cada evaluación', async () => {
@@ -89,13 +96,13 @@ describe('CertificateDataService — nota media del certificado', () => {
     });
   });
 
-  it('tras una certificación anterior sólo cuenta lo de la vuelta actual', async () => {
-    const previous = new Date('2025-06-01T00:00:00Z');
-    const { service, scoreQueries } = setup({ previousCertificate: previous });
+  it('el tiempo de estudio empieza con la vuelta: lo repasado tras un certificado anterior no cuenta', async () => {
+    const { service, studyQueries } = setup();
 
-    await service.gather('curso-1', 'ana', 'COLOMBIA');
+    const data = await service.gather('curso-1', 'ana', 'COLOMBIA');
 
-    expect(scoreQueries[0]).toMatchObject({ where: { createdAt: { gt: previous } } });
+    expect(studyQueries[0]).toMatchObject({ where: { userGuid: 'ana', startedAt: { gte: ROUND_START } } });
+    expect(data.certificate.startedAt).toEqual(ROUND_START);
   });
 
   it('el titular es el nombre completo con que se emite', async () => {

@@ -22,6 +22,7 @@ describe('CertificatesService — quién puede consultar la finalización', () =
       {} as never,
       {} as never,
       {} as never,
+      {} as never,
     );
   }
 
@@ -82,6 +83,7 @@ describe('CertificatesService — qué le falta al alumno', () => {
     const service = new CertificatesService(
       prisma as never,
       access as never,
+      {} as never,
       {} as never,
       {} as never,
       {} as never,

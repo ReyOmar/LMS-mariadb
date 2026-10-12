@@ -292,8 +292,7 @@ model Submission {
   score    Decimal? @map("calificacion") @db.Decimal(5, 2)
   feedback String?  @map("comentario_calificacion") @db.Text
 
-  // Sólo marca entregas antiguas cuyo archivo se retiró al certificar; ya nada lo activa.
-  // Se retirará cuando el panel del examinador y el del alumno dejen de leerlo.
+  // El archivo se borró al emitirse el certificado de la vuelta; nombre, nota y comentario siguen.
   filePurged Boolean @default(false) @map("archivo_purgado")
 
   createdAt DateTime @default(now()) @map("created_at")
@@ -352,7 +351,7 @@ model Enrollment {
   course       Course         @relation(fields: [courseGuid], references: [guid], onDelete: Cascade)
   type         EnrollmentType @default(MANUAL) @map("tipo")
   active       Boolean        @default(true) @map("activa")
-  /// Inicio de la vuelta actual: se renueva al volver a matricular.
+  /// Inicio de la vuelta actual: se renueva al abrir una vuelta nueva, no al retomar tras una baja.
   enrolledAt   DateTime       @default(now()) @map("fecha_matricula")
   unenrolledAt DateTime?      @map("fecha_baja")
 
@@ -703,10 +702,10 @@ model LegalVersion {
 // ── Entregas de vueltas anteriores ─────────────────────────────────────────
 
 /**
- * Entrega de una vuelta ya certificada.
+ * Entrega de una vuelta ya certificada, sin archivo: se borró al emitirse su certificado.
  * Al rematricular a quien ya obtuvo el certificado, sus entregas se trasladan aquí para que
- * empiece de cero sin perder la evidencia de la formación acreditada. Sólo se borran con la
- * cuenta o con el curso, que son borrados explícitos.
+ * empiece de cero conservando el nombre, la nota y el comentario de cada una. Sólo se borran
+ * con la cuenta o con el curso.
  */
 model ArchivedSubmission {
   guid            String    @id // El de la entrega original
@@ -719,7 +718,6 @@ model ArchivedSubmission {
   // Título de la actividad al archivarla, por si después se borra.
   assignmentTitle String    @map("tarea_titulo")
 
-  attachmentKey  String?          @map("url_archivo_adjunto")
   attachmentName String?          @map("respuesta_texto")
   status         SubmissionStatus @map("estado")
   attemptNumber  Int              @map("intento_numero")
@@ -730,8 +728,6 @@ model ArchivedSubmission {
 
   @@index([userGuid, courseGuid])
   @@index([courseGuid])
-  // El mismo motivo que en `lms_entregas`: comprobar si un archivo sigue en uso.
-  @@index([attachmentKey])
   @@map("lms_entregas_archivadas")
 }
 

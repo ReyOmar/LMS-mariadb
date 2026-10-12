@@ -8,6 +8,7 @@ import { RealtimeService } from '../realtime/realtime.service';
 import { EventName } from '../realtime/events';
 import { NotificationsService } from '../notifications/notifications.service';
 import { CourseAccessService, CourseAccessInfo } from './course-access.service';
+import { ContentRemovalService } from './content-removal.service';
 import { QuizOverview, parseQuizConfig, quizOverview } from './quiz-config';
 import { isAttemptLive } from './quiz.service';
 import { toClientResource } from './resource-view';
@@ -102,6 +103,7 @@ export class CoursesService {
     private readonly realtime: RealtimeService,
     private readonly notifications: NotificationsService,
     private readonly files: FileOwnershipService,
+    private readonly removal: ContentRemovalService,
   ) {}
 
   // ── Listados ─────────────────────────────────────────────────────────────
@@ -506,43 +508,10 @@ export class CoursesService {
       throw new BadRequestException('Sólo se pueden eliminar cursos en estado Borrador.');
     }
 
-    const [files, students] = await Promise.all([this.courseFiles(courseGuid), this.enrolledStudents(courseGuid)]);
-    // Las entregas cuelgan de su tarea, que al borrarse sólo las suelta: sin borrarlas aquí
-    // quedarían filas sin curso que apuntan a archivos ya retirados. El resto, archivadas
-    // incluidas, cae en cascada con el curso.
-    await this.prisma.$transaction([
-      this.prisma.submission.deleteMany({ where: { assignment: { module: { courseGuid } } } }),
-      this.prisma.course.delete({ where: { guid: courseGuid } }),
-    ]);
-
-    await this.files.deleteUnreferenced(files);
+    const students = await this.enrolledStudents(courseGuid);
+    await this.removal.remove({ courseGuid });
     this.emitToCourseAudience('course:deleted', { guid: courseGuid }, user.country, course.teacherGuid, students);
 
     return { message: 'Curso eliminado. Los certificados ya emitidos se conservan.' };
-  }
-
-  /** Reúne las claves de almacenamiento que dejarán de usarse al borrar el curso. */
-  private async courseFiles(courseGuid: string): Promise<(string | null)[]> {
-    const [course, resources, submissions, archived] = await Promise.all([
-      this.prisma.course.findUnique({ where: { guid: courseGuid }, select: { coverImage: true } }),
-      this.prisma.resource.findMany({
-        where: { module: { courseGuid }, OR: [{ attachmentKey: { not: null } }, { fileUrl: { not: null } }] },
-        select: { attachmentKey: true, fileUrl: true },
-      }),
-      this.prisma.submission.findMany({
-        where: { assignment: { module: { courseGuid } }, attachmentKey: { not: null } },
-        select: { attachmentKey: true },
-      }),
-      this.prisma.archivedSubmission.findMany({
-        where: { courseGuid, attachmentKey: { not: null } },
-        select: { attachmentKey: true },
-      }),
-    ]);
-
-    return [
-      course?.coverImage ?? null,
-      ...resources.flatMap((resource) => [resource.attachmentKey, resource.fileUrl]),
-      ...[...submissions, ...archived].map((submission) => submission.attachmentKey),
-    ];
   }
 }
