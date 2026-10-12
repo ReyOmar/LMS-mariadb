@@ -1,5 +1,6 @@
 import { GraduationCap, Settings, Shield, UserCheck } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
+import { matchesSearch } from '@/lib/text';
 
 /** Grupo en el que se muestra un evento de correo, según a quién va dirigido. */
 export interface EmailCategory {
@@ -62,14 +63,12 @@ export const CATEGORIES: readonly EmailCategory[] = [
 const UNCATEGORIZED = CATEGORIES[CATEGORIES.length - 1];
 
 export function eventCategory(key: string): EmailCategory {
-  return CATEGORIES.find((c) => c.events.includes(key)) ?? UNCATEGORIZED;
+  return CATEGORIES.find((category) => category.events.includes(key)) ?? UNCATEGORIZED;
 }
 
 /**
- * Reparte los eventos en sus categorías, en el orden de `CATEGORIES` y sin grupos vacíos.
- *
- * Se agrupa con `eventCategory`, no con las listas de cada categoría: así un evento nuevo
- * del servidor que aquí no está repartido aparece en «Sistema» en vez de desaparecer.
+ * Reparte los eventos en el orden de `CATEGORIES`, sin grupos vacíos. Con `eventCategory`, un evento
+ * nuevo de la API que aquí no está repartido cae en «Sistema» en vez de desaparecer.
  */
 export function groupByCategory<T extends { key: string }>(
   events: readonly T[],
@@ -78,4 +77,17 @@ export function groupByCategory<T extends { key: string }>(
     ...category,
     eventsWithData: events.filter((event) => eventCategory(event.key).key === category.key),
   })).filter((group) => group.eventsWithData.length > 0);
+}
+
+/** Eventos que casan con la búsqueda (nombre, identificador o descripción) y con la categoría elegida. */
+export function filterEvents<T extends { key: string; displayName: string; description: string }>(
+  events: readonly T[],
+  search: string,
+  categoryKey: string | null,
+): T[] {
+  return events.filter(
+    (event) =>
+      [event.displayName, event.key, event.description].some((text) => matchesSearch(text, search)) &&
+      (categoryKey === null || eventCategory(event.key).key === categoryKey),
+  );
 }

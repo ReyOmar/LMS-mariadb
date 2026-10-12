@@ -1,19 +1,15 @@
 import {
   batchSummary,
-  candidateSearch,
+  directoryCount,
   filterCourses,
   hasExaminer,
-  isSearchTooShort,
   restartWarning,
+  UNENROLL_WARNING,
   type AssignableCourse,
 } from './assignment';
 import type { UserRole } from '@/types/models';
 
-/**
- * Un curso nunca se queda sin responsable: cuando se le quita el examinador vuelve al
- * administrador. Por eso «sin asignar» no puede leerse como «sin `teacherGuid`», o el
- * filtro «Sin Asignar» nunca mostraría nada y todos los cursos aparecerían como asignados.
- */
+// Un curso nunca se queda sin responsable: «sin asignar» es estar a cargo de un administrador.
 const course = (guid: string, title: string, role: UserRole): AssignableCourse => ({
   guid,
   title,
@@ -58,39 +54,44 @@ describe('filterCourses', () => {
   });
 });
 
-/**
- * Una sede tiene miles de alumnos y el servidor sólo entrega los primeros: una sola letra
- * casaría con casi todos, así que no se filtra hasta que hay dos.
- */
-describe('búsqueda de candidatos', () => {
-  it('no filtra con una sola letra y lo avisa', () => {
-    expect(candidateSearch(' a ')).toBe('');
-    expect(isSearchTooShort(' a ')).toBe(true);
-  });
-
-  it('busca desde dos caracteres, sin los espacios de los extremos', () => {
-    expect(candidateSearch('  an ')).toBe('an');
-    expect(isSearchTooShort('an')).toBe(false);
-  });
-
-  it('sin texto lista los primeros sin avisar de nada', () => {
-    expect(candidateSearch('   ')).toBe('');
-    expect(isSearchTooShort('   ')).toBe(false);
-  });
-});
-
 describe('restartWarning', () => {
   it('nombra a la persona y advierte de que empieza de cero cuando es una sola', () => {
     const text = restartWarning(['Ana Ruiz']);
-    expect(text).toMatch(/^Ana Ruiz ya tiene el certificado/);
-    expect(text).toContain('sus entregas anteriores se archivan');
-    expect(text).toContain('El certificado emitido se conserva.');
+    expect(text).toBe(
+      'Ana Ruiz ya tiene el certificado de este curso. Si lo matriculas de nuevo, empezará desde cero: su avance ' +
+        'se reinicia; sus calificaciones anteriores quedan en el historial (los archivos ya se retiraron al emitir ' +
+        'su certificado). El certificado emitido se conserva.',
+    );
+  });
+
+  it('no promete archivar entregas: sus archivos se retiraron al certificarse', () => {
+    expect(restartWarning(['Ana Ruiz'])).not.toMatch(/entregas[^.]*archivan/);
+    expect(restartWarning(['Ana Ruiz', 'Beto Gil'])).not.toMatch(/entregas[^.]*archivan/);
   });
 
   it('lista a todos en un solo aviso cuando son varios', () => {
     const text = restartWarning(['Ana Ruiz', 'Beto Gil']);
     expect(text).toContain('Ya tienen el certificado de este curso: Ana Ruiz, Beto Gil.');
+    expect(text).toContain('sus calificaciones anteriores quedan en el historial');
     expect(text).toContain('Los certificados emitidos se conservan.');
+  });
+});
+
+describe('UNENROLL_WARNING', () => {
+  it('avisa de que un cuestionario abierto se cierra como intento gastado', () => {
+    expect(UNENROLL_WARNING).toContain('Su avance y sus entregas se conservan');
+    expect(UNENROLL_WARNING).toContain('intento cuenta como gastado');
+  });
+});
+
+describe('directoryCount', () => {
+  it('sin nada filtrado dice cuántos cursos hay', () => {
+    expect(directoryCount(20, 20)).toBe('20 cursos en total');
+    expect(directoryCount(1, 1)).toBe('1 curso en total');
+  });
+
+  it('con la búsqueda o el filtro dejando fuera alguno, dice de cuántos', () => {
+    expect(directoryCount(1, 20)).toBe('1 de 20 cursos');
   });
 });
 

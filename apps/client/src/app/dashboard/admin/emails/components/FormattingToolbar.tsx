@@ -2,14 +2,9 @@
 
 import { Bold, Italic, List, ListOrdered } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
+import { keepingSelection } from './keep-selection';
 
-/**
- * Formatos que puede aplicar quien edita un correo.
- *
- * La lista es corta a propósito. Un correo que llega bien a todos los gestores admite poco
- * más que esto, y cada opción de más es una forma nueva de que la plantilla se vea rara en
- * el cliente de correo de alguien.
- */
+/** Pocos formatos a propósito: cada uno de más es otra forma de que el correo se vea mal en algún gestor. */
 const FORMATS: { command: string; label: string; icon: LucideIcon }[] = [
   { command: 'bold', label: 'Negrita', icon: Bold },
   { command: 'italic', label: 'Cursiva', icon: Italic },
@@ -26,16 +21,7 @@ export function FormattingToolbar({ onApply }: { onApply: (command: string) => v
           type="button"
           title={label}
           aria-label={label}
-          // `mousedown` y no `click`: al pulsar, el foco saldría del texto y se perdería la
-          // selección sobre la que hay que aplicar el formato.
-          onMouseDown={(event) => {
-            event.preventDefault();
-            onApply(command);
-          }}
-          // Desde el teclado (Intro o Espacio) sólo llega el `click`, con `detail` a cero.
-          onClick={(event) => {
-            if (event.detail === 0) onApply(command);
-          }}
+          {...keepingSelection(() => onApply(command))}
           className="p-1.5 rounded-lg text-slate-600 hover:bg-slate-200 hover:text-slate-900 transition-colors"
         >
           <Icon className="h-4 w-4" />

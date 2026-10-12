@@ -1,4 +1,4 @@
-import { CATEGORIES, eventCategory, groupByCategory } from './categories';
+import { CATEGORIES, eventCategory, filterEvents, groupByCategory } from './categories';
 
 /** Eventos que la API envía y esta pantalla no tiene repartidos. */
 function uncategorizedEvents(keys: readonly string[]): string[] {
@@ -6,11 +6,6 @@ function uncategorizedEvents(keys: readonly string[]): string[] {
   return keys.filter((key) => !categorized.has(key));
 }
 
-/**
- * El reparto de eventos en categorías vive en el cliente porque es presentación. El riesgo
- * es que alguien añada un evento en el servidor y aquí caiga en «Sistema» sin que nadie lo
- * note, quedando mal etiquetado para siempre.
- */
 describe('categorías de los correos', () => {
   it('coloca cada evento en su grupo', () => {
     expect(eventCategory('CALIFICACION_RECIBIDA').key).toBe('students');
@@ -57,5 +52,22 @@ describe('categorías de los correos', () => {
       'CURSO_COMPLETADO',
     ];
     expect(uncategorizedEvents(fromApi)).toEqual([]);
+  });
+});
+
+describe('filterEvents', () => {
+  const events = [
+    { key: 'NUEVA_ENTREGA', displayName: 'Nueva entrega', description: 'Avisa al examinador.' },
+    { key: 'RECUPERAR_PASSWORD', displayName: 'Recuperar contraseña', description: 'Enlace para restablecerla.' },
+  ];
+
+  it('busca en el nombre, el identificador y la descripción', () => {
+    expect(filterEvents(events, 'examinador', null).map((event) => event.key)).toEqual(['NUEVA_ENTREGA']);
+    expect(filterEvents(events, 'recuperar_pass', null).map((event) => event.key)).toEqual(['RECUPERAR_PASSWORD']);
+  });
+
+  it('combina la búsqueda con la categoría elegida', () => {
+    expect(filterEvents(events, '', 'system').map((event) => event.key)).toEqual(['RECUPERAR_PASSWORD']);
+    expect(filterEvents(events, 'entrega', 'system')).toEqual([]);
   });
 });
