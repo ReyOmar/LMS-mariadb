@@ -1,8 +1,5 @@
 import { CertificatesService } from './certificates.service';
 
-// Componer el PDF de verdad no aporta nada aquí: lo cubre `certificate-pdf.spec.ts`.
-jest.mock('./certificate-pdf', () => ({ composeCertificate: async () => Buffer.from('%PDF-1.7') }));
-
 const COMPLETED_AT = new Date('2026-02-20T00:00:00Z');
 
 /**
@@ -20,9 +17,16 @@ describe('CertificatesService — emisión del certificado', () => {
     alreadyClosed?: boolean;
     /** El registro del certificado falla. */
     failCreate?: boolean;
+    /** La transacción termina su trabajo, pero la base no llega a confirmarla. */
+    failCommit?: boolean;
   }
 
-  function setup({ previousCertificates = 0, alreadyClosed = false, failCreate = false }: Scenario = {}) {
+  function setup({
+    previousCertificates = 0,
+    alreadyClosed = false,
+    failCreate = false,
+    failCommit = false,
+  }: Scenario = {}) {
     const saved: string[] = [];
     const deleted: string[] = [];
     const submissionWrites: string[] = [];
@@ -64,7 +68,11 @@ describe('CertificatesService — emisión del certificado', () => {
       certificate: { findFirst: async () => null },
       resourceProgress: { findMany: async () => [{ resourceGuid: 'tarea-1' }] },
       $transaction: (callback: (client: typeof tx) => Promise<unknown>) => {
-        const run = queue.then(() => callback(tx));
+        const run = queue.then(async () => {
+          const result = await callback(tx);
+          if (failCommit) throw new Error('Se perdió la conexión al confirmar');
+          return result;
+        });
         queue = run.catch(() => undefined);
         return run;
       },
@@ -88,9 +96,6 @@ describe('CertificatesService — emisión del certificado', () => {
       saveWithKey: async (key: string) => {
         saved.push(key);
       },
-      deleteFile: async (key: string) => {
-        deleted.push(key);
-      },
       deleteFiles: async (keys: string[]) => {
         deleted.push(...keys);
       },
@@ -113,8 +118,12 @@ describe('CertificatesService — emisión del certificado', () => {
           validUntil: null,
           totalHours: 4,
           averageScore: 90,
+          logoKey: 'logos/sede.png',
+          signatureKey: null,
         },
       }),
+      // Componer el PDF de verdad no aporta nada aquí: lo cubre `certificate-pdf.spec.ts`.
+      compose: async () => Buffer.from('%PDF-1.7'),
     };
     const notificationsService = {
       create: async (notification: Record<string, unknown>) => {
@@ -210,6 +219,30 @@ describe('CertificatesService — emisión del certificado', () => {
 
     expect(saved).toHaveLength(1);
     expect(deleted).toEqual(saved);
+  });
+
+  it('si la base no confirma la emisión, retira el PDF: ninguna fila llegó a usarlo', async () => {
+    const { service, saved, deleted, notifications } = setup({ failCommit: true });
+
+    await expect(service.issueIfEligible('curso-1', 'ana', 'COLOMBIA')).rejects.toThrow('al confirmar');
+    await settle();
+
+    expect(saved).toHaveLength(1);
+    expect(deleted).toEqual(saved);
+    expect(notifications).toEqual([]);
+  });
+
+  it('guarda con el certificado lo que imprime su PDF, para poder recomponerlo si se pierde', async () => {
+    const { service, created } = setup();
+
+    await service.issueIfEligible('curso-1', 'ana', 'COLOMBIA');
+
+    expect(JSON.parse(created[0].pdfData as string)).toMatchObject({
+      studentName: 'Ana Ramírez',
+      verificationCode: 'CERT-ABC123',
+      completedAt: COMPLETED_AT.toISOString(),
+      logoKey: 'logos/sede.png',
+    });
   });
 
   it('avisa al alumno en la campana con enlace a sus certificados', async () => {

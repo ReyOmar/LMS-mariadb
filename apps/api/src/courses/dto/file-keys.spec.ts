@@ -20,12 +20,12 @@ describe('claves de almacenamiento en los DTO de cursos', () => {
   });
 
   it('acepta nulo para quitar el archivo', async () => {
-    expect(await errorsFor(UpdateResourceDto, { attachmentKey: null, fileUrl: null })).toEqual([]);
+    expect(await errorsFor(UpdateResourceDto, { attachmentKey: null })).toEqual([]);
     expect(await errorsFor(UpdateCourseDto, { coverImage: null })).toEqual([]);
   });
 
   it('rechaza rutas que salen de la carpeta de almacenamiento', async () => {
-    expect(await errorsFor(UpdateResourceDto, { fileUrl: '../.env' })).toEqual(['fileUrl']);
+    expect(await errorsFor(UpdateResourceDto, { attachmentKey: '../.env' })).toEqual(['attachmentKey']);
     expect(await errorsFor(UpdateResourceDto, { attachmentKey: 'recursos/../../.env' })).toEqual(['attachmentKey']);
   });
 

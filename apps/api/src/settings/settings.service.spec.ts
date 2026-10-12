@@ -1,6 +1,7 @@
 import { ForbiddenException, NotFoundException } from '@nestjs/common';
 import { BASE_LEGAL_VERSION, SettingsService } from './settings.service';
 import { uploadCeilingMb } from '../storage/upload-limits';
+import { fileOwnershipDouble } from '../common/testing/file-ownership-double';
 
 /**
  * Qué sale de la sede sin haber iniciado sesión.
@@ -178,8 +179,7 @@ describe('SettingsService — versiones de los textos legales', () => {
     };
 
     const realtime = { emitToCountry: () => undefined };
-    const files = { assertCanUse: jest.fn(async () => undefined), deleteUnreferenced: jest.fn(async () => undefined) };
-    const service = new SettingsService(prisma as never, {} as never, realtime as never, files as never);
+    const service = new SettingsService(prisma as never, {} as never, realtime as never, fileOwnershipDouble().files);
     return { service, versions };
   }
 
@@ -286,8 +286,8 @@ describe('SettingsService · archivos', () => {
     };
     const storage = { downloadUrl: (key: string) => `/firmada/${key}` };
     const realtime = { emitToCountry: () => undefined };
-    const files = { assertCanUse: jest.fn(async () => undefined), deleteUnreferenced: jest.fn(async () => undefined) };
-    const service = new SettingsService(prisma as never, storage as never, realtime as never, files as never);
+    const files = fileOwnershipDouble();
+    const service = new SettingsService(prisma as never, storage as never, realtime as never, files.files);
     return { service, files };
   }
 
@@ -321,7 +321,48 @@ describe('SettingsService · archivos', () => {
     expect(files.assertCanUse).toHaveBeenCalledWith('firmas/nueva.png', 'firmas/vieja.png', 'firmas', {
       uploader: 'profe-1',
     });
-    expect(files.deleteUnreferenced).toHaveBeenCalledWith(['firmas/vieja.png']);
+    expect(files.retired()).toEqual(['firmas/vieja.png']);
+  });
+
+  it.each([
+    ['logoUrl', 'logos/logo.png'],
+    ['faviconUrl', 'logos/favicon.png'],
+    ['loginBackgroundUrl', 'fondos/fondo.jpg'],
+  ])('quitar la imagen de %s la retira del almacenamiento', async (field, previous) => {
+    const { service, files } = serviceFor({
+      logoUrl: 'logos/logo.png',
+      faviconUrl: 'logos/favicon.png',
+      loginBackgroundUrl: 'fondos/fondo.jpg',
+    });
+
+    const saved = await service.updateSettings('MEXICO', { [field]: null });
+
+    expect(saved).toMatchObject({ [field]: null });
+    expect(files.retired()).toEqual([previous]);
+  });
+
+  it('guardar otros ajustes sin tocar las imágenes no borra ninguna', async () => {
+    const { service, files } = serviceFor({ logoUrl: 'logos/logo.png', faviconUrl: null, loginBackgroundUrl: null });
+
+    await service.updateSettings('MEXICO', { platformName: 'Campus' });
+
+    expect(files.retired()).toEqual([]);
+  });
+
+  it('quitar la firma la retira del almacenamiento', async () => {
+    const { service, files } = serviceFor({});
+
+    await service.updateSignature('profe-1', { signatureUrl: null });
+
+    expect(files.retired()).toEqual(['firmas/vieja.png']);
+  });
+
+  it('cambiar el nombre de la firma sin tocar la imagen no la borra', async () => {
+    const { service, files } = serviceFor({});
+
+    await service.updateSignature('profe-1', { signatureName: 'Dra. Ruiz' });
+
+    expect(files.retired()).toEqual([]);
   });
 });
 

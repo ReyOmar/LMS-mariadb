@@ -66,6 +66,25 @@ function timeLimitOf(stored: string | null): number {
   }
 }
 
+/** Lo que el DTO cambia de la ficha de un curso. */
+function courseChanges(dto: UpdateCourseDto): Prisma.CourseUpdateInput {
+  return {
+    ...(dto.title !== undefined && { title: dto.title }),
+    ...(dto.description !== undefined && { description: dto.description }),
+    ...(dto.shortDescription !== undefined && { shortDescription: dto.shortDescription }),
+    ...(dto.coverImage !== undefined && { coverImage: dto.coverImage }),
+    ...(dto.level !== undefined && { level: dto.level }),
+    ...(dto.status !== undefined && { status: dto.status }),
+    ...(dto.durationHours !== undefined && { durationHours: dto.durationHours }),
+    ...(dto.passingScore !== undefined && { passingScore: dto.passingScore }),
+    ...(dto.strictOrder !== undefined && { strictOrder: dto.strictOrder }),
+    ...(dto.maxStudents !== undefined && { maxStudents: dto.maxStudents }),
+    ...(dto.accessCode !== undefined && { accessCode: dto.accessCode || null }),
+    ...(dto.startDate !== undefined && { startDate: dto.startDate ? new Date(dto.startDate) : null }),
+    ...(dto.endDate !== undefined && { endDate: dto.endDate ? new Date(dto.endDate) : null }),
+  };
+}
+
 /**
  * Gestión de cursos: listados, ficha y ciclo de vida (borrador ↔ publicado).
  * El contenido (módulos y recursos) lo lleva `CourseContentService` y la evaluación
@@ -270,32 +289,12 @@ export class CoursesService {
       dto.coverImage !== undefined
         ? await this.prisma.course.findUnique({ where: { guid: courseGuid }, select: { coverImage: true } })
         : null;
-    await this.files.assertCanUse(dto.coverImage, previous?.coverImage, 'portadas', { uploader: user.sub });
+    const cover = { folder: 'portadas' as const, current: previous?.coverImage, next: dto.coverImage };
 
-    const updated = await this.prisma.course.update({
-      where: { guid: courseGuid },
-      data: {
-        ...(dto.title !== undefined && { title: dto.title }),
-        ...(dto.description !== undefined && { description: dto.description }),
-        ...(dto.shortDescription !== undefined && { shortDescription: dto.shortDescription }),
-        ...(dto.coverImage !== undefined && { coverImage: dto.coverImage }),
-        ...(dto.level !== undefined && { level: dto.level }),
-        ...(dto.status !== undefined && { status: dto.status }),
-        ...(dto.durationHours !== undefined && { durationHours: dto.durationHours }),
-        ...(dto.passingScore !== undefined && { passingScore: dto.passingScore }),
-        ...(dto.strictOrder !== undefined && { strictOrder: dto.strictOrder }),
-        ...(dto.maxStudents !== undefined && { maxStudents: dto.maxStudents }),
-        ...(dto.accessCode !== undefined && { accessCode: dto.accessCode || null }),
-        ...(dto.startDate !== undefined && { startDate: dto.startDate ? new Date(dto.startDate) : null }),
-        ...(dto.endDate !== undefined && { endDate: dto.endDate ? new Date(dto.endDate) : null }),
-      },
-      select: COURSE_SUMMARY,
-    });
+    const updated = await this.files.replace([cover], { uploader: user.sub }, () =>
+      this.prisma.course.update({ where: { guid: courseGuid }, data: courseChanges(dto), select: COURSE_SUMMARY }),
+    );
 
-    // La portada sustituida se retira si ya no la usa ningún otro curso.
-    if (previous?.coverImage && previous.coverImage !== updated.coverImage) {
-      void this.files.deleteUnreferenced([previous.coverImage]);
-    }
     const students = await this.enrolledStudents(courseGuid);
     if (updated.status === 'DRAFT' && course.status !== 'DRAFT') {
       this.realtime.emitToUsers('course:maintenance', { courseGuid }, user.country, students);
@@ -516,7 +515,7 @@ export class CoursesService {
       this.prisma.course.delete({ where: { guid: courseGuid } }),
     ]);
 
-    void this.files.deleteUnreferenced(files);
+    await this.files.deleteUnreferenced(files);
     this.emitToCourseAudience('course:deleted', { guid: courseGuid }, user.country, course.teacherGuid, students);
 
     return { message: 'Curso eliminado. Los certificados ya emitidos se conservan.' };

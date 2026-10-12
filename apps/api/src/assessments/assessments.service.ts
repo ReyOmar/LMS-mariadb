@@ -179,16 +179,9 @@ export class AssessmentsService {
   // ── Alumno ───────────────────────────────────────────────────────────────
 
   /**
-   * Registra la entrega de una tarea.
-   *
-   * Reenviar está permitido mientras no esté aprobada: si la nota anterior no alcanzó el
-   * umbral, el alumno puede subir una versión corregida y la entrega vuelve a la cola del
-   * examinador. Una entrega ya aprobada no se reemplaza, para que nadie pueda sustituir el
-   * documento que respalda una nota ya dada.
-   *
-   * El archivo se recibe al final, cuando ya se sabe que la entrega procede y cuál es su
-   * límite: el propio de la tarea o, si no tiene, el general de la sede. Entrega sólo un
-   * estudiante, y con orden estricto la tarea tiene que estar desbloqueada.
+   * Registra la entrega de una tarea. Se puede reenviar mientras no esté aprobada: una aprobada
+   * no se sustituye, porque respalda una nota ya dada. El archivo se recibe al final, cuando ya
+   * se sabe que la entrega procede y cuál es su límite (el de la tarea o el general de la sede).
    */
   async recordSubmission(assignmentGuid: string, receive: FileReceiver, user: JwtPayload) {
     const course = await this.access.unlockedResourceAccess(assignmentGuid, user);
@@ -212,42 +205,12 @@ export class AssessmentsService {
     const file = await receive(limit);
     const key = await this.storage.uploadFromDisk(file.filePath, file.name, 'entregas', user, limit.bytes);
 
-    let saved: { submission: Submission; previous: OwnSubmission | null };
-    try {
-      // Con la matrícula bloqueada: dos envíos a la vez —un doble clic, dos pestañas— se
-      // ponen en fila y el segundo sustituye al primero en lugar de abrir otra entrega.
-      saved = await this.prisma.$transaction(async (tx) => {
-        await lockEnrollment(tx, user.sub, course.guid);
-        const previous = await this.ownSubmission(tx, assignmentGuid, user.sub);
-        ensureReplaceable(previous, threshold);
-
-        const delivery = { attachmentKey: key, attachmentName: file.name, submittedAt: new Date() };
-        const submission = previous
-          ? await tx.submission.update({
-              where: { guid: previous.guid },
-              // Una versión corregida tras una nota insuficiente sigue siendo un reenvío
-              // aunque se sustituya antes de que la califiquen.
-              data: {
-                ...delivery,
-                status: previous.status === 'SUBMITTED' ? 'SUBMITTED' : 'IN_REVIEW',
-                filePurged: false,
-              },
-            })
-          : await tx.submission.create({
-              data: { ...delivery, assignmentGuid, userGuid: user.sub, status: 'SUBMITTED' },
-            });
-        return { submission, previous };
-      }, AFTER_LOCK);
-    } catch (error) {
-      // Sin fila que lo referencie, el archivo recién guardado quedaría huérfano —y puede
-      // pesar varios GB—: nada lo retiraría después.
-      await this.storage.deleteFiles([key]);
-      throw error;
-    }
-    const { submission, previous } = saved;
-
-    // El archivo anterior se retira una vez guardada la referencia al nuevo.
-    void this.files.deleteUnreferenced([previous?.attachmentKey]);
+    const attachment = { attachmentKey: key, attachmentName: file.name };
+    const { submission, previous } = await this.files.adoptUpload(
+      key,
+      () => this.saveDelivery({ assignmentGuid, courseGuid: course.guid, userGuid: user.sub, threshold }, attachment),
+      (saved) => saved.previous?.attachmentKey,
+    );
 
     emitEvent(this.events, 'submission.received', {
       submissionGuid: submission.guid,
@@ -261,6 +224,34 @@ export class AssessmentsService {
     });
 
     return this.forStudent(submission);
+  }
+
+  /** Con la matrícula bloqueada: dos envíos a la vez se ponen en fila y el segundo sustituye al primero. */
+  private saveDelivery(
+    target: { assignmentGuid: string; courseGuid: string; userGuid: string; threshold: number },
+    attachment: { attachmentKey: string; attachmentName: string },
+  ) {
+    const { assignmentGuid, courseGuid, userGuid, threshold } = target;
+    return this.prisma.$transaction(async (tx) => {
+      await lockEnrollment(tx, userGuid, courseGuid);
+      const previous = await this.ownSubmission(tx, assignmentGuid, userGuid);
+      ensureReplaceable(previous, threshold);
+
+      const delivery = { ...attachment, submittedAt: new Date() };
+      const submission = previous
+        ? await tx.submission.update({
+            where: { guid: previous.guid },
+            // Una versión corregida tras una nota insuficiente sigue siendo un reenvío
+            // aunque se sustituya antes de que la califiquen.
+            data: {
+              ...delivery,
+              status: previous.status === 'SUBMITTED' ? 'SUBMITTED' : 'IN_REVIEW',
+              filePurged: false,
+            },
+          })
+        : await tx.submission.create({ data: { ...delivery, assignmentGuid, userGuid, status: 'SUBMITTED' } });
+      return { submission, previous };
+    }, AFTER_LOCK);
   }
 
   /** La entrega del alumno en una tarea, si ya la tiene: cada tarea admite una por alumno. */

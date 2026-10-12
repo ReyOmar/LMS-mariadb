@@ -1,4 +1,9 @@
-import { CertificateDataService, defaultLegalText } from './certificate-data.service';
+import {
+  CertificateDataService,
+  CertificateSnapshot,
+  defaultLegalText,
+  parseSnapshot,
+} from './certificate-data.service';
 
 describe('defaultLegalText', () => {
   it('escribe cada cifra en singular o en plural', () => {
@@ -99,5 +104,67 @@ describe('CertificateDataService — nota media del certificado', () => {
     const data = await service.gather('curso-1', 'ana', 'COLOMBIA');
 
     expect(data.certificate.studentName).toBe('Ana Ramírez');
+  });
+});
+
+/** Imágenes del certificado y lo que se guarda para recomponerlo. */
+describe('CertificateDataService — composición del PDF', () => {
+  const SNAPSHOT: CertificateSnapshot = {
+    studentName: 'Ana Ramírez',
+    courseTitle: 'Manejo defensivo',
+    startedAt: new Date('2026-01-10T00:00:00Z'),
+    completedAt: new Date('2026-02-20T00:00:00Z'),
+    totalHours: 4,
+    validUntil: new Date('2028-02-20T00:00:00Z'),
+    averageScore: 90,
+    verificationCode: 'CERT-ABC123',
+    teacherName: 'Carlos Pérez',
+    platformName: 'PESV Education',
+    primaryColor: '#0F766E',
+    secondaryColor: '#65a30d',
+    totalModules: 2,
+    totalResources: 5,
+    legalText: 'Texto legal.',
+    customTitle: null,
+    subtitle: null,
+    showModules: true,
+    showResources: true,
+    showScore: true,
+    showSignature: true,
+    showEnrollmentDate: true,
+    signatureName: 'Carlos Pérez',
+    signatureTitle: 'Examinador',
+    logoKey: 'logos/sede.png',
+    signatureKey: 'firmas/carlos.png',
+  };
+
+  function setup() {
+    const storage = { readFile: jest.fn(async () => null) };
+    const service = new CertificateDataService({} as never, storage as never, {} as never, {} as never);
+    const warn = jest.spyOn(service['logger'], 'warn').mockImplementation(() => undefined);
+    return { service, storage, warn };
+  }
+
+  it('lee el logotipo y la firma del almacenamiento para incrustarlos', async () => {
+    const { service, storage } = setup();
+
+    await service.compose(SNAPSHOT);
+
+    expect(storage.readFile.mock.calls).toEqual([['logos/sede.png'], ['firmas/carlos.png']]);
+  });
+
+  it('un logotipo SVG no se intenta incrustar y el aviso dice qué formatos sirven', async () => {
+    const { service, storage, warn } = setup();
+
+    const pdf = await service.compose({ ...SNAPSHOT, logoKey: 'logos/sede.svg', showSignature: false });
+
+    expect(pdf.subarray(0, 5).toString()).toBe('%PDF-');
+    expect(storage.readFile).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/sólo admite PNG o JPG/));
+  });
+
+  it('la instantánea guardada en JSON recupera sus fechas', () => {
+    expect(parseSnapshot(JSON.stringify(SNAPSHOT))).toEqual(SNAPSHOT);
+    expect(parseSnapshot(JSON.stringify({ ...SNAPSHOT, validUntil: null })).validUntil).toBeNull();
   });
 });

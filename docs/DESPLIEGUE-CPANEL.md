@@ -149,7 +149,10 @@ CORS_ORIGIN        https://campus.tu-dominio.com
 APP_URL            https://campus.tu-dominio.com
 API_PUBLIC_URL     https://api-campus.tu-dominio.com
 BREVO_API_KEY      <clave de Brevo>
+STORAGE_DIR        /home/usuario/lms-data/uploads
 ```
+
+`STORAGE_DIR` es la carpeta de los archivos subidos, fuera de la aplicación (apartado 8).
 
 Opcional: `DATABASE_POOL_SIZE` (ver _Conexiones con la base de datos_, más abajo).
 
@@ -278,25 +281,39 @@ Después, en el navegador:
 
 ## 8. Archivos subidos
 
-Sin `R2_*` configurado, los archivos se guardan en `~/lms-api/uploads`. **Ese directorio no
-debe borrarse entre despliegues**: contiene entregas de alumnos y certificados emitidos.
+Los archivos del campus se guardan en el disco del servidor, en la carpeta que indica
+`STORAGE_DIR`. Ponla **fuera de la aplicación**, por ejemplo `/home/usuario/lms-data/uploads`:
+`~/lms-api` se sustituye al desplegar, y si se borra o se recrea la aplicación en _Setup
+Node.js App_, lo que hubiera dentro se pierde. Sin `STORAGE_DIR` se usa `~/lms-api/uploads`,
+que sólo vale en desarrollo; en producción la API lo avisa en el registro al arrancar.
 
-Si tu procedimiento de despliegue reemplaza la carpeta de la aplicación, configura
-Cloudflare R2 y el almacenamiento deja de depender del servidor:
+Al arrancar, la API crea la carpeta y sus subcarpetas sin permisos para otras cuentas del
+servidor:
 
-```
-R2_ACCOUNT_ID         <id de cuenta>
-R2_ACCESS_KEY_ID      <clave>
-R2_SECRET_ACCESS_KEY  <secreto>
-R2_BUCKET_NAME        lms-uploads
-```
+| Carpeta                                          | Qué guarda                                   | Cómo se sirve                                        |
+| ------------------------------------------------ | -------------------------------------------- | ---------------------------------------------------- |
+| `logos`, `portadas`, `fondos`                    | Marca de cada sede y portadas de los cursos  | Sin firma; las cachés compartidas pueden guardarlas  |
+| `avatars`                                        | Fotos de perfil                              | Sin firma; sólo las guarda la caché del navegador    |
+| `entregas`, `certificados`, `firmas`, `recursos` | Lo que documenta a una persona y el material | Con un enlace firmado que caduca en una hora         |
+| `.tmp`                                           | Archivos a medio escribir                    | Nunca; al arrancar se retira lo que lleve más de 1 h |
 
-El bucket **no debe ser público**: el material reservado —entregas, certificados y firmas—
-se sirve a través de la API con enlaces firmados que caducan en una hora.
+Cada archivo se escribe primero en `.tmp` y pasa a su carpeta sólo cuando está entero: si el
+proceso se corta a mitad, no queda ningún archivo a medias con su nombre definitivo.
 
-La aplicación **no borra archivos por su cuenta**: sólo cuando alguien elimina o sustituye
-desde el panel aquello a lo que pertenecen. Las entregas conservan su archivo después del
-certificado, así que el almacenamiento crece con el uso; tenlo en cuenta al dimensionarlo.
+- **Copias de seguridad.** Al estar en la cuenta, la carpeta entra en la copia del directorio
+  personal de cPanel. Restaura siempre la base y la carpeta **del mismo momento**: un archivo
+  que falte deja su enlace roto. Si falta el PDF de un certificado, la API lo recompone al
+  descargarlo con los datos que guardó al emitirlo; los emitidos antes de guardarse esos
+  datos sólo se recuperan de la copia.
+- **Espacio.** Cuenta con lo que ocupen las entregas y el material, más el doble del archivo
+  más grande mientras se guarda (el temporal de la subida y su copia).
+- **Comprobación.** `GET /api/health` responde `storage: { status: "ok" }` si la API puede
+  escribir en la carpeta. Con `error`, el registro de arranque dice por qué (ruta, permisos o
+  disco lleno); la API arranca igualmente para que el resto del campus siga funcionando.
+
+La aplicación **no borra archivos por su cuenta**: sólo cuando alguien elimina, sustituye o
+quita desde el panel aquello a lo que pertenecen. Las entregas conservan su archivo después
+del certificado, así que el almacenamiento crece con el uso; tenlo en cuenta al dimensionarlo.
 
 ### Tamaño máximo de los archivos
 
@@ -307,7 +324,7 @@ certificado, así que el almacenamiento crece con el uso; tenlo en cuenta al dim
 | Logotipo, favicon, portadas, fotos de perfil (5 MB), fondo del acceso (10 MB) y firmas (2 MB) | Fijo                                                                                  |
 
 Ningún límite puede superar el **tope técnico**, la variable opcional `MAX_UPLOAD_MB` de la
-API: 2048 (2 GB) si no se define, 5000 como mucho. El alumno ve el tamaño máximo antes de
+API: 2048 (2 GB) si no se define, 4096 (4 GB) como mucho. El alumno ve el tamaño máximo antes de
 elegir el archivo, y lo que lo supere se rechaza con un mensaje que dice el límite.
 
 Para que un archivo grande llegue a la API, **lo que hay delante tiene que dejarlo pasar**:
@@ -331,8 +348,7 @@ Para que un archivo grande llegue a la API, **lo que hay delante tiene que dejar
   ModSecurity en él (cPanel → _ModSecurity_).
 - **Cloudflare u otro proxy delante.** Con el proxy de Cloudflare (nube naranja) en los
   planes Free y Pro no pasa nada de más de 100 MB, y la respuesta tiene que llegar en 100 s
-  (error 524). Pon el subdominio de la API en _DNS only_ (nube gris). Con R2, la API tarda
-  además en reenviar el archivo al bucket antes de responder: con 1–2 GB, varios minutos.
+  (error 524). Pon el subdominio de la API en _DNS only_ (nube gris).
 - **Espacio temporal.** Cada archivo se escribe en un temporal mientras llega (y Passenger
   puede guardar otra copia antes de pasárselo a la API). El de la API va a `/tmp`, que en
   algunos alojamientos es pequeño: con archivos grandes define `UPLOAD_TMP_DIR` con una
@@ -382,6 +398,28 @@ Reinicia siempre la API después de cambiar una variable de entorno: se leen al 
 **Despliega siempre las dos partes juntas.** El cliente y la API comparten las rutas y los
 nombres de los campos; un cliente de una versión contra la API de otra deja pantallas sin
 datos.
+
+### Al actualizar a la versión con los archivos sólo en el disco
+
+- **Cloudflare R2 ya no se usa.** Si tenías definidas las variables `R2_*`, copia antes el
+  bucket entero a la carpeta nueva conservando las rutas (`carpeta/nombre`), por ejemplo con
+  `rclone copy r2:lms-uploads /home/usuario/lms-data/uploads`, y borra esas variables.
+- **La carpeta sale de la aplicación.** Si los archivos estaban en `~/lms-api/uploads`,
+  muévelos antes de desplegar y define `STORAGE_DIR` (apartado 8):
+
+  ```bash
+  mkdir -p ~/lms-data && mv ~/lms-api/uploads ~/lms-data/uploads
+  ```
+
+  Si quedaran temporales `*.parcial` de cortes anteriores, puedes borrarlos: nunca fueron
+  archivos completos.
+
+- **Dependencias y esquema.** Ejecuta `npm ci` (se retira el cliente de R2) y
+  `npx prisma db push`, que añade a los certificados la columna `datos_pdf` sin tocar datos.
+- **Logotipo y favicon sólo en PNG o JPG.** Son los formatos que imprime el certificado y que
+  muestran los correos. Uno ya subido en SVG, WebP o GIF se sigue viendo en el campus, pero
+  no sale en los certificados: súbelo de nuevo.
+- **`MAX_UPLOAD_MB` admite como mucho 4096.** Un valor mayor se reduce a ese, con aviso.
 
 ### Al actualizar a la versión con límites por usuario y correos sólo en ASCII
 
@@ -612,7 +650,7 @@ la propia cuenta, y el `db push` la retira sola. Nadie pierde la sesión al actu
 | El navegador bloquea las peticiones por CORS                                                                              | `CORS_ORIGIN` no coincide con el dominio del cliente                                              | Ponlo exacto, con `https://` y sin barra final                                                                                |
 | Las imágenes no cargan                                                                                                    | `API_PUBLIC_URL` sin definir                                                                      | Defínela y reinicia la API                                                                                                    |
 | El tiempo real no conecta                                                                                                 | Proxy agrupando la respuesta                                                                      | Revisa el apartado 1                                                                                                          |
-| Los certificados salen sin logotipo                                                                                       | El logotipo no está subido en esa sede                                                            | Panel → Tema y apariencia, en cada sede                                                                                       |
+| Los certificados salen sin logotipo                                                                                       | El logotipo no está subido en esa sede, o se subió en SVG, WebP o GIF antes de exigirse PNG o JPG | Panel → Tema y apariencia, en cada sede: súbelo en PNG o JPG                                                                  |
 | Un alumno no puede entrar                                                                                                 | Está intentando acceder a la sede equivocada                                                      | Que cambie de sede con el selector de la portada o de la pantalla de acceso                                                   |
 | `prisma db push` se detiene con `errno: 121 "Duplicate key on write or update"`                                           | Prisma intenta volver a crear una clave ajena que ya existe; los pasos anteriores sí se aplicaron | Ejecuta `npx prisma db push` otra vez: aplica lo que falta (también las claves ajenas). Comprueba al final que dice «in sync» |
 | La API no arranca y el registro menciona `@prisma/client` o `.prisma/client`                                              | Falta generar el cliente de base de datos                                                         | `npx prisma generate` en `~/lms-api` y reinicia                                                                               |
@@ -621,3 +659,5 @@ la propia cuenta, y el `db push` la retira sola. Nadie pierde la sesión al actu
 | El certificado acredita «1 hora»                                                                                          | El curso no declara su duración                                                                   | Constructor → el curso → _Duración del programa_                                                                              |
 | Una subida grande falla con «El servidor rechazó el archivo por su tamaño antes de procesarlo» o con un error de conexión | Apache (`LimitRequestBody`), ModSecurity o un proxy la cortan antes de llegar a la API            | Apartado 8, _Tamaño máximo de los archivos_                                                                                   |
 | Una subida grande falla con «Ha ocurrido un error interno» y el registro de la API dice `ENOSPC`                          | No queda espacio en la carpeta temporal                                                           | Define `UPLOAD_TMP_DIR` con una carpeta de la cuenta y reinicia la API                                                        |
+| Una subida falla con «No queda espacio en el servidor para guardar el archivo»                                            | El disco o la cuota de la cuenta están llenos en `STORAGE_DIR`; el registro nombra el archivo     | Libera espacio o amplía la cuota del alojamiento                                                                              |
+| Una subida falla con «El almacenamiento de archivos no está disponible», o `/api/health` dice `storage: error`            | La API no puede escribir en `STORAGE_DIR`: no existe, no es de la cuenta o está en solo lectura   | Revisa la ruta y sus permisos y reinicia la API; el registro de arranque dice qué falló                                       |

@@ -14,11 +14,12 @@ import {
 import { SkipThrottle, Throttle } from '@nestjs/throttler';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import * as path from 'path';
-import { StorageService, ACTIVE_CONTENT_FORMATS } from './storage.service';
+import { StorageService } from './storage.service';
 import { contentDisposition } from './content-disposition';
 import { ByteRange, parseByteRange } from './byte-range';
 import { receiveFile } from './multipart';
-import { Folder, isFolder, isPublicKey, isStorageKey } from './folders';
+import { hasActiveContent } from './file-formats';
+import { Folder, isBrandKey, isFolder, isPublicKey, isStorageKey } from './folders';
 import { uploadLimit } from './upload-limits';
 import { Public } from '../common/decorators/public.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
@@ -29,6 +30,9 @@ import { SettingsService } from '../settings/settings.service';
 /** Carpetas donde puede escribir directamente quien gestiona contenido. */
 const UPLOAD_FOLDERS: Folder[] = ['portadas', 'recursos', 'firmas', 'logos', 'fondos'];
 
+const PUBLIC_CACHE_S = 24 * 60 * 60;
+const RESERVED_CACHE_S = 5 * 60;
+
 @Controller('storage')
 export class StorageController {
   constructor(
@@ -37,11 +41,8 @@ export class StorageController {
   ) {}
 
   /**
-   * Sube un archivo de contenido (portada de curso, material, firma, logotipo).
-   * Las entregas de los alumnos no pasan por aquí: tienen su propio endpoint en
+   * Sube portadas, material, firmas y logotipos. Las entregas tienen su propia ruta en
    * evaluaciones, que además comprueba la matrícula.
-   *
-   * Las imágenes tienen un tope fijo de pocos MB; el material de curso, el general de la sede.
    */
   @Roles('ADMIN', 'TEACHER')
   @Throttle({ default: { ttl: 60_000, limit: 20 } })
@@ -64,18 +65,10 @@ export class StorageController {
   }
 
   /**
-   * Sirve un archivo.
-   *
-   * Es una ruta pública porque las etiquetas `<img>`, `<video>` y `<a>` no pueden enviar
-   * la cabecera `Authorization`. El control de acceso lo aporta la firma:
-   *
-   *  - Material de marca (`logos/`, `portadas/`, `fondos/`, `avatars/`): acceso libre.
-   *  - Entregas, certificados, firmas y material de curso: exigen `exp` y `sig`, que
-   *    genera la API sólo para quien tiene derecho a ver el archivo y caducan en una hora.
-   *
-   * No cuenta para el límite de peticiones: sin cabecera no hay usuario por el que contar,
-   * y por IP una oficina que abre un catálogo de portadas o avanza por un vídeo (una
-   * petición por tramo) agotaría el cupo de todos en segundos.
+   * Sirve un archivo. Es pública porque `<img>`, `<video>` y `<a>` no envían `Authorization`:
+   * el acceso a los reservados lo da la firma (`exp`, `sig`), que la API sólo genera para quien
+   * puede verlos. Sin límite de peticiones: por IP, una oficina que avanza por un vídeo (una
+   * petición por tramo) agotaría el cupo de todos.
    */
   @Public()
   @SkipThrottle()
@@ -100,14 +93,6 @@ export class StorageController {
       );
     }
 
-    // Con CDN configurado se redirige, salvo en los reservados: un CDN público anularía
-    // la caducidad de la firma.
-    const cdnUrl = isPublicKey(key) ? this.storage.directPublicUrl(key) : null;
-    if (cdnUrl) {
-      return reply.redirect(cdnUrl, 302);
-    }
-
-    // Se envía como flujo: el archivo no llega a materializarse en la memoria del servidor.
     const partial = await this.requestedRange(key, req, reply);
     const file = await this.storage.openStream(key, partial?.range);
     if (!file) throw new NotFoundException('Archivo no encontrado.');
@@ -122,19 +107,15 @@ export class StorageController {
       reply.code(HttpStatus.PARTIAL_CONTENT).header('Content-Range', `bytes ${range.start}-${range.end}/${size}`);
     }
     // Con el tamaño declarado, el navegador puede enseñar el progreso de la descarga.
-    if (file.size !== null) reply.header('Content-Length', String(file.size));
+    reply.header('Content-Length', String(file.size));
 
     return reply.send(file.stream);
   }
 
   /**
-   * Fragmento pedido con `Range`: lo usan los reproductores para saltar dentro de un vídeo y
-   * los navegadores para reanudar una descarga.
-   *
-   * Con `If-Range` se envía el archivo entero: las respuestas no llevan validadores (ETag,
-   * Last-Modified), así que no hay forma de saber si el fragmento es del mismo archivo.
-   *
-   * @returns `null` para enviar el archivo entero.
+   * Fragmento pedido con `Range` (saltar en un vídeo, reanudar una descarga), o `null` para
+   * enviarlo entero. Con `If-Range` va entero: sin ETag ni Last-Modified no se sabe si el
+   * fragmento es del mismo archivo.
    * @throws HttpException 416 si el fragmento queda fuera del archivo.
    */
   private async requestedRange(
@@ -165,19 +146,21 @@ export class StorageController {
   }
 
   private securityHeaders(key: string, contentType: string, name: string): Record<string, string> {
-    const extension = path.extname(key).toLowerCase();
-    const risky = (ACTIVE_CONTENT_FORMATS as readonly string[]).includes(extension);
-
     return {
       'Content-Type': contentType,
-      // Impide que el navegador reinterprete el tipo del contenido.
       'X-Content-Type-Options': 'nosniff',
-      // Un SVG se muestra bien dentro de <img> con esta política; si alguien navega
-      // directamente a él, la CSP bloquea cualquier script que llevara dentro.
-      ...(risky ? { 'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; sandbox" } : {}),
+      // Dentro de un <img> el SVG se ve igual; abierto directamente, no ejecuta lo que lleve dentro.
+      ...(hasActiveContent(key) && {
+        'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; sandbox",
+      }),
       'Content-Disposition': contentDisposition('inline', name),
-      // Los archivos reservados no se cachean en intermediarios compartidos.
-      'Cache-Control': isPublicKey(key) ? 'public, max-age=86400' : 'private, max-age=300',
+      'Cache-Control': this.cacheControl(key),
     };
+  }
+
+  /** Ninguna caché compartida guarda lo reservado ni las fotos de perfil, que pueden retirarse. */
+  private cacheControl(key: string): string {
+    const scope = isBrandKey(key) ? 'public' : 'private';
+    return `${scope}, max-age=${isPublicKey(key) ? PUBLIC_CACHE_S : RESERVED_CACHE_S}`;
   }
 }

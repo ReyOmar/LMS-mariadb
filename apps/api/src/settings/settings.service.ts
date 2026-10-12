@@ -11,10 +11,7 @@ import { UpdateSettingsDto } from './dto/update-settings.dto';
 import { UpdateCertificateSettingsDto } from './dto/update-certificate-settings.dto';
 import { UpdateSignatureDto } from './dto/update-signature.dto';
 
-/**
- * Campos que guardan una clave de archivo, con la carpeta de la que tiene que venir. Hay que
- * limpiarlos del almacenamiento al reemplazarse.
- */
+/** Campos que guardan una clave de archivo, con la carpeta de la que tiene que venir. */
 const FILE_FIELDS = [
   ['logoUrl', 'logos'],
   ['faviconUrl', 'logos'],
@@ -287,37 +284,35 @@ export class SettingsService implements OnModuleInit {
 
   // ── Escritura ────────────────────────────────────────────────────────────
 
-  /**
-   * Actualiza la configuración de una sede y borra del almacenamiento los archivos que
-   * hayan quedado reemplazados, para que el logo antiguo no siga ocupando espacio.
-   */
+  /** Actualiza la configuración de una sede y retira del almacenamiento las imágenes sustituidas o quitadas. */
   async updateSettings(country: Country, dto: UpdateSettingsDto): Promise<CountrySettings> {
     const current = await this.loadSettings(country);
+    const images = FILE_FIELDS.map(([field, folder]) => ({ folder, current: current[field], next: dto[field] }));
 
-    // La identidad visual es de la sede: vale un archivo que haya subido cualquiera de sus
-    // administradores, pero no uno de la otra sede.
-    for (const [field, folder] of FILE_FIELDS) {
-      await this.files.assertCanUse(dto[field], current[field], folder, { country });
-    }
-
-    const legalChanged = LEGAL_FIELDS.some((field) => dto[field] !== undefined && dto[field] !== current[field]);
-
-    // Configuración y registro de la versión legal van juntos: una versión publicada sin
-    // constancia de lo que decía no serviría como prueba de lo que se aceptó.
-    const updated = await this.prisma.$transaction(async (tx) => {
-      const saved = await tx.countrySettings.update({
-        where: { country },
-        data: { ...dto, ...(legalChanged && { legalUpdatedAt: new Date() }) },
-      });
-      if (legalChanged) await this.recordLegalVersion(tx, current, saved);
-      return saved;
-    });
-    this.invalidateCache(country);
-
-    await this.deleteReplacedFiles(current, dto);
+    // La identidad visual es de la sede: vale una imagen que subiera cualquiera de sus administradores.
+    const updated = await this.files.replace(images, { country }, () => this.saveSettings(country, current, dto));
 
     this.realtime.emitToCountry('config:updated', this.publicOnly(updated), country);
     return updated;
+  }
+
+  /** Una versión legal publicada sin constancia de lo que decía no probaría lo que se aceptó. */
+  private async saveSettings(
+    country: Country,
+    current: CountrySettings,
+    dto: UpdateSettingsDto,
+  ): Promise<CountrySettings> {
+    const legalChanged = LEGAL_FIELDS.some((field) => dto[field] !== undefined && dto[field] !== current[field]);
+    const saved = await this.prisma.$transaction(async (tx) => {
+      const settings = await tx.countrySettings.update({
+        where: { country },
+        data: { ...dto, ...(legalChanged && { legalUpdatedAt: new Date() }) },
+      });
+      if (legalChanged) await this.recordLegalVersion(tx, current, settings);
+      return settings;
+    });
+    this.invalidateCache(country);
+    return saved;
   }
 
   /**
@@ -350,21 +345,6 @@ export class SettingsService implements OnModuleInit {
     return this.getCertificateSettings(country);
   }
 
-  /**
-   * Limpia los archivos sustituidos. Se hace después de guardar: si el borrado falla, la
-   * configuración ya quedó correcta y sólo sobra un archivo huérfano, que queda anotado en
-   * el registro del servidor.
-   */
-  private async deleteReplacedFiles(current: CountrySettings, dto: UpdateSettingsDto): Promise<void> {
-    const replaced = FILE_FIELDS.map(([field]) => {
-      const previous = current[field];
-      const newValue = dto[field];
-      return newValue !== undefined && previous && previous !== newValue ? previous : null;
-    });
-
-    await this.files.deleteUnreferenced(replaced);
-  }
-
   private invalidateCache(country: Country): void {
     this.cache.delete(country);
   }
@@ -388,7 +368,7 @@ export class SettingsService implements OnModuleInit {
   }
 
   /**
-   * Guarda la firma del examinador y retira del almacenamiento la imagen anterior.
+   * Guarda la firma del examinador y retira del almacenamiento la imagen sustituida o quitada.
    * `signatureUrl` llega como clave de la carpeta `firmas`, tal y como la devolvió la subida.
    */
   async updateSignature(userGuid: string, dto: UpdateSignatureDto) {
@@ -397,17 +377,15 @@ export class SettingsService implements OnModuleInit {
       select: { signatureUrl: true },
     });
     if (!current) throw new NotFoundException('Usuario no encontrado.');
-    await this.files.assertCanUse(dto.signatureUrl, current.signatureUrl, 'firmas', { uploader: userGuid });
+    const image = { folder: 'firmas' as const, current: current.signatureUrl, next: dto.signatureUrl };
 
-    const updated = await this.prisma.user.update({
-      where: { guid: userGuid },
-      data: dto,
-      select: { signatureUrl: true, signatureName: true, signatureTitle: true, firstName: true, lastName: true },
-    });
-
-    if (dto.signatureUrl !== undefined && current.signatureUrl !== dto.signatureUrl) {
-      await this.files.deleteUnreferenced([current.signatureUrl]);
-    }
+    const updated = await this.files.replace([image], { uploader: userGuid }, () =>
+      this.prisma.user.update({
+        where: { guid: userGuid },
+        data: dto,
+        select: { signatureUrl: true, signatureName: true, signatureTitle: true, firstName: true, lastName: true },
+      }),
+    );
 
     return {
       ...updated,

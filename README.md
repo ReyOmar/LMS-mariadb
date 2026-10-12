@@ -104,16 +104,16 @@ plantillas de correo. La configuración de cada sede la crea la API al arrancar.
 
 ### Comandos
 
-| Comando | Qué hace |
-|---|---|
-| `npm run dev` | API y cliente con recarga en caliente |
-| `npm run build` | Compila ambos para producción (el cliente queda en `apps/client/prod`) |
-| `npm start` | Arranca lo compilado, igual que en producción |
-| `npm run typecheck` | Comprobación de tipos de los dos proyectos |
-| `npm run lint` | Análisis estático de los dos proyectos, sin avisos permitidos |
-| `npm test` | Pruebas de la API y del cliente |
-| `npm run db:push` | Sincroniza el esquema con la base de datos |
-| `npm run db:seed` | Datos iniciales (idempotente) |
+| Comando             | Qué hace                                                               |
+| ------------------- | ---------------------------------------------------------------------- |
+| `npm run dev`       | API y cliente con recarga en caliente                                  |
+| `npm run build`     | Compila ambos para producción (el cliente queda en `apps/client/prod`) |
+| `npm start`         | Arranca lo compilado, igual que en producción                          |
+| `npm run typecheck` | Comprobación de tipos de los dos proyectos                             |
+| `npm run lint`      | Análisis estático de los dos proyectos, sin avisos permitidos          |
+| `npm test`          | Pruebas de la API y del cliente                                        |
+| `npm run db:push`   | Sincroniza el esquema con la base de datos                             |
+| `npm run db:seed`   | Datos iniciales (idempotente)                                          |
 
 > **Para el `build`, primero para el `dev`.** Los dos escriben en `apps/client/.next`. Si
 > compilas con el servidor de desarrollo levantado, éste se queda pidiendo piezas que la
@@ -150,7 +150,7 @@ entera son 381 páginas de 17 ms de mediana, la última igual de rápida que la 
 
 Dos cosas lo sostienen y no se pueden tocar por separado:
 
-- Un **orden total**: fecha *y* identificador. Sin el desempate, dos altas del mismo
+- Un **orden total**: fecha _y_ identificador. Sin el desempate, dos altas del mismo
   milisegundo pueden repetirse o perderse al pasar de página.
 - Un **índice con ese mismo orden** (`usuarios(pais, rol, created_at)`). Sin él la base
   ordena la sede entera en cada página y da igual cómo se pagine.
@@ -164,12 +164,11 @@ El código común está en `apps/api/src/common/domain/pagination.ts`.
 
 ## Almacenamiento de archivos
 
-Dos destinos posibles, con la misma clave (`carpeta/nombre`) en ambos:
+Los archivos se guardan en el disco del servidor, bajo `STORAGE_DIR` y con la clave
+`carpeta/nombre`. En producción esa carpeta vive fuera de la aplicación, para que los
+despliegues no la toquen; sólo en desarrollo, si no se define, se usa `apps/api/uploads`.
 
-- **Cloudflare R2**, si están definidas las variables `R2_*`.
-- **Disco local** (`apps/api/uploads`) en caso contrario.
-
-Y dos clases de archivo:
+Hay dos clases de archivo:
 
 - **Públicos** (`logos/`, `portadas/`, `fondos/`, `avatars/`): material de marca, se sirven
   sin más.

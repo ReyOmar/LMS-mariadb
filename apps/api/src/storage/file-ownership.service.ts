@@ -10,17 +10,30 @@ import { Folder, isStorageKey } from './folders';
  */
 export type KeyOwner = { uploader: string } | { country: Country };
 
+/** Un campo de una fila que guarda la clave de un archivo ya subido. */
+export interface FileFieldChange {
+  folder: Folder;
+  current: string | null | undefined;
+  /** `null` lo quita; `undefined` lo deja como está. */
+  next: string | null | undefined;
+}
+
+type MaybeKey = string | null | undefined;
+
 /** Claves por consulta al buscar quién las usa: una lista `IN` acotada. */
 const REFERENCE_BATCH = 500;
+
+/** La clave anterior de un campo, si la operación la sustituye por otra o la quita. */
+function replacedKey(current: MaybeKey, next: MaybeKey): string | null {
+  return next !== undefined && current && current !== next ? current : null;
+}
 
 /**
  * Reglas para usar y retirar archivos subidos.
  *
- * Una fila (curso, recurso, firma, configuración) sólo puede pasar a apuntar a un archivo
- * que haya subido quien la guarda, según el registro de subidas: si no, bastaría con
- * escribir la clave de un archivo ajeno —de otro profesor o de la otra sede— para
- * descargarlo y, al sustituirlo, borrarlo. Y un archivo sólo se borra cuando ya no lo usa
- * ninguna fila.
+ * Una fila sólo puede pasar a apuntar a un archivo que haya subido quien la guarda: si no,
+ * bastaría con escribir la clave de un archivo ajeno para descargarlo y, al sustituirlo,
+ * borrarlo. Y un archivo sólo se borra cuando ya no lo usa ninguna fila.
  */
 @Injectable()
 export class FileOwnershipService {
@@ -32,22 +45,46 @@ export class FileOwnershipService {
   ) {}
 
   /**
-   * Comprueba que una fila puede pasar a guardar la clave `next` en un campo de la carpeta
-   * indicada.
+   * Guarda una fila que sustituye o quita archivos ya subidos y retira del almacenamiento los
+   * que deja de usar. Nada se guarda si `owner` no puede usar alguna de las claves nuevas.
+   */
+  async replace<T>(changes: FileFieldChange[], owner: KeyOwner, save: () => Promise<T>): Promise<T> {
+    for (const { next, current, folder } of changes) {
+      await this.assertCanUse(next, current, folder, owner);
+    }
+
+    const saved = await save();
+    await this.deleteUnreferenced(changes.map(({ current, next }) => replacedKey(current, next)));
+    return saved;
+  }
+
+  /**
+   * Guarda la fila que pasa a usar un archivo subido en esta misma operación y retira el que
+   * usaba antes. Si no se puede guardar, retira el nuevo: ninguna fila lo usaría.
    *
-   * Si la clave no cambia no se revisa: los archivos subidos antes de existir el registro no
-   * tienen anotación y deben seguir funcionando donde ya estaban.
+   * @param previousKeyOf Clave que guardaba la fila antes de `save`.
+   */
+  async adoptUpload<T>(uploadedKey: string, save: () => Promise<T>, previousKeyOf: (saved: T) => MaybeKey): Promise<T> {
+    let saved: T;
+    try {
+      saved = await save();
+    } catch (error) {
+      await this.storage.deleteFiles([uploadedKey]);
+      throw error;
+    }
+
+    await this.deleteUnreferenced([replacedKey(previousKeyOf(saved), uploadedKey)]);
+    return saved;
+  }
+
+  /**
+   * Comprueba que una fila puede pasar a guardar la clave `next` en un campo de `folder`. Si la
+   * clave no cambia no se revisa: los archivos anteriores al registro de subidas siguen valiendo.
    *
-   * @param current Lo que guarda ahora esa fila en ese campo.
    * @throws BadRequestException si la clave no consta como subida o es de otra carpeta.
    * @throws ForbiddenException si la subió otra persona o es de otra sede.
    */
-  async assertCanUse(
-    next: string | null | undefined,
-    current: string | null | undefined,
-    folder: Folder,
-    owner: KeyOwner,
-  ): Promise<void> {
+  async assertCanUse(next: MaybeKey, current: MaybeKey, folder: Folder, owner: KeyOwner): Promise<void> {
     if (!next || next === current) return;
 
     const file = await this.prisma.storedFile.findUnique({ where: { key: next } });
@@ -64,14 +101,10 @@ export class FileOwnershipService {
   }
 
   /**
-   * Borra los archivos indicados que ya no use ninguna fila.
-   *
-   * Se llama después de guardar la sustitución o el borrado: una misma clave puede estar en
-   * otra fila —la misma portada en dos cursos, o datos anteriores al registro— y ese archivo
-   * se conserva. Nunca falla: si no se puede comprobar, no se borra nada y queda anotado en el
-   * registro del servidor.
+   * Borra los archivos indicados que ya no use ninguna fila; uno puede seguir en otra (la misma
+   * portada en dos cursos). Nunca falla: si no puede comprobarlo, no borra nada y lo registra.
    */
-  async deleteUnreferenced(keys: (string | null | undefined)[]): Promise<void> {
+  async deleteUnreferenced(keys: MaybeKey[]): Promise<void> {
     const candidates = [...new Set(keys.filter((key): key is string => isStorageKey(key)))];
     if (candidates.length === 0) return;
 
@@ -86,15 +119,13 @@ export class FileOwnershipService {
     }
   }
 
-  /** De las claves dadas, las que guarda alguna fila. */
   private async referencedKeys(keys: string[]): Promise<Set<string>> {
     const referenced = new Set<string>();
 
     for (let start = 0; start < keys.length; start += REFERENCE_BATCH) {
       const among = { in: keys.slice(start, start + REFERENCE_BATCH) };
 
-      // Una consulta tras otra y no a la vez: es una limpieza, y siete a la vez ocuparían
-      // casi todo el pool mientras otras peticiones esperan conexión.
+      // Una tras otra: es una limpieza, y siete a la vez ocuparían casi todo el pool de conexiones.
       const rows = [
         await this.prisma.course.findMany({ where: { coverImage: among }, select: { coverImage: true } }),
         await this.prisma.resource.findMany({

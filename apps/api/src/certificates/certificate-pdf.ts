@@ -9,8 +9,8 @@ const PDFDocument = require('pdfkit');
 const WIDTH = 842;
 const HEIGHT = 595;
 
-/** Datos con los que se compone el certificado. */
-export interface CertificateData {
+/** Lo que dice el certificado. */
+export interface CertificateContent {
   studentName: string;
   courseTitle: string;
   startedAt: Date;
@@ -38,18 +38,15 @@ export interface CertificateData {
   showEnrollmentDate: boolean;
   signatureName: string | null;
   signatureTitle: string | null;
-  /**
-   * Imágenes ya cargadas en memoria. Se reciben como `Buffer` y no como ruta de disco
-   * porque con el almacenamiento en R2 los archivos no existen en el sistema de ficheros.
-   */
+}
+
+/** El contenido del certificado con el logotipo de la sede y la firma del examinador ya leídos. */
+export interface CertificateData extends CertificateContent {
   logo: Buffer | null;
   signature: Buffer | null;
 }
 
-/**
- * Compone el certificado y lo devuelve como PDF en memoria, para que quien llama decida el
- * destino (R2 o disco) sin copias locales intermedias.
- */
+/** Compone el certificado en memoria; quien lo pide decide dónde guardarlo. */
 export function composeCertificate(data: CertificateData): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const doc = new PDFDocument({
@@ -81,21 +78,7 @@ function draw(doc: PDFKit.PDFDocument, data: CertificateData): void {
   const secondary = data.secondaryColor;
 
   doc.rect(0, 0, WIDTH, HEIGHT).fill('#FAFAFA');
-
-  // Marco académico doble
-  doc
-    .rect(24, 24, WIDTH - 48, HEIGHT - 48)
-    .lineWidth(3)
-    .stroke(primary);
-  doc
-    .rect(30, 30, WIDTH - 60, HEIGHT - 60)
-    .lineWidth(1)
-    .stroke(secondary);
-
-  corner(doc, 36, 36, primary, false, false);
-  corner(doc, WIDTH - 36, 36, secondary, true, false);
-  corner(doc, 36, HEIGHT - 36, secondary, false, true);
-  corner(doc, WIDTH - 36, HEIGHT - 36, primary, true, true);
+  drawFrame(doc, primary, secondary);
 
   const yHeader = drawHeader(doc, data, primary);
   const ySeparator = yHeader + 10;
@@ -168,6 +151,23 @@ function draw(doc: PDFKit.PDFDocument, data: CertificateData): void {
       align: 'center',
       width: WIDTH,
     });
+}
+
+/** Marco doble con escuadras en las esquinas. */
+function drawFrame(doc: PDFKit.PDFDocument, primary: string, secondary: string): void {
+  doc
+    .rect(24, 24, WIDTH - 48, HEIGHT - 48)
+    .lineWidth(3)
+    .stroke(primary);
+  doc
+    .rect(30, 30, WIDTH - 60, HEIGHT - 60)
+    .lineWidth(1)
+    .stroke(secondary);
+
+  corner(doc, 36, 36, primary, false, false);
+  corner(doc, WIDTH - 36, 36, secondary, true, false);
+  corner(doc, 36, HEIGHT - 36, secondary, false, true);
+  corner(doc, WIDTH - 36, HEIGHT - 36, primary, true, true);
 }
 
 /** Dibuja el logotipo o, si no hay, el nombre de la plataforma. Devuelve la Y siguiente. */
