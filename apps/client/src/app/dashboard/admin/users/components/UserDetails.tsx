@@ -2,43 +2,28 @@
 
 import Link from 'next/link';
 import { BookOpen, Loader2, Mail, Pencil, Trash2, X } from 'lucide-react';
-import type { CourseStatus, User } from '@/types/models';
-import { AccountAvatar } from './AccountAvatar';
+import type { User } from '@/types/models';
+import { UserAvatar } from '@/components/ui/UserAvatar';
 import { LastAccess } from '@/components/ui/LastAccess';
-import { managesCourses, ROLE_DISPLAY, type AssignedCourse } from './accounts';
+import { CourseStatusBadge } from '@/components/ui/CourseStatusBadge';
+import { ROLE_STYLE } from '@/lib/role-style';
+import { USER_ROLE_LABEL } from '@/lib/labels';
 import { shortDate } from '@/lib/dates';
-import { COURSE_STATUS_LABEL } from '@/lib/labels';
 import { useDialog } from '@/hooks/useDialog';
+import { courseDate, coursesHeading, emptyCoursesLink, type AssignedCourse } from './accounts';
 
 interface Props {
   user: User;
   courses: AssignedCourse[];
   loadingCourses: boolean;
-  /** La propia cuenta no se puede eliminar desde aquí. */
   isSelf: boolean;
   onClose: () => void;
   onEdit: (user: User) => void;
   onDelete: (user: User) => void;
 }
 
-const STATUS_COLOR: Record<CourseStatus, string> = {
-  PUBLISHED: 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400',
-  DRAFT: 'bg-amber-500/10 text-amber-700 dark:text-amber-400',
-  ARCHIVED: 'bg-muted text-muted-foreground',
-};
-
-/**
- * Ficha de una cuenta: sus datos y los cursos que imparte o cursa.
- *
- * Quien crea cursos ve «Cursos Creados» y quien los recibe «Cursos Matriculados»; es la
- * misma lista leída desde los dos lados de la relación.
- */
 export function UserDetails({ user, courses, loadingCourses, isSelf, onClose, onEdit, onDelete }: Props) {
-  const isAdmin = user.role === 'ADMIN';
-  const createsCourses = managesCourses(user.role);
-  const coursesHeading = createsCourses ? 'Cursos creados' : 'Cursos matriculados';
-  // Del examinador se puede saltar a su asignación; del resto no hay adónde ir.
-  const coursesNavigable = user.role === 'TEACHER';
+  const heading = coursesHeading(user.role);
   const { dialogProps, titleId } = useDialog({ onClose });
 
   return (
@@ -53,7 +38,7 @@ export function UserDetails({ user, courses, loadingCourses, isSelf, onClose, on
       >
         <div className="flex items-center justify-between mb-6">
           <div className="flex items-center gap-4">
-            <AccountAvatar user={user} size="lg" />
+            <UserAvatar person={user} role={user.role} size="lg" />
             <div>
               <h2 id={titleId} className="text-xl font-bold">
                 {user.firstName} {user.lastName}
@@ -95,9 +80,9 @@ export function UserDetails({ user, courses, loadingCourses, isSelf, onClose, on
           </div>
         </div>
 
-        <div className={`grid ${isAdmin ? 'grid-cols-2 sm:grid-cols-3' : 'grid-cols-2'} gap-4 mb-6`}>
+        <div className={`grid ${user.role === 'ADMIN' ? 'grid-cols-2 sm:grid-cols-3' : 'grid-cols-2'} gap-4 mb-6`}>
           <Field title="Rol">
-            <p className={`text-sm font-bold ${ROLE_DISPLAY[user.role].text}`}>{ROLE_DISPLAY[user.role].label}</p>
+            <p className={`text-sm font-bold ${ROLE_STYLE[user.role].text}`}>{USER_ROLE_LABEL[user.role]}</p>
           </Field>
 
           <Field title="Fecha de registro">
@@ -118,14 +103,14 @@ export function UserDetails({ user, courses, loadingCourses, isSelf, onClose, on
             </div>
           </Field>
 
-          <Field title={coursesHeading}>
+          <Field title={heading}>
             <p className="text-sm font-bold">{loadingCourses ? '...' : courses.length}</p>
           </Field>
         </div>
 
         <div>
           <h3 className="text-sm font-bold uppercase text-muted-foreground tracking-wider mb-3 flex items-center gap-2">
-            <BookOpen className="h-4 w-4" /> {coursesHeading}
+            <BookOpen className="h-4 w-4" /> {heading}
           </h3>
 
           {loadingCourses ? (
@@ -133,62 +118,63 @@ export function UserDetails({ user, courses, loadingCourses, isSelf, onClose, on
               <Loader2 className="h-4 w-4 animate-spin" /> Cargando cursos…
             </div>
           ) : courses.length === 0 ? (
-            <div className="text-center py-6 bg-muted/10 rounded-xl border border-border/50">
-              <p className="text-sm text-muted-foreground">
-                Este usuario no tiene cursos {createsCourses ? 'creados' : 'matriculados'}.
-              </p>
-              {createsCourses && (
-                <Link
-                  href="/dashboard/course-builder"
-                  className="text-xs text-primary font-bold hover:underline mt-2 inline-block"
-                >
-                  Ir a gestión de cursos para {isAdmin ? 'crear' : 'asignar'} →
-                </Link>
-              )}
-            </div>
+            <NoCourses user={user} heading={heading} />
           ) : (
             <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
-              {courses.map((course) => {
-                const rowClass = `flex items-center justify-between p-3 bg-muted/10 rounded-xl border border-border/30 transition-colors ${coursesNavigable ? 'cursor-pointer hover:border-primary hover:bg-primary/5' : 'hover:border-primary/30'}`;
-                const content = (
-                  <>
-                    <div className="flex items-center gap-3">
-                      <div className="h-8 w-8 bg-primary/10 rounded-lg flex items-center justify-center">
-                        <BookOpen className="h-4 w-4 text-primary" />
-                      </div>
-                      <div>
-                        <p className="text-sm font-bold">{course.title}</p>
-                        <p className="text-xs text-muted-foreground">
-                          {coursesNavigable ? 'Asignado' : isAdmin ? 'Creado' : 'Matriculado'}:{' '}
-                          {shortDate(course.assignedAt || course.updatedAt || course.createdAt)}
-                        </p>
-                      </div>
-                    </div>
-                    <span className={`text-xs font-bold px-2 py-1 rounded-lg ${STATUS_COLOR[course.status]}`}>
-                      {COURSE_STATUS_LABEL[course.status]}
-                    </span>
-                  </>
-                );
-
-                return coursesNavigable ? (
-                  <Link
-                    key={course.guid}
-                    href={`/dashboard/admin/course-assignment?course=${course.guid}`}
-                    className={rowClass}
-                  >
-                    {content}
-                  </Link>
-                ) : (
-                  <div key={course.guid} className={rowClass}>
-                    {content}
-                  </div>
-                );
-              })}
+              {courses.map((course) => (
+                <CourseRow key={course.guid} user={user} course={course} />
+              ))}
             </div>
           )}
         </div>
       </div>
     </div>
+  );
+}
+
+function NoCourses({ user, heading }: { user: User; heading: string }) {
+  const link = emptyCoursesLink(user.role);
+  return (
+    <div className="text-center py-6 bg-muted/10 rounded-xl border border-border/50">
+      <p className="text-sm text-muted-foreground">Esta cuenta no tiene {heading.toLowerCase()}.</p>
+      {link && (
+        <Link href={link.href} className="text-xs text-primary font-bold hover:underline mt-2 inline-block">
+          {link.label}
+        </Link>
+      )}
+    </div>
+  );
+}
+
+/** Del examinador se puede saltar a la asignación de cada curso; del resto no hay adónde ir. */
+function CourseRow({ user, course }: { user: User; course: AssignedCourse }) {
+  const navigable = user.role === 'TEACHER';
+  const { label, date } = courseDate(user.role, course);
+  const className = `flex items-center justify-between p-3 bg-muted/10 rounded-xl border border-border/30 transition-colors ${navigable ? 'cursor-pointer hover:border-primary hover:bg-primary/5' : 'hover:border-primary/30'}`;
+
+  const content = (
+    <>
+      <div className="flex items-center gap-3">
+        <div className="h-8 w-8 bg-primary/10 rounded-lg flex items-center justify-center">
+          <BookOpen className="h-4 w-4 text-primary" />
+        </div>
+        <div>
+          <p className="text-sm font-bold">{course.title}</p>
+          <p className="text-xs text-muted-foreground">
+            {label}: {shortDate(date)}
+          </p>
+        </div>
+      </div>
+      <CourseStatusBadge status={course.status} className="text-xs px-2 py-1 rounded-lg" />
+    </>
+  );
+
+  return navigable ? (
+    <Link href={`/dashboard/admin/course-assignment?course=${encodeURIComponent(course.guid)}`} className={className}>
+      {content}
+    </Link>
+  ) : (
+    <div className={className}>{content}</div>
   );
 }
 

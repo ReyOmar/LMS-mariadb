@@ -1,24 +1,42 @@
 import type { CourseStatus, UserRole } from '@/types/models';
 import { matchesSearch, plural } from '@/lib/text';
 
-/** Lo que la pantalla de asignación necesita de cada curso. */
+export interface Person {
+  guid: string;
+  firstName: string;
+  lastName: string;
+  email: string;
+  photoUrl?: string | null;
+}
+
+export interface Candidate extends Person {
+  /** Ya tiene el certificado de este curso: matricularlo de nuevo lo hace empezar de cero. */
+  certified: boolean;
+}
+
+export interface EnrolledStudent extends Person {
+  enrolledAt: string;
+}
+
+/** Responsable del curso: un examinador o, si no se ha asignado a nadie, un administrador. */
+export interface CourseHolder {
+  guid: string;
+  firstName: string;
+  lastName: string;
+  role: UserRole;
+}
+
 export interface AssignableCourse {
   guid: string;
   title: string;
   status: CourseStatus;
   teacherGuid: string;
-  /** Responsable del curso: un examinador o, si no se ha asignado a nadie, un administrador. */
-  teacher: { guid: string; firstName: string; lastName: string; role: UserRole };
+  teacher: CourseHolder;
 }
 
 export type AssignmentFilter = 'all' | 'assigned' | 'unassigned';
 
-/**
- * ¿Tiene el curso un examinador asignado?
- *
- * Todo curso tiene responsable —es obligatorio en la base de datos—, así que «sin asignar»
- * no es un `teacherGuid` vacío: es un curso que sigue a cargo de un administrador.
- */
+/** Todo curso tiene responsable: «sin asignar» es un curso que sigue a cargo de un administrador. */
 export function hasExaminer(course: Pick<AssignableCourse, 'teacher'>): boolean {
   return course.teacher.role === 'TEACHER';
 }
@@ -26,38 +44,29 @@ export function hasExaminer(course: Pick<AssignableCourse, 'teacher'>): boolean 
 /** Candidatos que el servidor entrega de una vez: con la lista llena hay que afinar la búsqueda. */
 export const CANDIDATES_SHOWN = 50;
 
-/** Con menos caracteres no se busca: una sola letra casa con casi toda la sede. */
-export const MIN_SEARCH_LENGTH = 2;
-
-/** Texto con el que se piden los candidatos; vacío si no llega al mínimo, y entonces no se filtra. */
-export function candidateSearch(typed: string): string {
-  const text = typed.trim();
-  return text.length >= MIN_SEARCH_LENGTH ? text : '';
+export function fullName(person: Pick<Person, 'firstName' | 'lastName'>): string {
+  return `${person.firstName} ${person.lastName}`;
 }
 
-/** ¿Hay algo escrito, pero todavía no basta para buscar? */
-export function isSearchTooShort(typed: string): boolean {
-  return typed.trim().length > 0 && candidateSearch(typed) === '';
-}
-
-/**
- * Aviso antes de volver a matricular a quien ya se certificó: empieza de cero —el servidor
- * reinicia su avance y archiva sus entregas— y no puede ocurrir sin que quien matricula lo
- * confirme.
- */
 export function restartWarning(names: readonly string[]): string {
   if (names.length === 1) {
     return (
-      `${names[0]} ya tiene el certificado de este curso. Si lo matriculas de nuevo, empezará el curso desde ` +
-      'cero: su avance se reinicia y sus entregas anteriores se archivan. El certificado emitido se conserva.'
+      `${names[0]} ya tiene el certificado de este curso. Si lo matriculas de nuevo, empezará desde cero: su ` +
+      'avance se reinicia; sus calificaciones anteriores quedan en el historial (los archivos ya se retiraron al ' +
+      'emitir su certificado). El certificado emitido se conserva.'
     );
   }
   return (
-    `Ya tienen el certificado de este curso: ${names.join(', ')}. Si los matriculas de nuevo, empezarán el ` +
-    'curso desde cero: su avance se reinicia y sus entregas anteriores se archivan. Los certificados emitidos ' +
-    'se conservan.'
+    `Ya tienen el certificado de este curso: ${names.join(', ')}. Si los matriculas de nuevo, empezarán desde ` +
+    'cero: su avance se reinicia; sus calificaciones anteriores quedan en el historial (los archivos ya se ' +
+    'retiraron al emitir sus certificados). Los certificados emitidos se conservan.'
   );
 }
+
+export const UNENROLL_WARNING =
+  'Perderá el acceso al curso. Su avance y sus entregas se conservan: si vuelves a matricularlo antes de que ' +
+  'obtenga el certificado, retomará el curso donde lo dejó. Un cuestionario que tenga abierto se cierra y ese ' +
+  'intento cuenta como gastado.';
 
 export interface EnrollmentFailure {
   name: string;
@@ -72,10 +81,7 @@ function nameList(names: readonly string[]): string {
   return `${names.slice(0, NAMES_PER_REASON).join(', ')} y ${names.length - NAMES_PER_REASON} más`;
 }
 
-/**
- * Resumen de una matrícula en bloque: cuántos entraron y quiénes no, agrupados por motivo
- * para que un mismo rechazo (el cupo lleno, por ejemplo) no se repita una vez por alumno.
- */
+/** Resumen de una matrícula en bloque, con los rechazos agrupados por motivo para no repetirlos. */
 export function batchSummary(
   added: number,
   failures: readonly EnrollmentFailure[],
@@ -95,7 +101,6 @@ export function batchSummary(
   return { title, message };
 }
 
-/** Cursos que casan con la búsqueda por título y con el filtro de asignación. */
 export function filterCourses(
   courses: readonly AssignableCourse[],
   search: string,
@@ -107,4 +112,9 @@ export function filterCourses(
     if (filter === 'unassigned') return !hasExaminer(course);
     return true;
   });
+}
+
+export function directoryCount(shown: number, total: number): string {
+  if (shown === total) return `${total} ${plural(total, 'curso', 'cursos')} en total`;
+  return `${shown} de ${total} ${plural(total, 'curso', 'cursos')}`;
 }

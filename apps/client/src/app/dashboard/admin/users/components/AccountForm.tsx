@@ -29,13 +29,7 @@ const LABEL_CLASS = 'block text-xs font-bold text-muted-foreground uppercase tra
 const INPUT_CLASS =
   'w-full px-3 py-2.5 bg-background border border-border rounded-xl text-sm font-medium focus:border-primary focus:ring-1 focus:ring-primary outline-none transition-all';
 
-/**
- * Alta y edición de una cuenta de la sede.
- *
- * En el alta, la contraseña temporal la genera el servidor y le llega a la persona por
- * correo; en el primer acceso tiene que sustituirla. En la edición el correo no se toca:
- * identifica la cuenta en la recuperación de contraseña.
- */
+/** El correo no se edita: identifica la cuenta al recuperar la contraseña. */
 export function AccountForm({ account, initialRole = 'STUDENT', isSelf = false, onClose, onSaved }: Props) {
   const { showAlert, showConfirmation, notify } = useAlerts();
   const [form, setForm] = useState({
@@ -52,8 +46,7 @@ export function AccountForm({ account, initialRole = 'STUDENT', isSelf = false, 
   const lastName = form.lastName.trim();
   const roleChanges = editing && form.role !== account?.role;
   const unchanged = editing && firstName === account?.firstName && lastName === account?.lastName && !roleChanges;
-  // Lo que impide ofrecer algún rol, para explicarlo bajo el selector.
-  const roleNotice = account
+  const roleRestriction = account
     ? ROLE_OPTIONS.map((role) => roleChangeProblem(account, role, isSelf)).find(Boolean)
     : null;
 
@@ -80,7 +73,7 @@ export function AccountForm({ account, initialRole = 'STUDENT', isSelf = false, 
     setSaving(true);
     try {
       const { data } = account
-        ? await api.patch<{ message: string; user: User }>(`/auth/users/${account.guid}`, {
+        ? await api.patch<{ message: string; user: User }>(`/auth/users/${encodeURIComponent(account.guid)}`, {
             firstName,
             lastName,
             ...(roleChanges ? { role: form.role } : {}),
@@ -196,7 +189,7 @@ export function AccountForm({ account, initialRole = 'STUDENT', isSelf = false, 
                 </option>
               ))}
             </select>
-            {roleNotice && <p className="text-xs text-muted-foreground mt-1.5">{roleNotice}</p>}
+            {roleRestriction && <p className="text-xs text-muted-foreground mt-1.5">{roleRestriction}</p>}
             {roleChanges && (
               <p className="text-xs text-amber-700 dark:text-amber-400 mt-1.5">
                 Cambiar el rol cierra su sesión: tendrá que volver a entrar.

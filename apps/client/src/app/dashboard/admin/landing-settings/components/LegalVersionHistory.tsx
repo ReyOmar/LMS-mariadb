@@ -6,6 +6,7 @@ import api, { errorMessage } from '@/lib/api';
 import { useAlerts } from '@/contexts/AlertContext';
 import { useConfig } from '@/contexts/ConfigContext';
 import { legalVersionLabel } from '@/lib/legal';
+import type { EditableField } from '../landing-fields';
 
 interface LegalVersionSummary {
   id: number;
@@ -13,30 +14,18 @@ interface LegalVersionSummary {
   current: boolean;
 }
 
-/** Lo que decía una versión: cada campo legal tal como se publicó; nulo = el de serie. */
+/** Cada campo legal tal como se publicó; `null` es el texto de serie. */
 type LegalVersionDetail = Record<string, string | null>;
 
-interface Field {
-  field: string;
-  label: string;
-  type?: string;
-}
-
-/**
- * Versiones publicadas de los textos legales de la sede, sólo para consultarlas.
- *
- * Son la prueba de lo que aceptó cada persona: el consentimiento guarda la versión, y aquí
- * se ve lo que decía. Los textos de cada una se piden al abrirla.
- */
-export function LegalVersionHistory({ fields }: { fields: Field[] }) {
+/** Versiones legales publicadas, de sólo lectura: son la prueba de lo que aceptó cada persona. */
+export function LegalVersionHistory({ fields }: { fields: EditableField[] }) {
   const { config } = useConfig();
   const { notify } = useAlerts();
   const [versions, setVersions] = useState<LegalVersionSummary[] | null>(null);
   const [openId, setOpenId] = useState<number | null>(null);
   const [details, setDetails] = useState<Record<number, LegalVersionDetail>>({});
 
-  // Se vuelve a pedir al publicarse una versión nueva.
-  const currentVersion = config?.legalUpdatedAt;
+  const publishedVersion = config?.legalUpdatedAt;
   useEffect(() => {
     let active = true;
     api
@@ -50,7 +39,7 @@ export function LegalVersionHistory({ fields }: { fields: Field[] }) {
     return () => {
       active = false;
     };
-  }, [currentVersion, notify]);
+  }, [publishedVersion, notify]);
 
   const toggle = async (id: number) => {
     if (openId === id) {
@@ -63,7 +52,7 @@ export function LegalVersionHistory({ fields }: { fields: Field[] }) {
       const { data } = await api.get<LegalVersionDetail>(`/settings/legal-versions/${id}`);
       setDetails((prev) => ({ ...prev, [id]: data }));
     } catch (error) {
-      // Sólo se cierra si sigue abierta ésta: entretanto se pudo abrir otra.
+      // Entretanto se pudo abrir otra versión, que se deja abierta.
       setOpenId((current) => (current === id ? null : current));
       notify.error('No se pudo abrir la versión', errorMessage(error));
     }

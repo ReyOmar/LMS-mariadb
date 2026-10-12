@@ -1,8 +1,8 @@
 'use client';
 
 import { useDialog } from '@/hooks/useDialog';
-import type { TransferState } from './accounts';
 import { plural } from '@/lib/text';
+import { deleteAccountWarning, type TransferState } from './accounts';
 
 interface Props {
   transfer: TransferState;
@@ -11,12 +11,7 @@ interface Props {
   onConfirm: () => void;
 }
 
-/**
- * A quién pasan los cursos de una cuenta que se va a eliminar.
- *
- * Un curso no puede quedarse sin responsable —la relación es obligatoria en la base—, así
- * que este paso no es un aviso sino un requisito: sin destino no se borra nada.
- */
+/** Un curso no puede quedarse sin responsable: antes de borrar la cuenta se elige a quién pasan. */
 export function CourseTransfer({ transfer, onPickTarget, onCancel, onConfirm }: Props) {
   const { user, targets, selectedTarget, loading } = transfer;
   const courseCount = user.taughtCourses ?? 0;
@@ -32,6 +27,7 @@ export function CourseTransfer({ transfer, onPickTarget, onCancel, onConfirm }: 
           Esta cuenta es responsable de {courseCount} {plural(courseCount, 'curso', 'cursos')}. Antes de eliminarla,
           elige quién se hará cargo de ellos: los cursos, sus alumnos y sus entregas se conservan.
         </p>
+        <p className="text-sm text-muted-foreground mb-5 leading-relaxed">{deleteAccountWarning(user.role)}</p>
 
         {loading ? (
           <p className="text-sm text-muted-foreground">Buscando destinos disponibles…</p>

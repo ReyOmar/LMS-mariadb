@@ -1,7 +1,10 @@
-import { variableData } from './preview';
+import { variableData } from './variables';
 
 /** Marca con la que se reconoce una etiqueta de variable dentro del editor. */
 const ATTRIBUTE = 'data-variable';
+
+const TAGS_OR_TEXT = /<[^>]*>|[^<]+/g;
+const VARIABLE = /\{\{(\w+)\}\}/g;
 
 /** La etiqueta de una variable, lista para insertarse donde esté el cursor. */
 export function variableLabelHtml(variable: string): string {
@@ -15,32 +18,18 @@ export function variableLabelHtml(variable: string): string {
 }
 
 /**
- * Prepara la plantilla para editarla viéndola.
- *
- * Cada `{{variable}}` del texto se convierte en una etiqueta que no se puede escribir por
- * dentro, de modo que se inserta y se borra como una sola pieza. Se enseña el nombre de la
- * variable y no su valor de ejemplo a propósito: editando sobre el ejemplo, al guardar
- * quedaría «Juan» grabado en la plantilla en lugar de `{{nombre}}`.
- *
- * Las variables que están **dentro de una etiqueta HTML** —`href="{{url_campus}}"`— se
- * dejan tal cual: meter ahí un `<span>` con comillas cierra el atributo antes de tiempo y
- * descuadra el enlace. Además no son texto visible, así que no hay nada que enseñar.
+ * Convierte cada `{{variable}}` del texto en una etiqueta que se inserta y se borra de una pieza.
+ * Las que van dentro de un atributo (`href="{{url_campus}}"`) se dejan: un `<span>` ahí rompería el enlace.
  */
 export function toEditable(html: string): string {
-  // Se recorre alternando etiquetas y texto; sólo el texto se toca.
-  return html.replace(/<[^>]*>|[^<]+/g, (chunk) =>
-    chunk.startsWith('<')
-      ? chunk
-      : chunk.replace(/\{\{(\w+)\}\}/g, (_, variable: string) => variableLabelHtml(variable)),
+  return html.replace(TAGS_OR_TEXT, (chunk) =>
+    chunk.startsWith('<') ? chunk : chunk.replace(VARIABLE, (_, variable: string) => variableLabelHtml(variable)),
   );
 }
 
 /**
- * Una etiqueta de variable, venga con los atributos en el orden que venga.
- *
- * El navegador los reordena y reescribe mientras se escribe encima, así que lo único
- * estable es la marca. Dentro nunca hay otra etiqueta —sólo el nombre legible—, de modo
- * que `[^<]*` basta y no se desboca.
+ * El navegador reordena los atributos al editar, así que la etiqueta se reconoce sólo por su marca.
+ * Dentro nunca hay otra etiqueta: `[^<]*` no se desboca.
  */
 const LABEL_PATTERN = new RegExp(`<span\\b[^>]*\\b${ATTRIBUTE}="([^"]+)"[^>]*>[^<]*</span>`, 'gi');
 
@@ -49,13 +38,7 @@ export function toTemplate(editedHtml: string): string {
   return editedHtml.replace(LABEL_PATTERN, (_, variable: string) => `{{${variable}}}`);
 }
 
-/**
- * El asunto que se guarda, a partir de lo editado.
- *
- * El asunto viaja como texto plano, así que además de devolver las etiquetas a su forma
- * `{{variable}}` hay que quitar el marcado que el navegador añade al escribir y devolver
- * los espacios rígidos a espacios normales.
- */
+/** El asunto viaja como texto plano: sin el marcado que añade el navegador ni espacios rígidos. */
 export function subjectText(editedHtml: string): string {
   return toTemplate(editedHtml)
     .replace(/<[^>]*>/g, '')

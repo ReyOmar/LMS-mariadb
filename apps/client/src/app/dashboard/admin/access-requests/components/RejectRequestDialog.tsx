@@ -4,7 +4,7 @@ import { FormEvent, useState } from 'react';
 import { useDialog } from '@/hooks/useDialog';
 import type { AccessRequest } from '@/types/models';
 
-/** El mismo tope que admite la API. */
+/** El tope que admite la API. */
 const MAX_REASON_LENGTH = 500;
 
 interface Props {
@@ -14,12 +14,6 @@ interface Props {
   onConfirm: (reason: string) => void;
 }
 
-/**
- * Rechazo de una solicitud de acceso, con un motivo opcional.
- *
- * La persona recibe la decisión por correo, y el motivo va en él: un rechazo sin
- * explicación sólo deja la duda de si volver a intentarlo.
- */
 export function RejectRequestDialog({ request, onCancel, onConfirm }: Props) {
   const [reason, setReason] = useState('');
   const { dialogProps, titleId } = useDialog<HTMLFormElement>({ onClose: onCancel });
