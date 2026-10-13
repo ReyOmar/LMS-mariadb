@@ -1,45 +1,23 @@
-import type { SubmissionToGrade } from '@/types/models';
+import type { Course } from '@/types/models';
 import { averageScore, toScore } from '@/lib/grading';
-import { displayTitle } from '@/lib/resources';
-import { COLOR, type Slice, type RangeBucket } from '@/components/ui/charts';
+import { displayTitle, isQuiz } from '@/lib/resources';
+import { quizSummary } from '@/lib/quiz-config';
+import { COLOR, type Slice } from '@/components/ui/charts';
+import { twoWayBreakdown, type ThresholdSummary } from '../../components/summary-charts';
+import type { ExaminerSubmission } from '../../types';
 
-/**
- * Cómo se resumen los intentos de cuestionario.
- *
- * La diferencia con las tareas es que aquí un alumno deja **varios intentos** del mismo
- * cuestionario, y lo que cuenta para todas las cifras —promedio, tasa de aprobación,
- * reparto— es su **mejor nota**, no cada intento por separado. Confundir ambas cosas es el
- * error fácil: contar intentos infla el total y hunde el promedio de quien repitió.
- *
- * Esas cifras las calcula el servidor sobre el curso entero
- * (`/assessments/examiner/quizzes/summary`), porque la lista llega por páginas y contarlas
- * aquí describiría lo cargado. Lo que queda aquí es dar forma a lo que hay en pantalla; y
- * puede hacerlo con confianza porque la página avanza **por alumno**: de cada uno vienen
- * todos sus intentos, así que su historial nunca está partido.
- *
- * Son funciones puras para poder razonarlas sin montar la pantalla.
- */
+// Cuenta la mejor nota de cada alumno, no cada intento: contar intentos infla el total y hunde el promedio.
 
 export type AttemptFilter = 'all' | 'passed' | 'failed';
 
-/** Cifras de un curso, tal y como las cuenta la base sobre la mejor nota de cada alumno. */
-export interface CourseQuizSummary {
-  courseGuid: string;
-  title: string;
-  coverImage: string | null;
-  /** Nota mínima para aprobar en este curso. */
-  threshold: number;
-  /** Frontera del tramo intermedio: por debajo, la nota ni se acercó a aprobar. */
-  borderline: number;
-  /** Intentos registrados, contando los repetidos de un mismo alumno. */
-  attempts: number;
+/** Cifras de un curso, contadas por la base sobre la mejor nota de cada alumno. */
+export interface CourseQuizSummary extends ThresholdSummary {
   /** Alumnos con al menos un intento corregido. Es la base de las demás cifras. */
   assessed: number;
   passedCount: number;
   failed: number;
   /** Media de las mejores notas, en la escala del sistema. */
   average: number;
-  scores: { low: number; mid: number; high: number };
 }
 
 /** La marca de cuestionario es interna; el examinador ve el título sin ella. */
@@ -47,13 +25,12 @@ export function stripQuizMarker(title: string | null | undefined): string {
   return displayTitle({ type: 'ASSIGNMENT', title: title ?? 'Sin título' }).trim();
 }
 
-/** Nota de un intento, o `null` si todavía no se corrigió. */
-export function getAttemptScore(submission: Pick<SubmissionToGrade, 'status' | 'score'>): number | null {
-  return submission.status === 'GRADED' ? toScore(submission.score) : null;
+export function getAttemptScore(submission: Pick<ExaminerSubmission, 'score'>): number | null {
+  return toScore(submission.score);
 }
 
-/** La mejor de varias notas, ignorando los intentos sin corregir. */
-export function bestScore(submissions: SubmissionToGrade[]): number | null {
+/** La mejor de varias notas, ignorando los intentos sin nota. */
+export function bestScore(submissions: ExaminerSubmission[]): number | null {
   let best: number | null = null;
   for (const submission of submissions) {
     const score = getAttemptScore(submission);
@@ -67,11 +44,7 @@ export function passRate(course: Pick<CourseQuizSummary, 'assessed' | 'passedCou
   return course.assessed > 0 ? Math.round((course.passedCount / course.assessed) * 100) : 0;
 }
 
-/**
- * Cifras de todos los cursos juntos, para la portada del panel.
- * El promedio se pondera por alumnos evaluados: la media de las medias daría el mismo peso
- * a un curso de diez personas que a uno de mil.
- */
+/** Cifras de todos los cursos, con el promedio ponderado por alumnos evaluados y no por curso. */
 export function globalStats(courses: CourseQuizSummary[]) {
   let assessed = 0;
   let passedCount = 0;
@@ -88,42 +61,22 @@ export function globalStats(courses: CourseQuizSummary[]) {
     passedCount,
     failed: assessed - passedCount,
     average: assessed > 0 ? sum / assessed : 0,
-    rate: assessed > 0 ? Math.round((passedCount / assessed) * 100) : 0,
+    rate: passRate({ assessed, passedCount }),
   };
 }
 
-/**
- * Reparto de las mejores notas en tres tramos.
- * Los tres números vienen contados de la base; aquí sólo se les pone nombre y color.
- */
-export function scoreDistribution(
-  course: Pick<CourseQuizSummary, 'threshold' | 'borderline' | 'scores'>,
-): RangeBucket[] {
-  const { threshold, borderline, scores } = course;
-
-  return [
-    { name: `Por debajo de ${borderline}`, count: scores.low, fill: COLOR.failed },
-    { name: `Entre ${borderline} y ${threshold - 1}`, count: scores.mid, fill: COLOR.pending },
-    { name: `${threshold} o más (aprobado)`, count: scores.high, fill: COLOR.passed },
-  ].filter((range) => range.count > 0);
-}
-
-/** Aprobados frente a reprobados. Sin notas devuelve una porción gris. */
 export function resultBreakdown(passedCount: number, failed: number): Slice[] {
-  if (passedCount + failed === 0) {
-    return [{ name: 'Sin calificar', value: 1, color: COLOR.empty }];
-  }
-
-  return [
+  return twoWayBreakdown(
     { name: 'Aprobados', value: passedCount, color: COLOR.passed },
     { name: 'Reprobados', value: failed, color: COLOR.failed },
-  ].filter((slice) => slice.value > 0);
+    'Sin calificar',
+  );
 }
 
 export interface StudentWithAttempts {
-  student: SubmissionToGrade['student'];
+  student: ExaminerSubmission['student'];
   /** Del más reciente al más antiguo, que es el orden en que se revisa. */
-  attempts: SubmissionToGrade[];
+  attempts: ExaminerSubmission[];
   bestScore: number | null;
   attemptCount: number;
 }
@@ -131,6 +84,7 @@ export interface StudentWithAttempts {
 interface QuizWithStudents {
   /** Identifica el grupo: dos cuestionarios pueden llamarse igual. */
   key: string;
+  assignmentGuid: string | null;
   assignmentTitle: string;
   students: StudentWithAttempts[];
   average: number;
@@ -149,17 +103,14 @@ function averageOf(scores: number[]): number {
   return averageScore(scores) ?? 0;
 }
 
-/**
- * Ordena los intentos en módulo → cuestionario → alumno, que es como los revisa el examinador.
- *
- * Se agrupa por identificador y no por título: dos cuestionarios que se llamen igual —o dos
- * módulos «Introducción»— son grupos distintos, y la mejor nota de un alumno no puede salir
- * de un cuestionario que no es el suyo.
- */
-export function groupByModuleAndQuiz(submissions: SubmissionToGrade[]): ModuleWithQuizzes[] {
+/** Ordena los intentos en módulo → cuestionario → alumno, por identificador y no por título. */
+export function groupByModuleAndQuiz(submissions: ExaminerSubmission[]): ModuleWithQuizzes[] {
   const byModule = new Map<
     string,
-    { title: string; assignments: Map<string, { title: string; students: Map<string, SubmissionToGrade[]> }> }
+    {
+      title: string;
+      assignments: Map<string, { guid: string | null; title: string; students: Map<string, ExaminerSubmission[]> }>;
+    }
   >();
 
   for (const submission of submissions) {
@@ -172,7 +123,11 @@ export function groupByModuleAndQuiz(submissions: SubmissionToGrade[]): ModuleWi
     }
     const assignments = byModule.get(moduleKey)!.assignments;
     if (!assignments.has(assignmentKey)) {
-      assignments.set(assignmentKey, { title: stripQuizMarker(submission.assignmentTitle), students: new Map() });
+      assignments.set(assignmentKey, {
+        guid: submission.assignmentGuid,
+        title: stripQuizMarker(submission.assignmentTitle),
+        students: new Map(),
+      });
     }
     const students = assignments.get(assignmentKey)!.students;
     if (!students.has(student)) students.set(student, []);
@@ -183,7 +138,7 @@ export function groupByModuleAndQuiz(submissions: SubmissionToGrade[]): ModuleWi
     const moduleScores: number[] = [];
 
     const assignments = Array.from(assignmentsMap.entries()).map(
-      ([assignmentKey, { title: assignmentTitle, students: studentsMap }]) => {
+      ([assignmentKey, { guid: assignmentGuid, title: assignmentTitle, students: studentsMap }]) => {
         const assignmentScores: number[] = [];
 
         const students: StudentWithAttempts[] = Array.from(studentsMap.values()).map((attempts) => {
@@ -201,14 +156,57 @@ export function groupByModuleAndQuiz(submissions: SubmissionToGrade[]): ModuleWi
           };
         });
 
-        // De mejor a peor nota: quien necesita atención queda al final de la lista.
         students.sort((a, b) => (b.bestScore ?? 0) - (a.bestScore ?? 0));
         moduleScores.push(...assignmentScores);
 
-        return { key: assignmentKey, assignmentTitle, students, average: averageOf(assignmentScores) };
+        return { key: assignmentKey, assignmentGuid, assignmentTitle, students, average: averageOf(assignmentScores) };
       },
     );
 
     return { key: moduleKey, moduleTitle, assignments, average: averageOf(moduleScores) };
   });
+}
+
+/** Intentos de un alumno: la página avanza por alumno y de cada uno llegan todos los suyos. */
+export interface StudentAttempts {
+  /** El del alumno, para que una página nueva sustituya entero lo que había de él. */
+  guid: string;
+  attempts: ExaminerSubmission[];
+}
+
+export function attemptsByStudent(attempts: ExaminerSubmission[]): StudentAttempts[] {
+  const byStudent = new Map<string, ExaminerSubmission[]>();
+  for (const attempt of attempts) {
+    const student = attempt.student?.guid ?? attempt.guid;
+    const loaded = byStudent.get(student);
+    if (loaded) loaded.push(attempt);
+    else byStudent.set(student, [attempt]);
+  }
+  return Array.from(byStudent, ([guid, list]) => ({ guid, attempts: list }));
+}
+
+/** Lo cargado sin el intento retirado: si el alumno llegó con «Ver más», la primera página no lo trae. */
+export function withoutAttempt(rows: StudentAttempts[], attemptGuid: string): StudentAttempts[] {
+  return rows.map((row) => ({ ...row, attempts: row.attempts.filter((attempt) => attempt.guid !== attemptGuid) }));
+}
+
+/** Intentos permitidos de cada cuestionario del curso; 0 son ilimitados. */
+export function attemptLimits(course: Pick<Course, 'modules'>): Map<string, number> {
+  const quizzes = (course.modules ?? []).flatMap((courseModule) => courseModule.resources ?? []).filter(isQuiz);
+  return new Map(quizzes.map((quiz) => [quiz.guid, quizSummary(quiz.quizConfig)?.allowedAttempts ?? 0]));
+}
+
+/**
+ * Intento que se retira para devolverle uno al alumno: el más reciente, y sólo si agotó los
+ * permitidos sin aprobar y su vuelta sigue abierta, que es lo único que acepta la API.
+ */
+export function releasableAttempt(
+  student: StudentWithAttempts,
+  threshold: number,
+  allowedAttempts: number | undefined,
+): ExaminerSubmission | null {
+  const latest = student.attempts[0];
+  const passed = student.bestScore !== null && student.bestScore >= threshold;
+  const exhausted = allowedAttempts !== undefined && allowedAttempts > 0 && student.attemptCount >= allowedAttempts;
+  return latest && !latest.roundClosed && !passed && exhausted ? latest : null;
 }

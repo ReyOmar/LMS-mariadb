@@ -1,20 +1,15 @@
-const BUILDER = '/dashboard/course-builder';
+import { BUILDER_PATH } from './paths';
 
 /**
- * Si pulsar un enlace del campus deja abierto el mismo curso del constructor, y no hace falta
- * avisar de que sigue en borrador: otra parte de su temario (`?course=<curso>&resource=…`), el
- * editor de uno de sus recursos (`/dashboard/course-builder/<curso>/modules/…`) o la descarga
- * de un archivo, que baja sin mover la pantalla.
- *
- * El constructor a secas —el enlace «Gestión de cursos» del menú— vuelve al catálogo, y con otro
- * curso abre ése: los dos cierran el que se está editando, así que cuentan como salir.
+ * Si un enlace deja abierto el mismo curso —su temario, el editor de un recurso suyo o una descarga—
+ * y no hay que avisar de que sigue en borrador. El constructor sin curso o con otro lo cierran.
  */
 export function staysInCourse(destination: string, courseGuid: string): boolean {
-  // El destino es ruta, consulta y fragmento; el origen se pone sólo para poder leerlo.
+  // El origen sólo hace falta para poder leer ruta y consulta con `URL`.
   const { pathname, searchParams } = new URL(`http://campus.invalid${destination}`);
   const path = pathname.replace(/\/$/, '');
 
   if (path.includes('/storage/download/')) return true;
-  if (path === BUILDER) return searchParams.get('course') === courseGuid;
-  return path.startsWith(`${BUILDER}/${courseGuid}/`);
+  if (path === BUILDER_PATH) return searchParams.get('course') === courseGuid;
+  return path.startsWith(`${BUILDER_PATH}/${courseGuid}/`);
 }

@@ -1,4 +1,5 @@
-import { attemptsLabel, newResource, quizSummary, resourceKindOf } from './resources';
+import type { Resource } from '@/types/models';
+import { attemptsLabel, isResourceKind, isUnconfigured, newResource, resourceKindOf } from './resources';
 
 describe('resourceKindOf', () => {
   it('distingue un cuestionario de una tarea por su marca en el título', () => {
@@ -12,28 +13,37 @@ describe('resourceKindOf', () => {
   });
 });
 
-describe('newResource', () => {
-  it('un cuestionario nace como tarea marcada', () => {
-    const created = newResource('QUIZ');
-    expect(created.type).toBe('ASSIGNMENT');
-    expect(resourceKindOf(created)).toBe('QUIZ');
+describe('isResourceKind', () => {
+  it('sólo acepta los tipos que ofrece el menú, como el de la dirección del editor', () => {
+    expect(isResourceKind('QUIZ')).toBe(true);
+    expect(isResourceKind('VIDEO')).toBe(false);
+    expect(isResourceKind(null)).toBe(false);
   });
 });
 
-describe('quizSummary', () => {
-  it('resume intentos, tiempo y número de preguntas', () => {
-    const config = JSON.stringify({ allowedAttempts: 2, timeLimitMinutes: 30, questions: [{}, {}, {}] });
-    expect(quizSummary(config)).toEqual({ allowedAttempts: 2, timeLimitMinutes: 30, questions: 3 });
+describe('newResource', () => {
+  it('un cuestionario nace como tarea', () => {
+    expect(newResource('QUIZ').type).toBe('ASSIGNMENT');
+    expect(newResource('PARAGRAPH').type).toBe('TEXT');
+  });
+});
+
+describe('isUnconfigured', () => {
+  const resource = (fields: Partial<Resource>) => ({ type: 'ASSIGNMENT', title: 'Informe', ...fields }) as Resource;
+
+  it('un cuestionario sin preguntas no se puede completar', () => {
+    expect(isUnconfigured(resource({ title: '[QUIZ] Normativa', quizConfig: null }))).toBe(true);
+    expect(isUnconfigured(resource({ title: '[QUIZ] Normativa', quizConfig: '{"questions":[]}' }))).toBe(true);
   });
 
-  it('sin configuración, o con una dañada, no hay resumen en lugar de romper la vista', () => {
-    expect(quizSummary(null)).toBeNull();
-    expect(quizSummary('{no es json')).toBeNull();
-    expect(quizSummary('null')).toBeNull();
+  it('un enlace sin dirección no lleva a ninguna parte', () => {
+    expect(isUnconfigured(resource({ type: 'LINK', contentHtml: '' }))).toBe(true);
+    expect(isUnconfigured(resource({ type: 'LINK', contentHtml: 'https://youtu.be/abc' }))).toBe(false);
   });
 
-  it('los campos que faltan cuentan como cero', () => {
-    expect(quizSummary('{}')).toEqual({ allowedAttempts: 0, timeLimitMinutes: 0, questions: 0 });
+  it('un texto o una tarea siempre se pueden completar', () => {
+    expect(isUnconfigured(resource({ type: 'TEXT', contentHtml: '' }))).toBe(false);
+    expect(isUnconfigured(resource({}))).toBe(false);
   });
 });
 

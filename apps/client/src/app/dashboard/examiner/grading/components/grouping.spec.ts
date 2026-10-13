@@ -1,6 +1,7 @@
 import {
+  closeRoundOf,
   groupByModuleAndAssignment,
-  scoreDistribution,
+  filteredTotal,
   normalizeTypedScore,
   gradedPercent,
   statusBreakdown,
@@ -8,17 +9,7 @@ import {
   gradingStart,
   type CourseSummary,
 } from './grouping';
-import type { SubmissionToGrade } from '@/types/models';
-
-/**
- * Lo que la pantalla de calificación calcula por su cuenta.
- *
- * La lista de entregas llega por páginas, así que aquí no se cuenta nada del curso: las
- * cifras vienen del servidor y estas funciones sólo les dan forma o agrupan lo que hay
- * cargado. Lo que se fija aquí es que no vuelvan a confundirse las dos cosas —una cifra de
- * curso sacada de una página sería falsa— y que las etiquetas de la gráfica sigan el
- * umbral de cada curso en vez de un número escrito a mano.
- */
+import type { ExaminerSubmission } from '../../types';
 
 const COURSE: CourseSummary = {
   courseGuid: 'curso-1',
@@ -32,39 +23,14 @@ const COURSE: CourseSummary = {
   scores: { low: 200, mid: 400, high: 600 },
 };
 
-function submission(guid: string, status: string, module: string, assignment: string): SubmissionToGrade {
+function submission(guid: string, status: string, module: string, assignment: string): ExaminerSubmission {
   return {
     guid,
     status,
     moduleTitle: module,
     assignmentTitle: assignment,
-  } as SubmissionToGrade;
+  } as ExaminerSubmission;
 }
-
-describe('scoreDistribution', () => {
-  it('describe los tramos respecto al umbral del curso, no a números sueltos', () => {
-    const ranges = scoreDistribution(COURSE);
-
-    expect(ranges.map((t) => t.name)).toEqual(['Por debajo de 60', 'Entre 60 y 79', '80 o más (aprobado)']);
-  });
-
-  it('sigue al umbral cuando el curso lo cambia', () => {
-    const ranges = scoreDistribution({ ...COURSE, threshold: 70, borderline: 53 });
-
-    expect(ranges.map((t) => t.name)).toEqual(['Por debajo de 53', 'Entre 53 y 69', '70 o más (aprobado)']);
-  });
-
-  it('usa los recuentos del servidor tal cual: son del curso entero, no de la página', () => {
-    expect(scoreDistribution(COURSE).map((t) => t.count)).toEqual([200, 400, 600]);
-  });
-
-  it('oculta los tramos vacíos para no dibujar barras de altura cero', () => {
-    const ranges = scoreDistribution({ ...COURSE, scores: { low: 0, mid: 0, high: 5 } });
-
-    expect(ranges).toHaveLength(1);
-    expect(ranges[0].name).toBe('80 o más (aprobado)');
-  });
-});
 
 describe('statusBreakdown', () => {
   it('reparte pendientes y calificadas', () => {
@@ -185,6 +151,19 @@ describe('normalizeTypedScore', () => {
   it('con la coma recién escrita deja seguir tecleando el decimal', () => {
     expect(normalizeTypedScore('85,')).toBe('85.');
   });
+
+  it('la nota máxima no admite decimales: 100,5 no se puede guardar', () => {
+    expect(normalizeTypedScore('100,5')).toBe('100');
+    expect(normalizeTypedScore('100.')).toBe('100');
+  });
+});
+
+describe('filteredTotal', () => {
+  it('toma del servidor el recuento que corresponde al filtro', () => {
+    expect(filteredTotal(COURSE, 'all')).toBe(3000);
+    expect(filteredTotal(COURSE, 'pending')).toBe(1800);
+    expect(filteredTotal(COURSE, 'graded')).toBe(1200);
+  });
 });
 
 describe('gradingStart', () => {
@@ -210,5 +189,29 @@ describe('gradingStart', () => {
       feedback: '',
       previous: null,
     });
+  });
+});
+
+describe('closeRoundOf', () => {
+  const delivered = (guid: string, student: string): ExaminerSubmission =>
+    ({
+      ...submission(guid, 'GRADED', 'Módulo 1', 'Informe'),
+      student: { guid: student },
+      fileName: 'informe.pdf',
+      fileUrl: `/api/storage/download/${guid}`,
+      filePurged: false,
+      roundClosed: false,
+    }) as ExaminerSubmission;
+
+  it('al certificarse el alumno, sus entregas cargadas pierden la descarga y conservan el nombre del archivo', () => {
+    const [retired] = closeRoundOf([delivered('e1', 'ana')], 'ana');
+
+    expect(retired).toMatchObject({ fileName: 'informe.pdf', fileUrl: null, filePurged: true, roundClosed: true });
+  });
+
+  it('no toca las entregas de los demás alumnos', () => {
+    const other = delivered('e2', 'beto');
+
+    expect(closeRoundOf([other], 'ana')).toEqual([other]);
   });
 });

@@ -1,33 +1,25 @@
 import {
   groupByModuleAndQuiz,
   globalStats,
-  scoreDistribution,
   bestScore,
   getAttemptScore,
   resultBreakdown,
   passRate,
   stripQuizMarker,
+  releasableAttempt,
+  attemptsByStudent,
+  attemptLimits,
+  withoutAttempt,
   type CourseQuizSummary,
 } from './results';
-import type { SubmissionToGrade } from '@/types/models';
-
-/**
- * Lo que la pantalla de pruebas calcula por su cuenta.
- *
- * El error fácil de este panel es **contar intentos donde hay que contar personas**: quien
- * repite un cuestionario deja varias filas, y sumarlas infla el total y hunde el promedio.
- * Las cifras del curso las cuenta el servidor sobre la mejor nota de cada alumno;
- * aquí queda el mismo criterio aplicado a lo que hay en pantalla, y la media global, que
- * es donde volvería a colarse el error si se promediaran promedios.
- */
+import type { Course } from '@/types/models';
+import type { ExaminerSubmission } from '../../types';
 
 const COURSE: CourseQuizSummary = {
   courseGuid: 'curso-1',
   title: 'Manejo defensivo',
-  coverImage: null,
   threshold: 80,
   borderline: 60,
-  attempts: 1500,
   assessed: 1000,
   passedCount: 449,
   failed: 551,
@@ -46,7 +38,8 @@ function attempt(guid: string, student: string, score: number | null, minute: nu
     // Por defecto el identificador sale del título; las pruebas de homónimos lo fijan aparte.
     assignmentGuid: `guid-${assignment}`,
     student: { guid: student, firstName: 'Ana', lastName: 'Díaz', email: 'ana@pesv.test' },
-  } as unknown as SubmissionToGrade;
+    roundClosed: false,
+  } as unknown as ExaminerSubmission;
 }
 
 describe('stripQuizMarker', () => {
@@ -104,22 +97,6 @@ describe('globalStats', () => {
 
   it('sin cursos devuelve ceros, no NaN', () => {
     expect(globalStats([])).toEqual({ assessed: 0, passedCount: 0, failed: 0, average: 0, rate: 0 });
-  });
-});
-
-describe('scoreDistribution', () => {
-  it('describe los tramos respecto al umbral del curso', () => {
-    expect(scoreDistribution(COURSE).map((t) => t.name)).toEqual([
-      'Por debajo de 60',
-      'Entre 60 y 79',
-      '80 o más (aprobado)',
-    ]);
-  });
-
-  it('el tramo alto es exactamente el recuento de aprobados del servidor', () => {
-    const highBucket = scoreDistribution(COURSE).find((t) => t.name.includes('aprobado'));
-
-    expect(highBucket?.count).toBe(COURSE.passedCount);
   });
 });
 
@@ -193,5 +170,80 @@ describe('groupByModuleAndQuiz', () => {
     const [module] = groupByModuleAndQuiz([...loaded, attempt('i5', 'ana', 100, 5, '[QUIZ] Señalización')]);
 
     expect(module.assignments.map((t) => t.assignmentTitle)).toEqual(['Normativa', 'Señalización']);
+  });
+});
+
+describe('releasableAttempt', () => {
+  const studentOf = (attempts: ExaminerSubmission[]) => groupByModuleAndQuiz(attempts)[0].assignments[0].students[0];
+  const exhausted = () => studentOf([attempt('i1', 'ana', 40, 1), attempt('i2', 'ana', 60, 2)]);
+
+  it('a quien agotó sus intentos sin aprobar le libera uno retirando el más reciente', () => {
+    expect(releasableAttempt(exhausted(), 80, 2)?.guid).toBe('i2');
+  });
+
+  it('a quien aún le quedan intentos, o los tiene ilimitados, no le libera ninguno', () => {
+    expect(releasableAttempt(exhausted(), 80, 3)).toBeNull();
+    expect(releasableAttempt(exhausted(), 80, 0)).toBeNull();
+  });
+
+  it('sin saber cuántos intentos admite el cuestionario no ofrece liberar ninguno', () => {
+    expect(releasableAttempt(exhausted(), 80, undefined)).toBeNull();
+  });
+
+  it('a quien ya aprobó no le libera ninguno', () => {
+    const student = studentOf([attempt('i1', 'ana', 90, 1), attempt('i2', 'ana', 40, 2)]);
+
+    expect(releasableAttempt(student, 80, 2)).toBeNull();
+  });
+
+  it('con la vuelta ya certificada no le libera ninguno', () => {
+    const certified = { ...attempt('i2', 'ana', 60, 2), roundClosed: true };
+    const student = studentOf([attempt('i1', 'ana', 40, 1), certified]);
+
+    expect(releasableAttempt(student, 80, 2)).toBeNull();
+  });
+});
+
+describe('attemptsByStudent', () => {
+  it('junta los intentos de cada alumno bajo su identificador, que es la unidad de la página', () => {
+    const rows = attemptsByStudent([
+      attempt('i1', 'ana', 40, 1),
+      attempt('i2', 'beto', 50, 2),
+      attempt('i3', 'ana', 70, 3),
+    ]);
+
+    expect(rows.map((row) => [row.guid, row.attempts.map((item) => item.guid)])).toEqual([
+      ['ana', ['i1', 'i3']],
+      ['beto', ['i2']],
+    ]);
+  });
+});
+
+describe('withoutAttempt', () => {
+  it('quita el intento retirado y deja los demás del alumno', () => {
+    const rows = attemptsByStudent([attempt('i1', 'ana', 40, 1), attempt('i2', 'ana', 60, 2)]);
+
+    expect(withoutAttempt(rows, 'i2')[0].attempts.map((item) => item.guid)).toEqual(['i1']);
+  });
+});
+
+describe('attemptLimits', () => {
+  it('lee los intentos permitidos de cada cuestionario y deja fuera las tareas', () => {
+    const course = {
+      modules: [
+        {
+          resources: [
+            { guid: 'q1', type: 'ASSIGNMENT', title: '[QUIZ] Normativa', quizConfig: '{"allowedAttempts":2}' },
+            { guid: 'q2', type: 'ASSIGNMENT', title: '[QUIZ] Señales', quizConfig: null },
+            { guid: 't1', type: 'ASSIGNMENT', title: 'Informe', quizConfig: null },
+          ],
+        },
+      ],
+    } as unknown as Course;
+
+    expect([...attemptLimits(course)]).toEqual([
+      ['q1', 2],
+      ['q2', 0],
+    ]);
   });
 });

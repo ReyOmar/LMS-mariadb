@@ -1,0 +1,59 @@
+import type { Course } from '@/types/models';
+import { changedFields, deletionWarning, publishBlocker, unpublishWarning } from './course-changes';
+
+const COURSE = { guid: 'c1', title: 'Manejo defensivo', durationHours: 8, maxStudents: null } as Course;
+
+describe('changedFields', () => {
+  it('sólo envía lo que difiere del curso tal como está ahora', () => {
+    expect(changedFields(COURSE, { title: 'Manejo defensivo', durationHours: 10 })).toEqual({ durationHours: 10 });
+  });
+
+  it('sin diferencias no hay nada que enviar', () => {
+    expect(changedFields(COURSE, { title: 'Manejo defensivo', maxStudents: null })).toBeNull();
+  });
+});
+
+describe('publishBlocker', () => {
+  const withResources = (resources: object[]) => ({ modules: [{ resources }] }) as unknown as Course;
+
+  it('no deja publicar un cuestionario sin preguntas ni un enlace sin dirección, y los nombra', () => {
+    const course = withResources([
+      { type: 'ASSIGNMENT', title: '[QUIZ] Normativa', quizConfig: null },
+      { type: 'LINK', title: 'Vídeo de señales', contentHtml: '' },
+      { type: 'TEXT', title: 'Lectura', contentHtml: '' },
+    ]);
+
+    expect(publishBlocker(course)).toContain('«Normativa», «Vídeo de señales»');
+  });
+
+  it('con todo completo se puede publicar', () => {
+    const course = withResources([
+      {
+        type: 'ASSIGNMENT',
+        title: '[QUIZ] Normativa',
+        quizConfig: JSON.stringify({ allowedAttempts: 1, timeLimitMinutes: 0, questions: [{}] }),
+      },
+      { type: 'LINK', title: 'Vídeo', contentHtml: 'https://youtu.be/abc' },
+    ]);
+
+    expect(publishBlocker(course)).toBeNull();
+  });
+});
+
+describe('avisos con la cifra de matriculados', () => {
+  it('al borrar el curso dice cuántos perderán el acceso y que los certificados se conservan', () => {
+    const warning = deletionWarning({ modules: [] }, 3);
+
+    expect(warning).toContain('Ahora hay 3 estudiantes matriculados, que perderán el acceso.');
+    expect(warning).toContain('Los certificados ya emitidos se conservan');
+  });
+
+  it('al pasar a Borrador avisa del mantenimiento sin prometer que nada cambia para los alumnos', () => {
+    expect(unpublishWarning(1)).toContain('verán «Curso en mantenimiento»');
+    expect(unpublishWarning(1)).toContain('1 estudiante matriculado, que perderá el acceso hasta entonces');
+  });
+
+  it('si no se pudo saber cuántos hay, el aviso va sin la cifra', () => {
+    expect(unpublishWarning(null)).not.toContain('Ahora hay');
+  });
+});

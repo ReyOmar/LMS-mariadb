@@ -1,10 +1,19 @@
 'use client';
 
-import type { Dispatch, SetStateAction } from 'react';
-import { CheckCircle, Clock, GripVertical, Plus, RefreshCcw, Trash2 } from 'lucide-react';
-import type { OptionWithAnswer, QuestionWithAnswers, QuizConfig } from '@/types/models';
-
-const newId = () => crypto.randomUUID();
+import type { Dispatch, ReactNode, SetStateAction } from 'react';
+import { CheckCircle, Clock, Plus, RefreshCcw, Trash2 } from 'lucide-react';
+import type { QuestionWithAnswers, QuizConfig } from '@/types/models';
+import {
+  QUIZ_LIMITS,
+  addOption,
+  addQuestion,
+  clampSetting,
+  markCorrect,
+  removeOption,
+  removeQuestion,
+  setOptionText,
+  setPrompt,
+} from './quiz-editing';
 
 interface Props {
   config: QuizConfig;
@@ -13,34 +22,6 @@ interface Props {
 
 /** Ajustes y preguntas de un cuestionario, con la opción correcta de cada una. */
 export function QuizEditor({ config, onChange }: Props) {
-  const updateQuestion = (questionId: string, change: (question: QuestionWithAnswers) => QuestionWithAnswers) =>
-    onChange((prev) => ({
-      ...prev,
-      questions: prev.questions.map((q) => (q.id === questionId ? change(q) : q)),
-    }));
-
-  const updateOptions = (questionId: string, change: (options: OptionWithAnswer[]) => OptionWithAnswer[]) =>
-    updateQuestion(questionId, (q) => ({ ...q, options: change(q.options) }));
-
-  const addQuestion = () =>
-    onChange((prev) => ({
-      ...prev,
-      questions: [
-        ...prev.questions,
-        {
-          id: newId(),
-          prompt: '',
-          options: [
-            { id: newId(), text: '', isCorrect: true },
-            { id: newId(), text: '', isCorrect: false },
-          ],
-        },
-      ],
-    }));
-
-  const removeQuestion = (questionId: string) =>
-    onChange((prev) => ({ ...prev, questions: prev.questions.filter((q) => q.id !== questionId) }));
-
   return (
     <>
       <div className="border border-amber-500/30 rounded-xl p-5 bg-amber-500/5 space-y-5">
@@ -48,46 +29,24 @@ export function QuizEditor({ config, onChange }: Props) {
           <CheckCircle className="h-5 w-5" /> Configuración del cuestionario
         </h3>
         <div className="grid grid-cols-2 gap-4">
-          <div>
-            <label
-              htmlFor="quiz-attempts"
-              className="text-xs font-bold uppercase tracking-wider block mb-2 text-muted-foreground flex items-center gap-1"
-            >
-              <RefreshCcw className="h-3 w-3" /> Intentos permitidos
-            </label>
-            <input
-              id="quiz-attempts"
-              type="number"
-              min={0}
-              value={config.allowedAttempts}
-              onChange={(e) => {
-                const allowedAttempts = Math.max(0, parseInt(e.target.value) || 0);
-                onChange((prev) => ({ ...prev, allowedAttempts }));
-              }}
-              className="w-full bg-background border border-border rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-amber-500/50 font-bold"
-            />
-            <p className="text-xs text-muted-foreground mt-1">0 = intentos ilimitados.</p>
-          </div>
-          <div>
-            <label
-              htmlFor="quiz-time-limit"
-              className="text-xs font-bold uppercase tracking-wider block mb-2 text-muted-foreground flex items-center gap-1"
-            >
-              <Clock className="h-3 w-3" /> Tiempo límite (minutos)
-            </label>
-            <input
-              id="quiz-time-limit"
-              type="number"
-              min={0}
-              value={config.timeLimitMinutes}
-              onChange={(e) => {
-                const timeLimitMinutes = Math.max(0, parseInt(e.target.value) || 0);
-                onChange((prev) => ({ ...prev, timeLimitMinutes }));
-              }}
-              className="w-full bg-background border border-border rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-amber-500/50 font-bold"
-            />
-            <p className="text-xs text-muted-foreground mt-1">0 = sin límite de tiempo.</p>
-          </div>
+          <SettingField
+            id="quiz-attempts"
+            icon={<RefreshCcw className="h-3 w-3" />}
+            label="Intentos permitidos"
+            hint="0 = intentos ilimitados."
+            value={config.allowedAttempts}
+            max={QUIZ_LIMITS.maxAttempts}
+            onChange={(allowedAttempts) => onChange((prev) => ({ ...prev, allowedAttempts }))}
+          />
+          <SettingField
+            id="quiz-time-limit"
+            icon={<Clock className="h-3 w-3" />}
+            label="Tiempo límite (minutos)"
+            hint="0 = sin límite de tiempo."
+            value={config.timeLimitMinutes}
+            max={QUIZ_LIMITS.maxTimeLimitMinutes}
+            onChange={(timeLimitMinutes) => onChange((prev) => ({ ...prev, timeLimitMinutes }))}
+          />
         </div>
       </div>
 
@@ -98,8 +57,9 @@ export function QuizEditor({ config, onChange }: Props) {
           </h3>
           <button
             type="button"
-            onClick={addQuestion}
-            className="bg-amber-500 hover:bg-amber-600 text-amber-950 px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-2 transition-colors shadow-sm"
+            onClick={() => onChange((prev) => addQuestion(prev))}
+            disabled={config.questions.length >= QUIZ_LIMITS.maxQuestions}
+            className="bg-amber-500 hover:bg-amber-600 text-amber-950 px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-2 transition-colors shadow-sm disabled:opacity-50"
           >
             <Plus className="h-4 w-4" /> Agregar pregunta
           </button>
@@ -115,94 +75,135 @@ export function QuizEditor({ config, onChange }: Props) {
           </div>
         )}
 
-        {config.questions.map((q, qi) => (
-          <div key={q.id} className="border border-border rounded-xl overflow-hidden bg-background shadow-sm">
-            <div className="bg-muted/30 px-5 py-3 flex items-center gap-3 border-b border-border">
-              <GripVertical className="h-4 w-4 text-muted-foreground/50" />
-              <span className="font-bold text-sm text-muted-foreground">Pregunta {qi + 1}</span>
-              <div className="ml-auto">
-                <button
-                  type="button"
-                  onClick={() => removeQuestion(q.id)}
-                  className="text-red-700 hover:text-red-800 dark:text-red-400 dark:hover:text-red-300 text-xs font-bold flex items-center gap-1"
-                >
-                  <Trash2 className="h-3.5 w-3.5" /> Eliminar
-                </button>
-              </div>
-            </div>
-
-            <div className="p-5 space-y-4">
-              <input
-                type="text"
-                value={q.prompt}
-                onChange={(e) => {
-                  const prompt = e.target.value;
-                  updateQuestion(q.id, (question) => ({ ...question, prompt }));
-                }}
-                className="w-full bg-muted border border-border rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-amber-500/50 font-medium"
-                placeholder="Escribe la pregunta aquí..."
-                aria-label={`Enunciado de la pregunta ${qi + 1}`}
-              />
-
-              <div className="space-y-2">
-                <label className="text-xs font-bold text-muted-foreground uppercase tracking-wider">
-                  Opciones de respuesta
-                </label>
-                {q.options.map((o, oi) => (
-                  <div key={o.id} className="flex items-center gap-2">
-                    <input
-                      type="radio"
-                      name={`correct-${q.id}`}
-                      checked={o.isCorrect}
-                      onChange={() =>
-                        updateOptions(q.id, (options) => options.map((opt) => ({ ...opt, isCorrect: opt.id === o.id })))
-                      }
-                      className="w-4 h-4 accent-emerald-500 flex-shrink-0"
-                      title="Marcar como correcta"
-                      aria-label={`Marcar la opción ${oi + 1} como correcta`}
-                    />
-                    <input
-                      type="text"
-                      value={o.text}
-                      onChange={(e) => {
-                        const text = e.target.value;
-                        updateOptions(q.id, (options) =>
-                          options.map((opt) => (opt.id === o.id ? { ...opt, text } : opt)),
-                        );
-                      }}
-                      className={`flex-1 bg-muted border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/30 ${o.isCorrect ? 'border-emerald-500/50 bg-emerald-500/5' : 'border-border'}`}
-                      placeholder={`Opción ${oi + 1}...`}
-                      aria-label={`Texto de la opción ${oi + 1}`}
-                    />
-                    {q.options.length > 2 && (
-                      <button
-                        type="button"
-                        onClick={() => updateOptions(q.id, (options) => options.filter((opt) => opt.id !== o.id))}
-                        className="text-red-400 hover:text-red-500 p-1"
-                        aria-label={`Eliminar la opción ${oi + 1}`}
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </button>
-                    )}
-                  </div>
-                ))}
-                <button
-                  type="button"
-                  onClick={() =>
-                    updateOptions(q.id, (options) => [...options, { id: newId(), text: '', isCorrect: false }])
-                  }
-                  className="text-xs font-bold text-primary hover:text-primary/80 flex items-center gap-1 mt-1 ml-6"
-                >
-                  <Plus className="h-3 w-3" /> Agregar opción
-                </button>
-              </div>
-              <p className="text-xs text-muted-foreground ml-6">
-                Selecciona el círculo <span className="text-emerald-500 font-bold">●</span> de la opción correcta.
-              </p>
-            </div>
-          </div>
+        {config.questions.map((question, index) => (
+          <QuestionCard key={question.id} question={question} number={index + 1} onChange={onChange} />
         ))}
       </div>
     </>
+  );
+}
+
+interface SettingFieldProps {
+  id: string;
+  icon: ReactNode;
+  label: string;
+  hint: string;
+  value: number;
+  max: number;
+  onChange: (value: number) => void;
+}
+
+function SettingField({ id, icon, label, hint, value, max, onChange }: SettingFieldProps) {
+  return (
+    <div>
+      <label
+        htmlFor={id}
+        className="text-xs font-bold uppercase tracking-wider block mb-2 text-muted-foreground flex items-center gap-1"
+      >
+        {icon} {label}
+      </label>
+      <input
+        id={id}
+        type="number"
+        min={0}
+        max={max}
+        value={value}
+        onChange={(e) => onChange(clampSetting(e.target.value, max))}
+        className="w-full bg-background border border-border rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-amber-500/50 font-bold"
+      />
+      <p className="text-xs text-muted-foreground mt-1">{hint}</p>
+    </div>
+  );
+}
+
+interface QuestionCardProps {
+  question: QuestionWithAnswers;
+  number: number;
+  onChange: Dispatch<SetStateAction<QuizConfig>>;
+}
+
+function QuestionCard({ question, number, onChange }: QuestionCardProps) {
+  const canRemoveOption = question.options.length > QUIZ_LIMITS.minOptions;
+  const canAddOption = question.options.length < QUIZ_LIMITS.maxOptions;
+
+  return (
+    <div className="border border-border rounded-xl overflow-hidden bg-background shadow-sm">
+      <div className="bg-muted/30 px-5 py-3 flex items-center gap-3 border-b border-border">
+        <span className="font-bold text-sm text-muted-foreground">Pregunta {number}</span>
+        <button
+          type="button"
+          onClick={() => onChange((prev) => removeQuestion(prev, question.id))}
+          className="ml-auto text-red-700 hover:text-red-800 dark:text-red-400 dark:hover:text-red-300 text-xs font-bold flex items-center gap-1"
+        >
+          <Trash2 className="h-3.5 w-3.5" /> Eliminar
+        </button>
+      </div>
+
+      <div className="p-5 space-y-4">
+        <input
+          type="text"
+          value={question.prompt}
+          onChange={(e) => {
+            const prompt = e.target.value;
+            onChange((prev) => setPrompt(prev, question.id, prompt));
+          }}
+          className="w-full bg-muted border border-border rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-amber-500/50 font-medium"
+          placeholder="Escribe la pregunta aquí..."
+          aria-label={`Enunciado de la pregunta ${number}`}
+        />
+
+        <fieldset className="space-y-2">
+          <legend className="text-xs font-bold text-muted-foreground uppercase tracking-wider mb-2">
+            Opciones de respuesta
+          </legend>
+          {question.options.map((option, index) => (
+            <div key={option.id} className="flex items-center gap-2">
+              <input
+                type="radio"
+                name={`correct-${question.id}`}
+                checked={option.isCorrect}
+                onChange={() => onChange((prev) => markCorrect(prev, question.id, option.id))}
+                className="w-4 h-4 accent-emerald-500 flex-shrink-0"
+                title="Marcar como correcta"
+                aria-label={`Marcar la opción ${index + 1} como correcta`}
+              />
+              <input
+                type="text"
+                value={option.text}
+                onChange={(e) => {
+                  const text = e.target.value;
+                  onChange((prev) => setOptionText(prev, question.id, option.id, text));
+                }}
+                className={`flex-1 bg-muted border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/30 ${option.isCorrect ? 'border-emerald-500/50 bg-emerald-500/5' : 'border-border'}`}
+                placeholder={`Opción ${index + 1}...`}
+                aria-label={`Texto de la opción ${index + 1}`}
+              />
+              {canRemoveOption && (
+                <button
+                  type="button"
+                  onClick={() => onChange((prev) => removeOption(prev, question.id, option.id))}
+                  className="text-red-400 hover:text-red-500 p-1"
+                  aria-label={`Eliminar la opción ${index + 1}`}
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </button>
+              )}
+            </div>
+          ))}
+          <button
+            type="button"
+            onClick={() => onChange((prev) => addOption(prev, question.id))}
+            disabled={!canAddOption}
+            className="text-xs font-bold text-primary hover:text-primary/80 flex items-center gap-1 mt-1 ml-6 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <Plus className="h-3 w-3" /> Agregar opción
+            {!canAddOption && ` (máximo ${QUIZ_LIMITS.maxOptions})`}
+          </button>
+        </fieldset>
+        <p className="text-xs text-muted-foreground ml-6">
+          Selecciona el círculo <span className="text-emerald-500 font-bold">●</span> de la opción correcta.
+        </p>
+      </div>
+    </div>
   );
 }

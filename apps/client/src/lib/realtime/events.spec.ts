@@ -15,6 +15,14 @@ describe('agrupación de avisos en tiempo real', () => {
     expect(alta).toBe(otraAlta);
   });
 
+  it('la retirada de archivos al certificar se agrupa por curso, como las matrículas', () => {
+    const inA = batchKey('submission:files-retired', { courseGuid: 'curso-a', userGuid: 'ana' });
+    const inB = batchKey('submission:files-retired', { courseGuid: 'curso-b', userGuid: 'ana' });
+
+    expect(inA).toBe('submission:files-retired:curso-a');
+    expect(inA).not.toBe(inB);
+  });
+
   it('los avisos de un curso usan su guid', () => {
     expect(batchKey('course:deleted', { guid: 'curso-a' })).not.toBe(batchKey('course:deleted', { guid: 'curso-b' }));
   });

@@ -1,21 +1,18 @@
 import { staysInCourse } from './exit';
+import { builderUrl, newResourceEditorUrl, resourceEditorUrl } from './paths';
 
-/**
- * Un curso en borrador no lo ve nadie, y el constructor lo recuerda antes de cerrarlo. Si un
- * enlace que lo cierra pasa por quedarse, el borrador se abandona sin aviso; si uno que lo deja
- * abierto pasa por salir, el aviso salta al moverse por el propio temario.
- */
 describe('staysInCourse', () => {
   const course = 'c-1';
 
   it('moverse por el temario del mismo curso no es salir', () => {
     expect(staysInCourse('/dashboard/course-builder?course=c-1', course)).toBe(true);
-    expect(staysInCourse('/dashboard/course-builder?course=c-1&module=m-1&resource=r-1', course)).toBe(true);
+    expect(staysInCourse(builderUrl('c-1', { moduleGuid: 'm-1', resourceGuid: 'r-1' }), course)).toBe(true);
     expect(staysInCourse('/dashboard/course-builder/?course=c-1#ajustes', course)).toBe(true);
   });
 
-  it('abrir el editor de un recurso del mismo curso no es salir', () => {
-    expect(staysInCourse('/dashboard/course-builder/c-1/modules/m-1/resources/r-1', course)).toBe(true);
+  it('abrir el editor de un recurso del mismo curso, también de uno nuevo, no es salir', () => {
+    expect(staysInCourse(resourceEditorUrl('c-1', 'm-1', 'r-1'), course)).toBe(true);
+    expect(staysInCourse(newResourceEditorUrl('c-1', 'm-1', 'QUIZ'), course)).toBe(true);
   });
 
   it('el constructor sin curso, como el enlace «Gestión de cursos» del menú, cierra el curso', () => {

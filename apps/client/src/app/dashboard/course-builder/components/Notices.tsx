@@ -1,16 +1,12 @@
 'use client';
 
 import type { ReactNode } from 'react';
-import { AlertTriangle, Eye, Lock } from 'lucide-react';
+import { Eye, Lock } from 'lucide-react';
 import type { CourseEditor } from '@/lib/realtime/events';
 import { USER_ROLE_LABEL } from '@/lib/labels';
 import { useDialog } from '@/hooks/useDialog';
 
-/**
- * Los tres momentos en que el constructor se detiene a preguntar: al intentar editar un
- * curso publicado, al salir de uno que sigue en borrador y al encontrarlo ocupado por otra
- * persona. Comparten marco para que ninguno parezca un error del sistema.
- */
+// Los avisos del constructor comparten marco para que ninguno parezca un error del sistema.
 
 interface FrameProps {
   icon: ReactNode;
@@ -48,55 +44,16 @@ function Frame({ icon, iconClass, title, children, actions, priority, onClose }:
   );
 }
 
-interface PublishedProps {
-  onCancel: () => void;
-  onRevertToDraft: () => void;
-}
-
-/** El curso está publicado: hay que pasarlo a borrador antes de tocar su contenido. */
-export function CoursePublishedAlert({ onCancel, onRevertToDraft }: PublishedProps) {
-  return (
-    <Frame
-      onClose={onCancel}
-      icon={<AlertTriangle className="h-8 w-8 text-amber-500" />}
-      iconClass="bg-amber-500/15"
-      title="Curso publicado"
-      actions={
-        <div className="flex items-center gap-3">
-          <button
-            type="button"
-            onClick={onCancel}
-            className="flex-1 bg-muted hover:bg-border text-foreground font-bold py-3 rounded-xl transition-colors"
-          >
-            Cancelar
-          </button>
-          <button
-            type="button"
-            onClick={onRevertToDraft}
-            className="flex-1 bg-amber-500 hover:bg-amber-600 text-amber-950 font-bold py-3 rounded-xl transition-colors shadow-md"
-          >
-            Cambiar a borrador
-          </button>
-        </div>
-      }
-    >
-      Este curso está publicado y es visible para los estudiantes. Para editarlo, debes cambiarlo a estado Borrador
-      primero.
-      <br />
-      <br />
-      <strong className="text-foreground">Los estudiantes matriculados y su progreso no se verán afectados.</strong>
-    </Frame>
-  );
-}
-
 interface ExitProps {
+  /** Hay una portada elegida sin guardar, que se descartará al salir. */
+  unsavedCover: boolean;
   onPublishAndExit: () => void;
   onExitWithoutPublishing: () => void;
   onCancel: () => void;
 }
 
 /** Se sale de un curso en borrador: nadie lo verá mientras siga así. */
-export function DraftExitAlert({ onPublishAndExit, onExitWithoutPublishing, onCancel }: ExitProps) {
+export function DraftExitAlert({ unsavedCover, onPublishAndExit, onExitWithoutPublishing, onCancel }: ExitProps) {
   return (
     <Frame
       onClose={onCancel}
@@ -134,6 +91,13 @@ export function DraftExitAlert({ onPublishAndExit, onExitWithoutPublishing, onCa
       <br />
       <br />
       ¿Deseas publicarlo ahora para que sea accesible?
+      {unsavedCover && (
+        <>
+          <br />
+          <br />
+          <strong className="text-foreground">La portada elegida no se ha guardado y se descartará.</strong>
+        </>
+      )}
     </Frame>
   );
 }

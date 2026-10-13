@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { BookOpen, ChevronDown, ChevronRight } from 'lucide-react';
 import type { MonitoredStudent } from '@/types/models';
-import { textColor } from './progress-colors';
+import { progressTextColor } from './progress-colors';
 import { ProgressBar } from './ProgressBar';
 import { ModuleBreakdown } from './ModuleBreakdown';
 
@@ -29,6 +29,7 @@ export function StudentCourses({ student }: { student: MonitoredStudent }) {
             className="border border-border/50 rounded-xl overflow-hidden bg-background shadow-sm"
           >
             <button
+              type="button"
               aria-expanded={open}
               onClick={(event) => {
                 event.stopPropagation();
@@ -53,7 +54,7 @@ export function StudentCourses({ student }: { student: MonitoredStudent }) {
               <div className="hidden sm:block w-36 shrink-0">
                 <ProgressBar percent={course.percent} className="" />
               </div>
-              <span className={`sm:hidden text-xs font-bold w-10 text-right ${textColor(course.percent)}`}>
+              <span className={`sm:hidden text-xs font-bold w-10 text-right ${progressTextColor(course.percent)}`}>
                 {course.percent}%
               </span>
             </button>
