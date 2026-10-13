@@ -1,17 +1,24 @@
-/** Colores del avance: rojo apenas empezado, ámbar, azul y verde casi terminado. */
+import { COLOR } from '@/components/ui/charts';
 
-export function barColor(percent: number): string {
-  if (percent >= 76) return 'bg-emerald-500';
-  if (percent >= 51) return 'bg-blue-500';
-  if (percent >= 26) return 'bg-amber-500';
-  return 'bg-red-400';
+/** Tramos de avance, en el orden en que la API cuenta los alumnos de cada uno (`summary.ranges`). */
+export const PROGRESS_BANDS = [
+  { from: 0, name: '0% - 25%', fill: COLOR.failed, text: 'text-red-700 dark:text-red-400' },
+  { from: 26, name: '26% - 50%', fill: COLOR.pending, text: 'text-amber-700 dark:text-amber-400' },
+  { from: 51, name: '51% - 75%', fill: COLOR.secondary, text: 'text-sky-700 dark:text-sky-400' },
+  { from: 76, name: '76% - 100%', fill: COLOR.passed, text: 'text-emerald-700 dark:text-emerald-400' },
+] as const;
+
+function bandOf(percent: number) {
+  return [...PROGRESS_BANDS].reverse().find((band) => percent >= band.from) ?? PROGRESS_BANDS[0];
 }
 
-export function textColor(percent: number): string {
-  if (percent >= 76) return 'text-emerald-700 dark:text-emerald-400';
-  if (percent >= 51) return 'text-blue-700 dark:text-blue-400';
-  if (percent >= 26) return 'text-amber-700 dark:text-amber-400';
-  return 'text-red-700 dark:text-red-400';
+/** Color de la barra de avance: el mismo que el tramo de la gráfica en el que cae. */
+export function progressColor(percent: number): string {
+  return bandOf(percent).fill;
+}
+
+export function progressTextColor(percent: number): string {
+  return bandOf(percent).text;
 }
 
 /** Casilla del número de módulo: verde terminado, ámbar empezado, gris sin empezar. */

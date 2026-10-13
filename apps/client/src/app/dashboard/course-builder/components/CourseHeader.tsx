@@ -5,7 +5,8 @@ import type { Course, CourseStatus } from '@/types/models';
 
 interface Props {
   course: Course;
-  isAdmin: boolean;
+  /** Sólo un administrador borra cursos. */
+  canDelete: boolean;
   /** Un curso publicado se consulta pero no se edita: hay alumnos avanzando por él. */
   readOnly: boolean;
   onBack: () => void;
@@ -14,7 +15,7 @@ interface Props {
 }
 
 /** Barra superior del curso abierto: volver, estado y borrado. */
-export function CourseHeader({ course, isAdmin, readOnly, onBack, onChangeStatus, onDelete }: Props) {
+export function CourseHeader({ course, canDelete, readOnly, onBack, onChangeStatus, onDelete }: Props) {
   const isPublished = course.status === 'PUBLISHED';
   const accent = isPublished ? 'text-emerald-500' : 'text-amber-500';
 
@@ -66,7 +67,7 @@ export function CourseHeader({ course, isAdmin, readOnly, onBack, onChangeStatus
             </div>
           </div>
 
-          {isAdmin && (
+          {canDelete && (
             <button
               type="button"
               disabled={readOnly}

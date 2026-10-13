@@ -22,6 +22,7 @@ export const REALTIME_EVENTS = [
   'enrollment:changed',
   'submission:new',
   'submission:graded',
+  'submission:files-retired',
   'quiz:attempt-enabled',
   'config:updated',
   'presence:update',
@@ -69,12 +70,8 @@ export function withPresence(online: ReadonlySet<string>, { guid, status }: Pres
 }
 
 /**
- * Clave con la que se agrupan las ráfagas de un evento antes de repartirlo: el evento y,
- * si el aviso es de un curso, el curso.
- *
- * Agrupando sólo por evento, la baja de un alumno en un curso y su alta en otro se
- * fundirían en un único aviso —el último— y la pantalla del primer curso no se enteraría
- * de la baja.
+ * Clave con la que se agrupan las ráfagas de un evento: el evento y, si es de un curso, el curso.
+ * Sólo por evento, la baja en un curso y el alta en otro se fundirían y la baja no llegaría.
  */
 export function batchKey(event: RealtimeEvent, data: unknown): string {
   const payload = data as { courseGuid?: unknown; guid?: unknown } | null | undefined;

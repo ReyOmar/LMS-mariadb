@@ -1,42 +1,24 @@
-import type { SubmissionToGrade } from '@/types/models';
 import { MAX_SCORE, formatPoints } from '@/lib/grading';
-import { COLOR, type Slice, type RangeBucket } from '@/components/ui/charts';
+import { COLOR, type Slice } from '@/components/ui/charts';
+import { twoWayBreakdown, type ThresholdSummary } from '../../components/summary-charts';
+import type { ExaminerSubmission } from '../../types';
 
-/**
- * Cómo se ordenan las entregas para el examinador.
- *
- * Aquí queda sólo lo que se puede decidir con lo que hay en pantalla: agrupar la página
- * cargada y dar forma a las gráficas. **Contar no está**: los totales de un curso, el
- * reparto por estado y el de notas los calcula el servidor (`/assessments/examiner/submissions/summary`)
- * porque necesitan todas las entregas del curso, y la lista ya sólo trae una página.
- * Contarlas aquí daría cifras que describen lo cargado y no el curso.
- *
- * Son funciones puras a propósito: separadas del marcado se pueden comprobar sin montar
- * la pantalla.
- */
+// Las cifras del curso las cuenta el servidor sobre todas sus entregas; aquí sólo se agrupa la página cargada.
 
 export type SubmissionFilter = 'all' | 'pending' | 'graded';
 
-/** Cifras de un curso, tal y como las cuenta la base. */
-export interface CourseSummary {
-  courseGuid: string;
-  title: string;
+export interface CourseSummary extends ThresholdSummary {
   coverImage: string | null;
-  /** Nota mínima para aprobar en este curso. */
-  threshold: number;
-  /** Frontera del tramo intermedio: por debajo, la nota ni se acercó a aprobar. */
-  borderline: number;
   total: number;
   pending: number;
   graded: number;
-  scores: { low: number; mid: number; high: number };
 }
 
 interface AssignmentWithSubmissions {
   /** Identifica el grupo: dos tareas pueden llamarse igual. */
   key: string;
   assignmentTitle: string;
-  submissions: SubmissionToGrade[];
+  submissions: ExaminerSubmission[];
   pending: number;
   graded: number;
 }
@@ -50,44 +32,30 @@ export interface ModuleWithAssignments {
   graded: number;
 }
 
-export function isGraded(submission: Pick<SubmissionToGrade, 'status'>): boolean {
+export function isGraded(submission: Pick<ExaminerSubmission, 'status'>): boolean {
   return submission.status === 'GRADED';
 }
 
-/**
- * Reparto de las notas ya puestas en tres tramos.
- * Los tres números vienen contados de la base; aquí sólo se les pone nombre y color. Se
- * describen respecto al umbral de aprobación y no a números sueltos: si el curso cambia su
- * mínimo, la gráfica sigue diciendo algo útil.
- */
-export function scoreDistribution(course: Pick<CourseSummary, 'threshold' | 'borderline' | 'scores'>): RangeBucket[] {
-  const { threshold, borderline, scores } = course;
-
-  return [
-    { name: `Por debajo de ${borderline}`, count: scores.low, fill: COLOR.failed },
-    { name: `Entre ${borderline} y ${threshold - 1}`, count: scores.mid, fill: COLOR.pending },
-    { name: `${threshold} o más (aprobado)`, count: scores.high, fill: COLOR.passed },
-  ].filter((range) => range.count > 0);
-}
-
-/** Pendientes frente a calificadas. Sin entregas devuelve una porción gris, para no dejar el hueco en blanco. */
 export function statusBreakdown(pending: number, graded: number): Slice[] {
-  if (pending + graded === 0) {
-    return [{ name: 'Sin entregas', value: 1, color: COLOR.empty }];
-  }
-
-  return [
+  return twoWayBreakdown(
     { name: 'Pendientes', value: pending, color: COLOR.pending },
     { name: 'Calificadas', value: graded, color: COLOR.passed },
-  ].filter((slice) => slice.value > 0);
+    'Sin entregas',
+  );
 }
 
-/** Ordena las entregas en módulo → tarea → alumnos, que es como las recorre el examinador. */
-export function groupByModuleAndAssignment(submissions: SubmissionToGrade[]): ModuleWithAssignments[] {
-  // Por identificador, no por título: dos tareas que se llamen igual no son la misma tarea.
+/** Cuántas entregas del curso cumplen el filtro, según las cifras del servidor. */
+export function filteredTotal(course: Pick<CourseSummary, 'total' | 'pending' | 'graded'>, filter: SubmissionFilter) {
+  if (filter === 'pending') return course.pending;
+  if (filter === 'graded') return course.graded;
+  return course.total;
+}
+
+/** Ordena las entregas en módulo → tarea → alumnos, por identificador y no por título. */
+export function groupByModuleAndAssignment(submissions: ExaminerSubmission[]): ModuleWithAssignments[] {
   const byModule = new Map<
     string,
-    { title: string; assignments: Map<string, { title: string; list: SubmissionToGrade[] }> }
+    { title: string; assignments: Map<string, { title: string; list: ExaminerSubmission[] }> }
   >();
 
   for (const submission of submissions) {
@@ -98,15 +66,16 @@ export function groupByModuleAndAssignment(submissions: SubmissionToGrade[]): Mo
       byModule.set(moduleKey, { title: submission.moduleTitle || 'Módulo principal', assignments: new Map() });
     }
     const assignments = byModule.get(moduleKey)!.assignments;
-    if (!assignments.has(assignmentKey))
+    if (!assignments.has(assignmentKey)) {
       assignments.set(assignmentKey, { title: submission.assignmentTitle || 'Sin título', list: [] });
+    }
     assignments.get(assignmentKey)!.list.push(submission);
   }
 
   return Array.from(byModule.entries()).map(([moduleKey, { title: moduleTitle, assignments: assignmentsMap }]) => {
     const assignments: AssignmentWithSubmissions[] = Array.from(assignmentsMap.entries()).map(
       ([assignmentKey, { title: assignmentTitle, list }]) => {
-        const pending = list.filter((e) => !isGraded(e)).length;
+        const pending = list.filter((submission) => !isGraded(submission)).length;
         return { key: assignmentKey, assignmentTitle, submissions: list, pending, graded: list.length - pending };
       },
     );
@@ -115,20 +84,15 @@ export function groupByModuleAndAssignment(submissions: SubmissionToGrade[]): Mo
       key: moduleKey,
       moduleTitle,
       assignments,
-      pending: assignments.reduce((sum, t) => sum + t.pending, 0),
-      graded: assignments.reduce((sum, t) => sum + t.graded, 0),
+      pending: assignments.reduce((sum, assignment) => sum + assignment.pending, 0),
+      graded: assignments.reduce((sum, assignment) => sum + assignment.graded, 0),
     };
   });
 }
 
 /**
- * Limpia lo que el examinador teclea en el campo de nota.
- *
- * Acepta enteros y un solo decimal dentro de 0–{@link MAX_SCORE}. Lo que no encaja no
- * llega a escribirse: el error se evita en lugar de tener que explicarlo después de enviar.
- *
- * La coma vale como separador decimal: es el de Colombia y el que ofrece el teclado numérico
- * del móvil en español. Descartarla convertía «85,5» en 855 y la nota quedaba en 100.
+ * Limpia lo que se teclea en el campo de nota: enteros y un decimal dentro de 0–{@link MAX_SCORE}.
+ * La coma vale como separador decimal: es la de Colombia y la del teclado numérico del móvil.
  */
 export function normalizeTypedScore(value: string): string {
   let cleaned = value.replace(/,/g, '.').replace(/[^0-9.]/g, '');
@@ -140,20 +104,18 @@ export function normalizeTypedScore(value: string): string {
   if (cleaned === '.') return '0.';
 
   const [integerPart, decimal] = cleaned.split('.');
-  if (Number(integerPart) > MAX_SCORE) return String(MAX_SCORE);
+  const integer = Number(integerPart);
+  if (integer > MAX_SCORE || (integer === MAX_SCORE && decimal !== undefined)) return String(MAX_SCORE);
   if (decimal !== undefined && decimal.length > 1) return `${integerPart}.${decimal.slice(0, 1)}`;
 
   return cleaned;
 }
 
 /**
- * Con qué se abre el panel de calificación.
- *
- * Al corregir una nota ya puesta se parte de ella. Una entrega por calificar —también la
- * versión corregida de una que suspendió— empieza vacía: la nota y el comentario anteriores
- * sólo se enseñan como referencia, para no volver a enviar por descuido los del suspenso.
+ * Con qué se abre el panel: una nota puesta se corrige partiendo de ella; una entrega por calificar
+ * empieza vacía y la anterior sólo se enseña, para no reenviar por descuido la del suspenso.
  */
-export function gradingStart(submission: Pick<SubmissionToGrade, 'status' | 'score' | 'feedback'>): {
+export function gradingStart(submission: Pick<ExaminerSubmission, 'status' | 'score' | 'feedback'>): {
   score: string;
   feedback: string;
   previous: { score: number | null; feedback: string | null } | null;
@@ -173,12 +135,25 @@ export function gradingStart(submission: Pick<SubmissionToGrade, 'status' | 'sco
   };
 }
 
-/** Porcentaje de avance de la corrección, para la barra de la tarjeta de curso. */
+/** Al certificarse un alumno, sus entregas cargadas pierden el archivo y su nota queda cerrada. */
+export function closeRoundOf(submissions: ExaminerSubmission[], userGuid: string): ExaminerSubmission[] {
+  return submissions.map((submission) =>
+    submission.student?.guid === userGuid
+      ? {
+          ...submission,
+          fileUrl: null,
+          filePurged: submission.filePurged || Boolean(submission.fileUrl),
+          roundClosed: true,
+        }
+      : submission,
+  );
+}
+
+/** Porcentaje corregido del curso; sin entregas no queda nada pendiente. */
 export function gradedPercent(course: Pick<CourseSummary, 'total' | 'graded'>): number {
   return course.total > 0 ? Math.round((course.graded / course.total) * 100) : 100;
 }
 
-/** Suma de los cursos, para las cifras de portada del selector. */
 export function countryTotals(courses: CourseSummary[]): { total: number; pending: number; graded: number } {
   return courses.reduce(
     (sum, course) => ({

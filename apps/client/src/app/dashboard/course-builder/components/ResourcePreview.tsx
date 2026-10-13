@@ -1,13 +1,14 @@
 'use client';
 
-import type { ReactNode } from 'react';
-import { CheckCircle, Edit3, FileText, PlayCircle, Trash2, Type, UploadCloud } from 'lucide-react';
+import { useEffect, type ReactNode } from 'react';
+import { AlertTriangle, CheckCircle, Edit3, Trash2, UploadCloud } from 'lucide-react';
 import { sanitizeHTML } from '@/lib/sanitize';
 import { displayTitle } from '@/lib/resources';
 import type { Resource } from '@/types/models';
 import { ResourceTarget } from '@/components/resources/ResourceTarget';
 import { ResourceExtras } from './ResourceExtras';
-import { resourceKindOf, type ResourceKind } from './resources';
+import { resourcePresentation } from './resource-presentation';
+import { isUnconfigured } from './resources';
 
 interface Props {
   resource: Resource;
@@ -16,33 +17,24 @@ interface Props {
   onDelete: () => void;
 }
 
-const ICONS: Record<ResourceKind, ReactNode> = {
-  PARAGRAPH: <Type className="h-4 sm:h-5 w-4 sm:w-5 text-primary shrink-0" />,
-  LINK: <PlayCircle className="h-4 sm:h-5 w-4 sm:w-5 text-pink-500 shrink-0" />,
-  ASSIGNMENT: <FileText className="h-4 sm:h-5 w-4 sm:w-5 text-blue-500 shrink-0" />,
-  QUIZ: <CheckCircle className="h-4 sm:h-5 w-4 sm:w-5 text-amber-500 shrink-0" />,
-};
-
 const NO_CONTENT = '<p class="text-muted-foreground italic">Sin contenido escrito.</p>';
 const NO_INSTRUCTIONS = '<p class="text-muted-foreground italic opacity-70">No hay instrucciones definidas.</p>';
 
-/**
- * Cómo se verá el bloque para el alumno.
- *
- * Es una simulación: las áreas de entrega y de cuestionario se muestran inertes, porque el
- * examinador está revisando su propio curso y no debe poder entregar en él.
- */
+/** Cómo verá el alumno el recurso. Entregar y responder quedan inertes: es el curso propio. */
 export function ResourcePreview({ resource, readOnly, onEdit, onDelete }: Props) {
-  const type = resourceKindOf(resource);
-  const title = displayTitle(resource);
+  const { kind, Icon, colorClass } = resourcePresentation(resource);
   const html = resource.contentHtml ?? '';
+
+  useEffect(() => {
+    if (kind === 'LINK') import('@justinribeiro/lite-youtube').catch(() => undefined);
+  }, [kind]);
 
   return (
     <div className="max-w-4xl mx-auto bg-card rounded-2xl shadow-sm border border-border flex flex-col overflow-hidden h-full max-h-full">
       <div className="p-3 sm:p-4 border-b border-border flex flex-wrap items-center justify-between gap-2 bg-muted/30">
         <h3 className="font-bold flex items-center gap-2 text-sm sm:text-base min-w-0">
-          {ICONS[type]}
-          <span className="truncate">{title || 'Sin título'}</span>
+          <Icon className={`h-4 sm:h-5 w-4 sm:w-5 shrink-0 ${colorClass}`} />
+          <span className="truncate">{displayTitle(resource) || 'Sin título'}</span>
         </h3>
 
         <div className="flex items-center gap-2">
@@ -68,33 +60,37 @@ export function ResourcePreview({ resource, readOnly, onEdit, onDelete }: Props)
         </div>
       </div>
 
-      <div className="p-8 overflow-y-auto flex-1 space-y-8 bg-background">
-        {type === 'PARAGRAPH' && (
+      {isUnconfigured(resource) && (
+        <p className="flex items-center gap-2 px-4 py-3 bg-amber-500/10 border-b border-amber-500/30 text-sm font-bold text-amber-700 dark:text-amber-400">
+          <AlertTriangle className="h-4 w-4 shrink-0" />
+          {kind === 'QUIZ'
+            ? 'Sin configurar: añade las preguntas antes de publicar el curso.'
+            : 'Sin configurar: escribe la dirección del enlace antes de publicar el curso.'}
+        </p>
+      )}
+
+      <div className="p-4 sm:p-8 overflow-y-auto flex-1 space-y-8 bg-background">
+        {kind === 'PARAGRAPH' && (
           <>
             <div
-              className="prose dark:prose-invert max-w-none bg-muted/10 p-8 rounded-2xl border border-border/50 shadow-inner"
+              className="prose dark:prose-invert max-w-none bg-muted/10 p-4 sm:p-8 rounded-2xl border border-border/50 shadow-inner"
               dangerouslySetInnerHTML={sanitizeHTML(html || NO_CONTENT)}
             />
             <ResourceExtras resource={resource} />
           </>
         )}
 
-        {/* Una imagen, un vídeo o una página externa, tal como lo verá el alumno. */}
-        {type === 'LINK' && (
+        {kind === 'LINK' && (
           <div className="w-full max-w-3xl mx-auto">
-            <ResourceTarget
-              resource={resource}
-              empty={<p>Sin destino configurado. Haz clic en «Editar contenido».</p>}
-            />
+            <ResourceTarget resource={resource} empty={<p>Sin destino configurado. Pulsa «Editar contenido».</p>} />
           </div>
         )}
 
-        {type === 'ASSIGNMENT' && (
+        {kind === 'ASSIGNMENT' && (
           <Simulation
             instructionsTitle="Instrucciones de la tarea"
-            headerClass="bg-muted/10"
+            accent="bg-muted/10"
             instructionsTitleClass="text-muted-foreground"
-            html={html}
             resource={resource}
             icon={<UploadCloud className="h-10 w-10 text-primary" />}
             circleClass="bg-primary/10"
@@ -105,12 +101,11 @@ export function ResourcePreview({ resource, readOnly, onEdit, onDelete }: Props)
           />
         )}
 
-        {type === 'QUIZ' && (
+        {kind === 'QUIZ' && (
           <Simulation
             instructionsTitle="Instrucciones del cuestionario"
-            headerClass="bg-amber-500/10"
+            accent="bg-amber-500/10"
             instructionsTitleClass="text-amber-700 dark:text-amber-500"
-            html={html}
             resource={resource}
             icon={<CheckCircle className="h-10 w-10 text-amber-500" />}
             circleClass="bg-amber-500/20"
@@ -127,9 +122,8 @@ export function ResourcePreview({ resource, readOnly, onEdit, onDelete }: Props)
 
 interface SimulationProps {
   instructionsTitle: string;
-  headerClass: string;
+  accent: string;
   instructionsTitleClass: string;
-  html: string;
   resource: Resource;
   icon: ReactNode;
   circleClass: string;
@@ -142,9 +136,8 @@ interface SimulationProps {
 /** Instrucciones arriba y actividad inerte abajo: el molde común de tareas y cuestionarios. */
 function Simulation({
   instructionsTitle,
-  headerClass,
+  accent,
   instructionsTitleClass,
-  html,
   resource,
   icon,
   circleClass,
@@ -155,17 +148,17 @@ function Simulation({
 }: SimulationProps) {
   return (
     <div className="bg-card border border-border rounded-2xl shadow-sm overflow-hidden max-w-3xl mx-auto">
-      <div className={`p-6 border-b border-border ${headerClass}`}>
+      <div className={`p-4 sm:p-6 border-b border-border ${accent}`}>
         <h3 className={`font-bold text-sm uppercase tracking-wider mb-4 ${instructionsTitleClass}`}>
           {instructionsTitle}
         </h3>
         <div
           className="prose dark:prose-invert max-w-none text-foreground"
-          dangerouslySetInnerHTML={sanitizeHTML(html || NO_INSTRUCTIONS)}
+          dangerouslySetInnerHTML={sanitizeHTML(resource.contentHtml || NO_INSTRUCTIONS)}
         />
         <ResourceExtras resource={resource} />
       </div>
-      <div className="p-8 flex flex-col items-center justify-center text-center">
+      <div className="p-4 sm:p-8 flex flex-col items-center justify-center text-center">
         <div className={`w-20 h-20 rounded-full flex items-center justify-center mb-4 ${circleClass}`}>{icon}</div>
         <h3 className="font-bold text-xl mb-2">{title}</h3>
         <p className="text-muted-foreground text-sm max-w-md mb-8">{description}</p>

@@ -4,22 +4,16 @@ import { CheckCircle, Clock, ExternalLink, Paperclip, RefreshCcw, UploadCloud } 
 import { fileUrlFor } from '@/lib/api';
 import type { Resource } from '@/types/models';
 import { isQuiz, externalUrl } from '@/lib/resources';
-import { attemptsLabel, quizSummary } from './resources';
+import { quizSummary } from '@/lib/quiz-config';
 import { plural } from '@/lib/text';
+import { attemptsLabel } from './resources';
 
-/**
- * Lo que acompaña a un bloque además de su contenido: enlace de referencia, material
- * adjunto, límite de subida y resumen del cuestionario.
- *
- * Es la misma tira que ve el alumno, así que el examinador comprueba aquí lo que va a
- * publicar sin tener que matricularse en su propio curso.
- */
+/** Lo que acompaña al contenido en la vista previa: enlace de referencia, adjunto, límite de entrega y cuestionario. */
 export function ResourceExtras({ resource }: { resource: Resource }) {
   const quiz = quizSummary(resource.quizConfig);
   const uploadLimit = resource.maxUploadMb && resource.type === 'ASSIGNMENT' && !isQuiz(resource);
-  const attachment = resource.attachmentName && resource.attachmentKey;
 
-  if (!resource.referenceUrl && !attachment && !uploadLimit && !quiz) return null;
+  if (!resource.referenceUrl && !resource.attachmentKey && !uploadLimit && !quiz) return null;
 
   return (
     <div className="space-y-2 mt-4">
@@ -37,7 +31,7 @@ export function ResourceExtras({ resource }: { resource: Resource }) {
         </div>
       )}
 
-      {attachment && (
+      {resource.attachmentKey && (
         <a
           href={fileUrlFor(resource.attachmentUrl) ?? ''}
           className="flex items-center gap-3 p-3 bg-muted/30 border border-border rounded-xl hover:bg-primary/10 hover:border-primary/30 transition-colors cursor-pointer group"
@@ -46,7 +40,9 @@ export function ResourceExtras({ resource }: { resource: Resource }) {
             <Paperclip className="h-4 w-4 text-primary" />
           </div>
           <div className="flex-1 min-w-0">
-            <span className="text-sm font-bold text-foreground truncate block">{resource.attachmentName}</span>
+            <span className="text-sm font-bold text-foreground truncate block">
+              {resource.attachmentName || 'Archivo adjunto'}
+            </span>
             <span className="text-xs text-muted-foreground">Clic para descargar</span>
           </div>
           <UploadCloud className="h-4 w-4 text-primary rotate-180 flex-shrink-0" />
@@ -60,7 +56,7 @@ export function ResourceExtras({ resource }: { resource: Resource }) {
       )}
 
       {quiz && (
-        <div className="flex items-center gap-4 p-3 bg-amber-500/5 border border-amber-500/20 rounded-xl text-sm">
+        <div className="flex flex-wrap items-center gap-4 p-3 bg-amber-500/5 border border-amber-500/20 rounded-xl text-sm">
           <span className="flex items-center gap-1 font-medium">
             <RefreshCcw className="h-3.5 w-3.5 text-amber-500" /> {attemptsLabel(quiz.allowedAttempts)}
           </span>
