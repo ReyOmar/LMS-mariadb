@@ -135,20 +135,6 @@ export function gradingStart(submission: Pick<ExaminerSubmission, 'status' | 'sc
   };
 }
 
-/** Al certificarse un alumno, sus entregas cargadas pierden el archivo y su nota queda cerrada. */
-export function closeRoundOf(submissions: ExaminerSubmission[], userGuid: string): ExaminerSubmission[] {
-  return submissions.map((submission) =>
-    submission.student?.guid === userGuid
-      ? {
-          ...submission,
-          fileUrl: null,
-          filePurged: submission.filePurged || Boolean(submission.fileUrl),
-          roundClosed: true,
-        }
-      : submission,
-  );
-}
-
 /** Porcentaje corregido del curso; sin entregas no queda nada pendiente. */
 export function gradedPercent(course: Pick<CourseSummary, 'total' | 'graded'>): number {
   return course.total > 0 ? Math.round((course.graded / course.total) * 100) : 100;

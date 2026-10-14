@@ -6,11 +6,14 @@ import { usePagedList } from '@/hooks/usePagedList';
 import { useLiveRefresh } from '@/hooks/useLiveRefresh';
 import type { RealtimeEvent } from '@/lib/realtime/events';
 import type { MonitoredStudent } from '@/types/models';
+import { useRoundClosed } from '../../hooks/useRoundClosed';
+import { withoutClosedRound } from './closed-round';
 
 export const MONITORING_EVENTS: readonly RealtimeEvent[] = [
   'submission:new',
   'submission:graded',
   'enrollment:changed',
+  'round:closed',
 ];
 
 export interface MonitoringFilter {
@@ -37,6 +40,10 @@ export function useMonitoredStudents(filter: MonitoringFilter) {
   );
 
   const students = usePagedList<MonitoredStudent>(fetchPage, 'No se pudieron cargar los estudiantes.');
-  useLiveRefresh(MONITORING_EVENTS, students.refresh);
+  const { refresh, updateItems } = students;
+
+  useLiveRefresh(MONITORING_EVENTS, refresh);
+  useRoundClosed((round) => updateItems((rows) => withoutClosedRound(rows, round)));
+
   return students;
 }

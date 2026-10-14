@@ -4,7 +4,7 @@ import api, { errorMessage } from '@/lib/api';
 import { formatNumber } from '@/lib/country';
 import { useAlerts } from '@/contexts/AlertContext';
 import { useCountry } from '@/contexts/CountryContext';
-import type { ExaminerSubmission } from '../../types';
+import type { QuizAttempt } from '../../types';
 import { getAttemptScore, withoutAttempt, type StudentAttempts, type StudentWithAttempts } from './results';
 
 type UpdateItems = (change: (rows: StudentAttempts[]) => StudentAttempts[]) => void;
@@ -14,7 +14,7 @@ export function useAttemptRelease(updateItems: UpdateItems, onReleased: () => vo
   const { notify, showAlert, showConfirmation } = useAlerts();
   const { country } = useCountry();
 
-  return async ({ student }: StudentWithAttempts, attempt: ExaminerSubmission) => {
+  return async ({ student }: StudentWithAttempts, attempt: QuizAttempt) => {
     if (!attempt.assignmentGuid || !student) return;
 
     const score = getAttemptScore(attempt);

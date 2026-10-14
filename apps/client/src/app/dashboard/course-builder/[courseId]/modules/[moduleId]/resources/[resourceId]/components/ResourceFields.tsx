@@ -96,6 +96,7 @@ export function ResourceFields({ kind, draft, readOnly }: Props) {
             pendingFile={draft.pendingFile}
             limit={draft.attachmentLimit}
             readOnly={readOnly}
+            disabled={draft.saving}
             onPick={draft.pickFile}
             onRemove={draft.removeAttachment}
           />

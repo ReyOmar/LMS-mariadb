@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import { isURL } from 'class-validator';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
@@ -107,15 +107,6 @@ export class CourseContentService {
     return this.prisma.resource.create({
       data: { moduleGuid, title: dto.title || 'Nuevo bloque', type: dto.type, contentHtml: dto.contentHtml, position },
     });
-  }
-
-  /** Ficha de un recurso para el editor, con la configuración completa del cuestionario. */
-  async getResource(resourceGuid: string, user: JwtPayload) {
-    await this.access.managedCourseOfResource(resourceGuid, user);
-
-    const resource = await this.prisma.resource.findUnique({ where: { guid: resourceGuid } });
-    if (!resource) throw new NotFoundException('Recurso no encontrado.');
-    return toClientResource(resource, this.storage);
   }
 
   /**

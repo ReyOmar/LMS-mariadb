@@ -113,6 +113,7 @@ function recordingService(
         return certifiedStudents.map((userGuid) => ({ userGuid }));
       },
     },
+    resource: { findMany: async () => [] },
     $queryRaw: async (chunks: TemplateStringsArray, ...values: unknown[]) => {
       const query = stitchSql(chunks, values);
       rawQueries.push(query);
@@ -516,6 +517,39 @@ describe('historial de intentos de cuestionario', () => {
     await service.getQuizAttempts(EXAMINER, { course: COURSE });
 
     expect(coursesQueried()).toBe(1);
+  });
+
+  it('cada intento lleva los intentos permitidos de su cuestionario, leídos una vez por cuestionario', async () => {
+    const { service } = recordingService(3, students);
+    const options = [
+      { id: 'a', texto: 'Sí', es_correcta: true },
+      { id: 'b', texto: 'No', es_correcta: false },
+    ];
+    const config = JSON.stringify({
+      intentos_permitidos: 2,
+      tiempo_minutos: 0,
+      preguntas: [{ id: 'p1', enunciado: '¿Cinturón siempre?', opciones: options }],
+    });
+    const findQuizzes = jest
+      .spyOn(service['prisma'].resource, 'findMany')
+      .mockResolvedValueOnce([{ guid: 'tarea-1', quizConfig: config }] as never);
+
+    const { submissions } = await service.getQuizAttempts(ADMIN, { course: COURSE });
+
+    expect(submissions.map((row) => row.allowedAttempts)).toEqual([2, 2, 2]);
+    expect(findQuizzes).toHaveBeenCalledTimes(1);
+    expect(findQuizzes.mock.calls[0][0]).toMatchObject({ where: { guid: { in: ['tarea-1'] } } });
+  });
+
+  it('un cuestionario con la configuración dañada no se da por ilimitado', async () => {
+    const { service } = recordingService(1, students);
+    jest
+      .spyOn(service['prisma'].resource, 'findMany')
+      .mockResolvedValueOnce([{ guid: 'tarea-1', quizConfig: '{roto' }] as never);
+
+    const { submissions } = await service.getQuizAttempts(ADMIN, { course: COURSE });
+
+    expect(submissions[0].allowedAttempts).toBeNull();
   });
 
   it('«Reprobados» es quien no alcanza el umbral con su mejor nota en algún cuestionario', async () => {

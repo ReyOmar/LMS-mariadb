@@ -1464,7 +1464,7 @@ certificado se emitía y las entregas seguían en el disco para siempre, tambié
   `archivo_purgado`) y conservan el nombre, el estado, la nota y el comentario. Los archivos se
   borran cuando la transacción se confirma, con la regla de siempre (`deleteUnreferenced`): si
   la emisión se deshace no se borra nada, y un fallo del disco no deshace el certificado. El
-  personal del curso recibe `submission:files-retired` y el aviso del alumno lo explica.
+  personal del curso recibe `round:closed` en cada emisión y el aviso del alumno lo explica.
 - **Vueltas ya certificadas.** Al arrancar, la API aplica la misma retirada a las que aún
   conservan archivos. La consulta parte de las entregas con archivo, que son las de las vueltas
   en curso, así que sin pendientes no hace nada.

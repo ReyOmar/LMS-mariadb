@@ -6,20 +6,18 @@ import { useCountry } from '@/contexts/CountryContext';
 import { formatNumber } from '@/lib/country';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { ActivityGroup, ModuleGroup, useExpandedGroups } from '../../components/GroupAccordion';
-import type { ExaminerSubmission } from '../../types';
+import type { QuizAttempt } from '../../types';
 import { QuizStudentCard } from './QuizStudentCard';
 import { groupByModuleAndQuiz, type StudentWithAttempts } from './results';
 
 interface Props {
-  attempts: ExaminerSubmission[];
+  attempts: QuizAttempt[];
   threshold: number;
-  /** Intentos permitidos por cuestionario; sin la cifra no se ofrece habilitar otro. */
-  attemptLimits: ReadonlyMap<string, number>;
-  onReleaseAttempt: (student: StudentWithAttempts, attempt: ExaminerSubmission) => void;
+  onReleaseAttempt: (student: StudentWithAttempts, attempt: QuizAttempt) => void;
 }
 
 /** Intentos cargados del curso, plegados en módulo → cuestionario → alumno. */
-export function QuizGroupList({ attempts, threshold, attemptLimits, onReleaseAttempt }: Props) {
+export function QuizGroupList({ attempts, threshold, onReleaseAttempt }: Props) {
   const { country } = useCountry();
   const modules = useMemo(() => groupByModuleAndQuiz(attempts), [attempts]);
   const expandedModules = useExpandedGroups();
@@ -74,7 +72,7 @@ export function QuizGroupList({ attempts, threshold, attemptLimits, onReleaseAtt
                       key={studentKey}
                       student={student}
                       threshold={threshold}
-                      allowedAttempts={quiz.assignmentGuid ? attemptLimits.get(quiz.assignmentGuid) : undefined}
+                      allowedAttempts={quiz.allowedAttempts}
                       expanded={expandedStudents.isOpen(studentKey)}
                       onToggle={() => expandedStudents.toggle(studentKey)}
                       onReleaseAttempt={(attempt) => onReleaseAttempt(student, attempt)}

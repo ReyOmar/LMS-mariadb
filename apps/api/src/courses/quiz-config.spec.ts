@@ -9,6 +9,7 @@ import {
   serializeQuizConfig,
   quizConfigForEditor,
   quizDisplayTitle,
+  allowedAttemptsOf,
 } from './quiz-config';
 
 const VALID_CONFIG: QuizConfig = {
@@ -130,6 +131,17 @@ describe('configuración de cuestionarios', () => {
     it('con una configuración dañada devuelve null para que el editor pueda rehacerla', () => {
       expect(quizConfigForEditor('{roto')).toBeNull();
       expect(quizConfigForEditor(null)).toBeNull();
+    });
+  });
+
+  describe('allowedAttemptsOf', () => {
+    it('lee los intentos permitidos de la configuración guardada', () => {
+      expect(allowedAttemptsOf(STORED)).toBe(2);
+    });
+
+    it('sin configuración o con ella dañada no los da por ilimitados', () => {
+      expect(allowedAttemptsOf(null)).toBeNull();
+      expect(allowedAttemptsOf('{roto')).toBeNull();
     });
   });
 

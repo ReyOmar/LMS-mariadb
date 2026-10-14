@@ -14,12 +14,14 @@ interface Props {
   pendingFile: File | null;
   limit: UploadLimit | null;
   readOnly: boolean;
+  /** Mientras se guarda: el archivo que se sube es el que se ve. */
+  disabled: boolean;
   onPick: (file: File) => void;
   onRemove: () => void;
 }
 
 /** Material descargable del recurso. */
-export function AttachmentField({ attachment, pendingFile, limit, readOnly, onPick, onRemove }: Props) {
+export function AttachmentField({ attachment, pendingFile, limit, readOnly, disabled, onPick, onRemove }: Props) {
   const name = pendingFile?.name ?? attachment?.name;
   const downloadUrl = pendingFile ? null : fileUrlFor(attachment?.url);
 
@@ -47,7 +49,8 @@ export function AttachmentField({ attachment, pendingFile, limit, readOnly, onPi
             <button
               type="button"
               onClick={onRemove}
-              className="text-red-700 hover:text-red-800 dark:text-red-400 dark:hover:text-red-300 text-xs font-bold"
+              disabled={disabled}
+              className="text-red-700 hover:text-red-800 dark:text-red-400 dark:hover:text-red-300 text-xs font-bold disabled:opacity-50 disabled:pointer-events-none"
             >
               Quitar
             </button>
@@ -56,7 +59,11 @@ export function AttachmentField({ attachment, pendingFile, limit, readOnly, onPi
       ) : readOnly ? (
         <p className="text-sm text-muted-foreground">Sin archivo adjunto.</p>
       ) : (
-        <label className="flex items-center justify-center gap-2 border-2 border-dashed border-border rounded-xl p-6 cursor-pointer hover:border-primary/50 hover:bg-muted/20 transition-colors">
+        <label
+          className={`flex items-center justify-center gap-2 border-2 border-dashed border-border rounded-xl p-6 transition-colors ${
+            disabled ? 'opacity-50' : 'cursor-pointer hover:border-primary/50 hover:bg-muted/20'
+          }`}
+        >
           <Paperclip className="h-5 w-5 text-muted-foreground" />
           <span className="text-sm text-muted-foreground font-medium">
             Haz clic para adjuntar un archivo (PDF, Word, PPT...)
@@ -66,6 +73,7 @@ export function AttachmentField({ attachment, pendingFile, limit, readOnly, onPi
             type="file"
             className="hidden"
             accept={MATERIAL_TYPES}
+            disabled={disabled}
             onChange={(e) => {
               const file = e.target.files?.[0];
               e.target.value = '';

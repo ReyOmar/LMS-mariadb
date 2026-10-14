@@ -13,7 +13,6 @@ import { PagedListArea } from '../../components/PagedListArea';
 import { scoreDistribution } from '../../components/summary-charts';
 import { passRate, resultBreakdown, type AttemptFilter, type CourseQuizSummary } from './results';
 import { useQuizAttempts } from './useQuizAttempts';
-import { useAttemptLimits } from './useAttemptLimits';
 import { useAttemptRelease } from './useAttemptRelease';
 import { QuizGroupList } from './QuizGroupList';
 
@@ -38,7 +37,6 @@ export function QuizCourseView({ course, onBack, onAttemptReleased }: Props) {
   const [filter, setFilter] = useState<AttemptFilter>('all');
 
   const attempts = useQuizAttempts(course.courseGuid, filter, appliedSearch);
-  const limits = useAttemptLimits(course.courseGuid);
   const releaseAttempt = useAttemptRelease(attempts.updateItems, () => {
     void attempts.refresh();
     onAttemptReleased();
@@ -60,12 +58,7 @@ export function QuizCourseView({ course, onBack, onAttemptReleased }: Props) {
       />
 
       <PagedListArea list={attempts} loadingMessage="Cargando intentos del curso..." loadMoreLabel="Ver más alumnos">
-        <QuizGroupList
-          attempts={loaded}
-          threshold={course.threshold}
-          attemptLimits={limits}
-          onReleaseAttempt={releaseAttempt}
-        />
+        <QuizGroupList attempts={loaded} threshold={course.threshold} onReleaseAttempt={releaseAttempt} />
       </PagedListArea>
     </div>
   );

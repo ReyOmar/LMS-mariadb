@@ -2,11 +2,11 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import api, { errorMessage } from '@/lib/api';
-import { uploadImage } from '@/lib/image-upload';
 import { useAlerts } from '@/contexts/AlertContext';
 import { useRealtimeEvent, useRealtimeReconnect } from '@/contexts/RealtimeContext';
 import type { Course, CourseStatus } from '@/types/models';
 import { changedFields, deletionWarning, publishBlocker, unpublishWarning } from './components/course-changes';
+import { useCoverEditor } from './useCoverEditor';
 
 /** Quiénes están matriculados ahora, para los avisos; `null` si no se pudo saber. */
 async function enrolledCount(courseGuid: string): Promise<number | null> {
@@ -19,8 +19,9 @@ async function enrolledCount(courseGuid: string): Promise<number | null> {
 }
 
 /**
- * El curso abierto en el constructor y los cambios de su ficha. Cada cambio se aplica sobre el
- * curso más reciente, no sobre el de la pantalla en que se pidió: dos guardados seguidos no se pisan.
+ * El curso abierto en el constructor y los cambios de su ficha, portada incluida. Cada cambio se
+ * aplica sobre el curso más reciente, no sobre el de la pantalla en que se pidió: dos guardados
+ * seguidos no se pisan.
  *
  * @param onRemoved Otra persona borró el curso mientras estaba abierto.
  */
@@ -73,14 +74,21 @@ export function useCourseWorkspace(courseGuid: string, onRemoved: () => void) {
     [showAlert],
   );
 
-  const patchCourse = useCallback(
-    (failureTitle: string, changes: Partial<Course>) =>
-      attempt(failureTitle, async () => {
-        await api.patch(`/courses/${courseGuid}`, changes);
-        update((current) => ({ ...current, ...changes }));
-      }),
-    [attempt, courseGuid, update],
+  /** Guarda cambios de la ficha y los refleja en pantalla; el error de la API llega a quien llama. */
+  const applyChanges = useCallback(
+    async (changes: Partial<Course>) => {
+      await api.patch(`/courses/${courseGuid}`, changes);
+      update((current) => ({ ...current, ...changes }));
+    },
+    [courseGuid, update],
   );
+
+  const patchCourse = useCallback(
+    (failureTitle: string, changes: Partial<Course>) => attempt(failureTitle, () => applyChanges(changes)),
+    [attempt, applyChanges],
+  );
+
+  const cover = useCoverEditor(applyChanges, attempt);
 
   const saveFields = async (changes: Partial<Course>) => {
     const applied = latest.current && changedFields(latest.current, changes);
@@ -88,7 +96,7 @@ export function useCourseWorkspace(courseGuid: string, onRemoved: () => void) {
   };
 
   const publish = async (): Promise<boolean> => {
-    const blocker = latest.current && publishBlocker(latest.current);
+    const blocker = latest.current && publishBlocker(latest.current, cover.previewUrl !== null);
     if (blocker) {
       showAlert.warning('Todavía no se puede publicar', blocker);
       return false;
@@ -118,22 +126,6 @@ export function useCourseWorkspace(courseGuid: string, onRemoved: () => void) {
     });
   };
 
-  const saveCover = (file: File) =>
-    attempt('No se pudo guardar la portada', async () => {
-      const coverImage = await uploadImage(file, 'portadas');
-      await api.patch(`/courses/${courseGuid}`, { coverImage });
-      update((current) => ({ ...current, coverImage }));
-    });
-
-  const removeCover = async () => {
-    const confirmed = await showConfirmation(
-      'Quitar la portada',
-      'La imagen se borrará del servidor y el curso se mostrará sin portada.',
-      'Quitar portada',
-    );
-    if (confirmed) await patchCourse('No se pudo quitar la portada', { coverImage: null });
-  };
-
   return {
     course,
     error,
@@ -144,8 +136,7 @@ export function useCourseWorkspace(courseGuid: string, onRemoved: () => void) {
     publish,
     changeStatus,
     deleteCourse,
-    saveCover,
-    removeCover,
+    cover,
   };
 }
 

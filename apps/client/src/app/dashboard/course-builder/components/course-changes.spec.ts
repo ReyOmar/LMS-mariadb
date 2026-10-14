@@ -23,7 +23,7 @@ describe('publishBlocker', () => {
       { type: 'TEXT', title: 'Lectura', contentHtml: '' },
     ]);
 
-    expect(publishBlocker(course)).toContain('«Normativa», «Vídeo de señales»');
+    expect(publishBlocker(course, false)).toContain('«Normativa», «Vídeo de señales»');
   });
 
   it('con todo completo se puede publicar', () => {
@@ -36,7 +36,11 @@ describe('publishBlocker', () => {
       { type: 'LINK', title: 'Vídeo', contentHtml: 'https://youtu.be/abc' },
     ]);
 
-    expect(publishBlocker(course)).toBeNull();
+    expect(publishBlocker(course, false)).toBeNull();
+  });
+
+  it('con una portada elegida sin guardar no deja publicar: después ya no podría guardarse ni descartarse', () => {
+    expect(publishBlocker(withResources([]), true)).toContain('guarda o descarta la portada elegida');
   });
 });
 

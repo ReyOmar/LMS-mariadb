@@ -5,6 +5,7 @@ import api, { errorMessage, uploadFile } from '@/lib/api';
 import { fileSizeWarning, uploadLimit } from '@/lib/upload-limits';
 import { useAlerts } from '@/contexts/AlertContext';
 import { useConfig } from '@/contexts/ConfigContext';
+import { usePendingFile } from '@/hooks/usePendingFile';
 import { useUnsavedChangesGuard } from '@/hooks/useUnsavedChangesGuard';
 import type { QuizConfig, Resource } from '@/types/models';
 import { newResource, type ResourceKind } from '@/app/dashboard/course-builder/components/resources';
@@ -30,20 +31,21 @@ async function createResource(moduleGuid: string, kind: ResourceKind, patch: Res
 }
 
 /**
- * Formulario del editor de recursos. Un recurso nuevo no existe hasta el primer guardado, y el
- * adjunto elegido espera en memoria hasta entonces: así no quedan en el disco subidas sin dueño.
+ * Formulario del editor de recursos. Un recurso nuevo no existe hasta el primer guardado. El
+ * adjunto elegido espera en memoria y se sube al guardar; si el guardado falla, la subida se
+ * retira y el archivo sigue elegido para reintentar.
  */
 export function useResourceDraft(moduleGuid: string, target: EditorTarget) {
   const { showAlert } = useAlerts();
   const { config } = useConfig();
   const [saved, setSaved] = useState(() => initialForm(target));
   const [form, setForm] = useState(saved);
-  const [pendingFile, setPendingFile] = useState<File | null>(null);
+  const pendingFile = usePendingFile();
   const [resourceGuid, setResourceGuid] = useState(target.resource?.guid ?? null);
   const [saving, setSaving] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
 
-  const dirty = pendingFile !== null || !sameForm(form, saved);
+  const dirty = pendingFile.file !== null || !sameForm(form, saved);
   const confirmDiscard = useUnsavedChangesGuard(dirty);
   const ceilingMb = config?.uploadCeilingMb;
   // El material del curso va con el límite general de la sede; el de la tarea es para las entregas.
@@ -57,30 +59,35 @@ export function useResourceDraft(moduleGuid: string, target: EditorTarget) {
   const pickFile = (file: File) => {
     const warning = fileSizeWarning(file, attachmentLimit);
     if (warning) showAlert.error('No se pudo usar el archivo', warning);
-    else setPendingFile(file);
+    else pendingFile.pick(file);
   };
 
   const removeAttachment = () => {
-    setPendingFile(null);
+    pendingFile.clear();
     edit({ attachment: null });
   };
 
-  const uploadPendingFile = async (): Promise<StoredAttachment | null> => {
-    if (!pendingFile) return form.attachment;
+  const uploadAttachment = async (file: File): Promise<string> => {
     setUploadProgress(0);
     try {
-      const { filename, url } = await uploadFile('/storage/upload?folder=recursos', pendingFile, {
+      const { filename } = await uploadFile('/storage/upload?folder=recursos', file, {
         limit: attachmentLimit,
         onProgress: setUploadProgress,
       });
-      const attachment = { key: filename, name: pendingFile.name, url };
-      // Con la clave en el formulario, reintentar tras un fallo al guardar no vuelve a subirlo.
-      edit({ attachment });
-      setPendingFile(null);
-      return attachment;
+      return filename;
     } finally {
       setUploadProgress(null);
     }
+  };
+
+  const persist = async (attachment: StoredAttachment | null): Promise<string> => {
+    const patch = buildResourcePatch(target.kind, form, attachment, ceilingMb);
+    const guid = resourceGuid ?? (await createResource(moduleGuid, target.kind, patch));
+    setResourceGuid(guid);
+    await api.patch(`/courses/resources/${guid}`, patch);
+    edit({ attachment });
+    setSaved({ ...form, attachment });
+    return guid;
   };
 
   /** @returns El recurso guardado, o `null` si no se pudo. */
@@ -93,13 +100,9 @@ export function useResourceDraft(moduleGuid: string, target: EditorTarget) {
 
     setSaving(true);
     try {
-      const attachment = await uploadPendingFile();
-      const patch = buildResourcePatch(target.kind, form, attachment, ceilingMb);
-      const guid = resourceGuid ?? (await createResource(moduleGuid, target.kind, patch));
-      setResourceGuid(guid);
-      await api.patch(`/courses/resources/${guid}`, patch);
-      setSaved({ ...form, attachment });
-      return guid;
+      return pendingFile.file
+        ? await pendingFile.commit(uploadAttachment, (key, file) => persist({ key, name: file.name, url: null }))
+        : await persist(form.attachment);
     } catch (error) {
       showAlert.error('No se pudo guardar', errorMessage(error));
       return null;
@@ -112,7 +115,7 @@ export function useResourceDraft(moduleGuid: string, target: EditorTarget) {
     form,
     edit,
     editQuiz,
-    pendingFile,
+    pendingFile: pendingFile.file,
     pickFile,
     removeAttachment,
     attachmentLimit,

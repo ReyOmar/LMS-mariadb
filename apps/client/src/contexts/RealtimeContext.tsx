@@ -48,7 +48,8 @@ const RealtimeContext = createContext<RealtimeContextType>({
  *
  * Una misma acción puede generar varios eventos seguidos (matricular a diez alumnos
  * dispara diez avisos). Agrupar durante un instante evita que cada pantalla montada lance
- * su propia recarga por cada uno. Se agrupa por evento y curso (`batchKey`).
+ * su propia recarga por cada uno. Se agrupa por evento, curso y, en los avisos de un alumno
+ * como `round:closed`, también por alumno (`batchKey`).
  */
 const DEBOUNCE_MS = 250;
 

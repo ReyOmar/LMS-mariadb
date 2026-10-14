@@ -6,16 +6,17 @@ import { formatNumber } from '@/lib/country';
 import { MAX_SCORE, scoreColor } from '@/lib/grading';
 import { dateTime } from '@/lib/dates';
 import { initials, plural } from '@/lib/text';
-import type { ExaminerSubmission } from '../../types';
+import type { QuizAttempt } from '../../types';
 import { getAttemptScore, releasableAttempt, type StudentWithAttempts } from './results';
 
 interface Props {
   student: StudentWithAttempts;
   threshold: number;
-  allowedAttempts: number | undefined;
+  /** Los del cuestionario; sin la cifra (`null`) no se ofrece habilitar otro. */
+  allowedAttempts: number | null;
   expanded: boolean;
   onToggle: () => void;
-  onReleaseAttempt: (attempt: ExaminerSubmission) => void;
+  onReleaseAttempt: (attempt: QuizAttempt) => void;
 }
 
 /** Un alumno dentro de un cuestionario: su mejor nota y, al desplegarlo, todos sus intentos. */

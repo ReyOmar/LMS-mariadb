@@ -9,7 +9,7 @@ import { SettingsService } from '../settings/settings.service';
 import { CourseAccessService, UNENROLLED_MESSAGE } from '../courses/course-access.service';
 import { recordCompletion, refreshCompletedResources } from '../courses/resource-progress';
 import { AWAITING_GRADE } from '../courses/progression';
-import { QuizConfig, parseQuizConfig, quizDisplayTitle } from '../courses/quiz-config';
+import { QuizConfig, allowedAttemptsOf, parseQuizConfig, quizDisplayTitle } from '../courses/quiz-config';
 import { attemptsExhausted, usedAttempts } from '../courses/quiz.service';
 import {
   AFTER_LOCK,
@@ -490,7 +490,8 @@ export class AssessmentsService {
    * un recuento falso. De cada alumno de la página vienen todos sus intentos.
    *
    * Aprueba quien alcanza el umbral con su mejor nota en **cada** cuestionario presentado:
-   * la mejor de uno no compensa el suspenso de otro.
+   * la mejor de uno no compensa el suspenso de otro. Cada intento lleva los intentos permitidos
+   * de su cuestionario, para saber a quién se le agotaron.
    */
   async getQuizAttempts(user: JwtPayload, filter: AttemptQueueDto) {
     const course = await this.access.managedCourse(filter.course, user);
@@ -551,15 +552,29 @@ export class AssessmentsService {
     });
 
     const last = page[page.length - 1];
-    const certified = await this.certifiedStudents(filter.course, attempts);
+    const [certified, allowedAttempts] = await Promise.all([
+      this.certifiedStudents(filter.course, attempts),
+      this.allowedAttemptsByQuiz(attempts),
+    ]);
 
     return {
       cursor: hasMore ? encodeCursor(last.lastSubmittedAt, last.userGuid) : null,
       submissions: attempts.map((attempt) => ({
         ...this.forExaminer(attempt, certified),
         assignmentTitle: attempt.assignment?.title ?? 'Cuestionario eliminado',
+        allowedAttempts: attempt.assignment ? (allowedAttempts.get(attempt.assignment.guid) ?? null) : null,
       })),
     };
+  }
+
+  /** Intentos permitidos de los cuestionarios de esos intentos, leyendo una vez cada configuración. */
+  private async allowedAttemptsByQuiz(attempts: DashboardSubmission[]): Promise<Map<string, number | null>> {
+    const quizGuids = new Set(attempts.flatMap((attempt) => (attempt.assignment ? [attempt.assignment.guid] : [])));
+    const quizzes = await this.prisma.resource.findMany({
+      where: { guid: { in: [...quizGuids] } },
+      select: { guid: true, quizConfig: true },
+    });
+    return new Map(quizzes.map((quiz) => [quiz.guid, allowedAttemptsOf(quiz.quizConfig)]));
   }
 
   /**

@@ -16,14 +16,15 @@ interface Props {
   /** La portada guardada, o `null` si no tiene. */
   savedUrl: string | null;
   cover: CoverEditor;
+  /** Con el curso publicado la portada no se toca: ni la guardada ni una elegida antes. */
   readOnly: boolean;
-  onRemove: () => void;
 }
 
 /** Portada del curso: la elegida se ve al momento y no se sube hasta «Guardar portada». */
-export function CoverField({ courseTitle, savedUrl, cover, readOnly, onRemove }: Props) {
+export function CoverField({ courseTitle, savedUrl, cover, readOnly }: Props) {
   const input = useRef<HTMLInputElement>(null);
   const shownUrl = cover.previewUrl ?? savedUrl;
+  const pendingLocked = readOnly || cover.saving;
 
   return (
     <div className="w-full bg-card rounded-2xl shadow-sm border border-border p-4 sm:p-8 mb-8 flex flex-col items-center">
@@ -58,7 +59,7 @@ export function CoverField({ courseTitle, savedUrl, cover, readOnly, onRemove }:
             <button
               type="button"
               onClick={() => void cover.save()}
-              disabled={cover.saving}
+              disabled={pendingLocked}
               className={`${BUTTON} bg-primary text-primary-foreground hover:bg-primary/90`}
             >
               {cover.saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
@@ -67,7 +68,7 @@ export function CoverField({ courseTitle, savedUrl, cover, readOnly, onRemove }:
             <button
               type="button"
               onClick={cover.discard}
-              disabled={cover.saving}
+              disabled={pendingLocked}
               className={`${BUTTON} bg-muted hover:bg-border`}
             >
               <X className="h-4 w-4" /> Descartar
@@ -90,7 +91,7 @@ export function CoverField({ courseTitle, savedUrl, cover, readOnly, onRemove }:
                 </a>
                 <button
                   type="button"
-                  onClick={onRemove}
+                  onClick={() => void cover.remove()}
                   disabled={readOnly}
                   className={`${BUTTON} bg-red-500/10 text-red-700 dark:text-red-400 hover:bg-red-500/20`}
                 >

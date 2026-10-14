@@ -1,10 +1,9 @@
-import type { Course } from '@/types/models';
 import { averageScore, toScore } from '@/lib/grading';
-import { displayTitle, isQuiz } from '@/lib/resources';
-import { quizSummary } from '@/lib/quiz-config';
+import { displayTitle } from '@/lib/resources';
 import { COLOR, type Slice } from '@/components/ui/charts';
 import { twoWayBreakdown, type ThresholdSummary } from '../../components/summary-charts';
-import type { ExaminerSubmission } from '../../types';
+import { closeRoundOf, type ClosedRound } from '../../closed-round';
+import type { ExaminerSubmission, QuizAttempt } from '../../types';
 
 // Cuenta la mejor nota de cada alumno, no cada intento: contar intentos infla el total y hunde el promedio.
 
@@ -74,9 +73,9 @@ export function resultBreakdown(passedCount: number, failed: number): Slice[] {
 }
 
 export interface StudentWithAttempts {
-  student: ExaminerSubmission['student'];
+  student: QuizAttempt['student'];
   /** Del más reciente al más antiguo, que es el orden en que se revisa. */
-  attempts: ExaminerSubmission[];
+  attempts: QuizAttempt[];
   bestScore: number | null;
   attemptCount: number;
 }
@@ -86,6 +85,7 @@ interface QuizWithStudents {
   key: string;
   assignmentGuid: string | null;
   assignmentTitle: string;
+  allowedAttempts: number | null;
   students: StudentWithAttempts[];
   average: number;
 }
@@ -104,12 +104,15 @@ function averageOf(scores: number[]): number {
 }
 
 /** Ordena los intentos en módulo → cuestionario → alumno, por identificador y no por título. */
-export function groupByModuleAndQuiz(submissions: ExaminerSubmission[]): ModuleWithQuizzes[] {
+export function groupByModuleAndQuiz(submissions: QuizAttempt[]): ModuleWithQuizzes[] {
   const byModule = new Map<
     string,
     {
       title: string;
-      assignments: Map<string, { guid: string | null; title: string; students: Map<string, ExaminerSubmission[]> }>;
+      assignments: Map<
+        string,
+        { guid: string | null; title: string; allowedAttempts: number | null; students: Map<string, QuizAttempt[]> }
+      >;
     }
   >();
 
@@ -126,6 +129,7 @@ export function groupByModuleAndQuiz(submissions: ExaminerSubmission[]): ModuleW
       assignments.set(assignmentKey, {
         guid: submission.assignmentGuid,
         title: stripQuizMarker(submission.assignmentTitle),
+        allowedAttempts: submission.allowedAttempts,
         students: new Map(),
       });
     }
@@ -138,7 +142,7 @@ export function groupByModuleAndQuiz(submissions: ExaminerSubmission[]): ModuleW
     const moduleScores: number[] = [];
 
     const assignments = Array.from(assignmentsMap.entries()).map(
-      ([assignmentKey, { guid: assignmentGuid, title: assignmentTitle, students: studentsMap }]) => {
+      ([assignmentKey, { guid: assignmentGuid, title: assignmentTitle, allowedAttempts, students: studentsMap }]) => {
         const assignmentScores: number[] = [];
 
         const students: StudentWithAttempts[] = Array.from(studentsMap.values()).map((attempts) => {
@@ -159,7 +163,14 @@ export function groupByModuleAndQuiz(submissions: ExaminerSubmission[]): ModuleW
         students.sort((a, b) => (b.bestScore ?? 0) - (a.bestScore ?? 0));
         moduleScores.push(...assignmentScores);
 
-        return { key: assignmentKey, assignmentGuid, assignmentTitle, students, average: averageOf(assignmentScores) };
+        return {
+          key: assignmentKey,
+          assignmentGuid,
+          assignmentTitle,
+          allowedAttempts,
+          students,
+          average: averageOf(assignmentScores),
+        };
       },
     );
 
@@ -171,11 +182,11 @@ export function groupByModuleAndQuiz(submissions: ExaminerSubmission[]): ModuleW
 export interface StudentAttempts {
   /** El del alumno, para que una página nueva sustituya entero lo que había de él. */
   guid: string;
-  attempts: ExaminerSubmission[];
+  attempts: QuizAttempt[];
 }
 
-export function attemptsByStudent(attempts: ExaminerSubmission[]): StudentAttempts[] {
-  const byStudent = new Map<string, ExaminerSubmission[]>();
+export function attemptsByStudent(attempts: QuizAttempt[]): StudentAttempts[] {
+  const byStudent = new Map<string, QuizAttempt[]>();
   for (const attempt of attempts) {
     const student = attempt.student?.guid ?? attempt.guid;
     const loaded = byStudent.get(student);
@@ -190,10 +201,11 @@ export function withoutAttempt(rows: StudentAttempts[], attemptGuid: string): St
   return rows.map((row) => ({ ...row, attempts: row.attempts.filter((attempt) => attempt.guid !== attemptGuid) }));
 }
 
-/** Intentos permitidos de cada cuestionario del curso; 0 son ilimitados. */
-export function attemptLimits(course: Pick<Course, 'modules'>): Map<string, number> {
-  const quizzes = (course.modules ?? []).flatMap((courseModule) => courseModule.resources ?? []).filter(isQuiz);
-  return new Map(quizzes.map((quiz) => [quiz.guid, quizSummary(quiz.quizConfig)?.allowedAttempts ?? 0]));
+/** Al certificarse un alumno, sus intentos cargados del curso quedan cerrados: ya no se le habilita otro. */
+export function closeRoundIn(rows: StudentAttempts[], round: ClosedRound): StudentAttempts[] {
+  return rows.map((row) =>
+    row.guid === round.userGuid ? { ...row, attempts: closeRoundOf(row.attempts, round) } : row,
+  );
 }
 
 /**
@@ -203,10 +215,10 @@ export function attemptLimits(course: Pick<Course, 'modules'>): Map<string, numb
 export function releasableAttempt(
   student: StudentWithAttempts,
   threshold: number,
-  allowedAttempts: number | undefined,
-): ExaminerSubmission | null {
+  allowedAttempts: number | null,
+): QuizAttempt | null {
   const latest = student.attempts[0];
   const passed = student.bestScore !== null && student.bestScore >= threshold;
-  const exhausted = allowedAttempts !== undefined && allowedAttempts > 0 && student.attemptCount >= allowedAttempts;
+  const exhausted = allowedAttempts !== null && allowedAttempts > 0 && student.attemptCount >= allowedAttempts;
   return latest && !latest.roundClosed && !passed && exhausted ? latest : null;
 }

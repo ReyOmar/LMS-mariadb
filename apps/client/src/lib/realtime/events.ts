@@ -22,7 +22,7 @@ export const REALTIME_EVENTS = [
   'enrollment:changed',
   'submission:new',
   'submission:graded',
-  'submission:files-retired',
+  'round:closed',
   'quiz:attempt-enabled',
   'config:updated',
   'presence:update',
@@ -69,12 +69,17 @@ export function withPresence(online: ReadonlySet<string>, { guid, status }: Pres
   return next;
 }
 
+/** Avisos sobre un alumno concreto: quien los escucha actualiza la fila de ese alumno. */
+const PER_STUDENT_EVENTS: ReadonlySet<RealtimeEvent> = new Set(['round:closed']);
+
 /**
- * Clave con la que se agrupan las ráfagas de un evento: el evento y, si es de un curso, el curso.
- * Sólo por evento, la baja en un curso y el alta en otro se fundirían y la baja no llegaría.
+ * Clave con la que se agrupan las ráfagas de un evento: el evento, el curso si es de un curso y
+ * el alumno si es sobre uno. Sólo por evento, la baja en un curso y el alta en otro se fundirían
+ * y la baja no llegaría; sólo por curso, de dos alumnos certificados a la vez se perdería uno.
  */
 export function batchKey(event: RealtimeEvent, data: unknown): string {
-  const payload = data as { courseGuid?: unknown; guid?: unknown } | null | undefined;
-  const course = payload?.courseGuid ?? (event.startsWith('course:') ? payload?.guid : undefined);
-  return typeof course === 'string' ? `${event}:${course}` : event;
+  const payload = (data ?? {}) as { courseGuid?: unknown; guid?: unknown; userGuid?: unknown };
+  const course = payload.courseGuid ?? (event.startsWith('course:') ? payload.guid : undefined);
+  const student = PER_STUDENT_EVENTS.has(event) ? payload.userGuid : undefined;
+  return [event, course, student].filter((part) => typeof part === 'string').join(':');
 }

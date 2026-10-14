@@ -31,7 +31,7 @@ export const REALTIME_EVENTS = [
   'enrollment:changed',
   'submission:new',
   'submission:graded',
-  'submission:files-retired',
+  'round:closed',
   'quiz:attempt-enabled',
   // Plataforma
   'config:updated',
