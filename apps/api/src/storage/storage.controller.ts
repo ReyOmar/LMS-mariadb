@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   Controller,
+  Delete,
   ForbiddenException,
   Get,
   HttpException,
@@ -15,20 +16,19 @@ import { SkipThrottle, Throttle } from '@nestjs/throttler';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import * as path from 'path';
 import { StorageService } from './storage.service';
+import { FileOwnershipService } from './file-ownership.service';
 import { contentDisposition } from './content-disposition';
 import { ByteRange, parseByteRange } from './byte-range';
 import { receiveFile } from './multipart';
 import { hasActiveContent } from './file-formats';
-import { Folder, isBrandKey, isFolder, isPublicKey, isStorageKey } from './folders';
+import { UPLOAD_FOLDERS, isBrandKey, isFolder, isPublicKey, isStorageKey } from './folders';
 import { uploadLimit } from './upload-limits';
 import { Public } from '../common/decorators/public.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { JwtPayload } from '../common/interfaces/jwt-payload.interface';
 import { SettingsService } from '../settings/settings.service';
-
-/** Carpetas donde puede escribir directamente quien gestiona contenido. */
-const UPLOAD_FOLDERS: Folder[] = ['portadas', 'recursos', 'firmas', 'logos', 'fondos'];
+import { DiscardUploadDto } from './dto/discard-upload.dto';
 
 const PUBLIC_CACHE_S = 24 * 60 * 60;
 const RESERVED_CACHE_S = 5 * 60;
@@ -37,6 +37,7 @@ const RESERVED_CACHE_S = 5 * 60;
 export class StorageController {
   constructor(
     private readonly storage: StorageService,
+    private readonly files: FileOwnershipService,
     private readonly settings: SettingsService,
   ) {}
 
@@ -62,6 +63,13 @@ export class StorageController {
     const key = await this.storage.uploadFromDisk(file.filePath, file.name, folder, user, limit.bytes);
 
     return { filename: key, url: this.storage.downloadUrl(key, file.name) };
+  }
+
+  /** Retira una subida propia que no llegó a guardarse: el guardado falló o se descartó antes. */
+  @Roles('ADMIN', 'TEACHER')
+  @Delete('/upload')
+  discardUpload(@CurrentUser() user: JwtPayload, @Query() { key }: DiscardUploadDto) {
+    return this.files.discardOwnUpload(key, user.sub);
   }
 
   /**

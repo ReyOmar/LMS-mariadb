@@ -18,11 +18,10 @@ interface Props {
   readOnly: boolean;
   cover: CoverEditor;
   onSave: (changes: Partial<Course>) => void;
-  onRemoveCover: () => void;
 }
 
 /** Ajustes que no dependen de ningún módulo; cada campo se guarda al salir de él. */
-export function CourseSettings({ course, readOnly, cover, onSave, onRemoveCover }: Props) {
+export function CourseSettings({ course, readOnly, cover, onSave }: Props) {
   return (
     <div className="max-w-3xl mx-auto w-full flex flex-col items-center justify-center pt-10">
       <h2 className="text-2xl font-bold mb-8 text-foreground">Configuración general del curso</h2>
@@ -107,7 +106,6 @@ export function CourseSettings({ course, readOnly, cover, onSave, onRemoveCover 
         savedUrl={fileUrlFor(course.coverImage)}
         cover={cover}
         readOnly={readOnly}
-        onRemove={onRemoveCover}
       />
     </div>
   );

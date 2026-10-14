@@ -8,12 +8,11 @@ import {
   stripQuizMarker,
   releasableAttempt,
   attemptsByStudent,
-  attemptLimits,
+  closeRoundIn,
   withoutAttempt,
   type CourseQuizSummary,
 } from './results';
-import type { Course } from '@/types/models';
-import type { ExaminerSubmission } from '../../types';
+import type { QuizAttempt } from '../../types';
 
 const COURSE: CourseQuizSummary = {
   courseGuid: 'curso-1',
@@ -38,8 +37,10 @@ function attempt(guid: string, student: string, score: number | null, minute: nu
     // Por defecto el identificador sale del título; las pruebas de homónimos lo fijan aparte.
     assignmentGuid: `guid-${assignment}`,
     student: { guid: student, firstName: 'Ana', lastName: 'Díaz', email: 'ana@pesv.test' },
+    courseGuid: 'curso-1',
     roundClosed: false,
-  } as unknown as ExaminerSubmission;
+    allowedAttempts: 2,
+  } as unknown as QuizAttempt;
 }
 
 describe('stripQuizMarker', () => {
@@ -166,6 +167,13 @@ describe('groupByModuleAndQuiz', () => {
     expect(new Set(module.assignments.map((t) => t.key)).size).toBe(2);
   });
 
+  it('cada cuestionario lleva los intentos que admite, tal como los manda la API', () => {
+    const unreadable = { ...attempt('i9', 'ana', 10, 9, '[QUIZ] Señalización'), allowedAttempts: null };
+    const [module] = groupByModuleAndQuiz([...loaded, unreadable]);
+
+    expect(module.assignments.map((quiz) => quiz.allowedAttempts)).toEqual([2, null]);
+  });
+
   it('separa los cuestionarios del mismo módulo', () => {
     const [module] = groupByModuleAndQuiz([...loaded, attempt('i5', 'ana', 100, 5, '[QUIZ] Señalización')]);
 
@@ -174,7 +182,7 @@ describe('groupByModuleAndQuiz', () => {
 });
 
 describe('releasableAttempt', () => {
-  const studentOf = (attempts: ExaminerSubmission[]) => groupByModuleAndQuiz(attempts)[0].assignments[0].students[0];
+  const studentOf = (attempts: QuizAttempt[]) => groupByModuleAndQuiz(attempts)[0].assignments[0].students[0];
   const exhausted = () => studentOf([attempt('i1', 'ana', 40, 1), attempt('i2', 'ana', 60, 2)]);
 
   it('a quien agotó sus intentos sin aprobar le libera uno retirando el más reciente', () => {
@@ -187,7 +195,7 @@ describe('releasableAttempt', () => {
   });
 
   it('sin saber cuántos intentos admite el cuestionario no ofrece liberar ninguno', () => {
-    expect(releasableAttempt(exhausted(), 80, undefined)).toBeNull();
+    expect(releasableAttempt(exhausted(), 80, null)).toBeNull();
   });
 
   it('a quien ya aprobó no le libera ninguno', () => {
@@ -227,23 +235,20 @@ describe('withoutAttempt', () => {
   });
 });
 
-describe('attemptLimits', () => {
-  it('lee los intentos permitidos de cada cuestionario y deja fuera las tareas', () => {
-    const course = {
-      modules: [
-        {
-          resources: [
-            { guid: 'q1', type: 'ASSIGNMENT', title: '[QUIZ] Normativa', quizConfig: '{"allowedAttempts":2}' },
-            { guid: 'q2', type: 'ASSIGNMENT', title: '[QUIZ] Señales', quizConfig: null },
-            { guid: 't1', type: 'ASSIGNMENT', title: 'Informe', quizConfig: null },
-          ],
-        },
-      ],
-    } as unknown as Course;
+describe('closeRoundIn', () => {
+  const round = { courseGuid: 'curso-1', userGuid: 'ana' };
 
-    expect([...attemptLimits(course)]).toEqual([
-      ['q1', 2],
-      ['q2', 0],
-    ]);
+  it('al certificarse el alumno, sus intentos cargados quedan cerrados y ya no se le libera ninguno', () => {
+    const rows = closeRoundIn(attemptsByStudent([attempt('i1', 'ana', 40, 1), attempt('i2', 'ana', 60, 2)]), round);
+    const [student] = groupByModuleAndQuiz(rows[0].attempts)[0].assignments[0].students;
+
+    expect(rows[0].attempts.every((item) => item.roundClosed)).toBe(true);
+    expect(releasableAttempt(student, 80, 2)).toBeNull();
+  });
+
+  it('no toca a los demás alumnos', () => {
+    const rows = attemptsByStudent([attempt('i1', 'ana', 40, 1), attempt('i2', 'beto', 60, 2)]);
+
+    expect(closeRoundIn(rows, round)[1]).toBe(rows[1]);
   });
 });

@@ -6,8 +6,8 @@ export interface ExaminerSubmission extends SubmissionToGrade {
   roundClosed: boolean;
 }
 
-/** Aviso de que, al certificarse un alumno, se retiraron del disco los archivos que entregó en el curso. */
-export interface FilesRetired {
-  courseGuid: string;
-  userGuid: string;
+/** Intento de cuestionario, con los intentos que admite su cuestionario. */
+export interface QuizAttempt extends ExaminerSubmission {
+  /** 0 son ilimitados; `null` si su configuración no se puede leer, y entonces no se habilita otro. */
+  allowedAttempts: number | null;
 }

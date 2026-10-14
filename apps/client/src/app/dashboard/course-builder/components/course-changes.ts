@@ -8,8 +8,16 @@ export function changedFields(course: Course, changes: Partial<Course>): Partial
   return changed.length > 0 ? (Object.fromEntries(changed) as Partial<Course>) : null;
 }
 
-/** Por qué no se puede publicar todavía: lo que un alumno no podría completar. */
-export function publishBlocker(course: Pick<Course, 'modules'>): string | null {
+const UNSAVED_COVER_BLOCKER =
+  'Antes de publicar, guarda o descarta la portada elegida: con el curso publicado ya no se puede cambiar.';
+
+/**
+ * Por qué no se puede publicar todavía: una portada elegida sin guardar o lo que un alumno no
+ * podría completar.
+ */
+export function publishBlocker(course: Pick<Course, 'modules'>, hasUnsavedCover: boolean): string | null {
+  if (hasUnsavedCover) return UNSAVED_COVER_BLOCKER;
+
   const unfinished = unconfiguredResources(course);
   if (unfinished.length === 0) return null;
   const names = unfinished.map((title) => `«${title}»`).join(', ');

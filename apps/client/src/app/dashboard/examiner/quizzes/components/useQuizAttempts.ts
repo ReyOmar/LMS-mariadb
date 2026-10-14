@@ -5,14 +5,15 @@ import api from '@/lib/api';
 import { usePagedList } from '@/hooks/usePagedList';
 import { useLiveRefresh } from '@/hooks/useLiveRefresh';
 import type { RealtimeEvent } from '@/lib/realtime/events';
-import type { ExaminerSubmission } from '../../types';
-import { attemptsByStudent, type AttemptFilter, type StudentAttempts } from './results';
+import type { QuizAttempt } from '../../types';
+import { useRoundClosed } from '../../hooks/useRoundClosed';
+import { attemptsByStudent, closeRoundIn, type AttemptFilter, type StudentAttempts } from './results';
 
-const LIST_EVENTS: readonly RealtimeEvent[] = ['submission:graded', 'submission:files-retired'];
+const LIST_EVENTS: readonly RealtimeEvent[] = ['submission:graded', 'round:closed'];
 
 interface AttemptsResponse {
   cursor: string | null;
-  submissions: ExaminerSubmission[];
+  submissions: QuizAttempt[];
 }
 
 /** Intentos de un curso por páginas de alumnos, con el filtro y la búsqueda que aplica el servidor. */
@@ -33,6 +34,10 @@ export function useQuizAttempts(courseGuid: string, filter: AttemptFilter, searc
   );
 
   const attempts = usePagedList<StudentAttempts>(fetchPage, 'No se pudieron cargar los intentos del curso.');
-  useLiveRefresh(LIST_EVENTS, attempts.refresh);
+  const { refresh, updateItems } = attempts;
+
+  useLiveRefresh(LIST_EVENTS, refresh);
+  useRoundClosed((round) => updateItems((rows) => closeRoundIn(rows, round)));
+
   return attempts;
 }

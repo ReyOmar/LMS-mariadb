@@ -3,11 +3,21 @@
 import { useState } from 'react';
 import { useAlerts } from '@/contexts/AlertContext';
 import { usePendingFile } from '@/hooks/usePendingFile';
-import { imageUploadWarning } from '@/lib/image-upload';
+import { imageUploadWarning, uploadImage } from '@/lib/image-upload';
+import type { Course } from '@/types/models';
 
-/** Portada elegida que espera en memoria hasta «Guardar portada». */
-export function useCoverEditor(saveCover: (file: File) => Promise<boolean>) {
-  const { showAlert } = useAlerts();
+type ApplyCover = (changes: Pick<Course, 'coverImage'>) => Promise<void>;
+type Attempt = (failureTitle: string, action: () => Promise<void>) => Promise<boolean>;
+
+/**
+ * Portada del curso: la elegida espera en memoria hasta «Guardar portada», y quitar la guardada
+ * la borra del servidor.
+ *
+ * @param applyCover Guarda la portada en el curso; falla si no se pudo.
+ * @param attempt Ejecuta un cambio y avisa si falla.
+ */
+export function useCoverEditor(applyCover: ApplyCover, attempt: Attempt) {
+  const { showAlert, showConfirmation } = useAlerts();
   const pending = usePendingFile();
   const [saving, setSaving] = useState(false);
 
@@ -18,13 +28,26 @@ export function useCoverEditor(saveCover: (file: File) => Promise<boolean>) {
   };
 
   const save = async () => {
-    if (!pending.file) return;
     setSaving(true);
-    if (await saveCover(pending.file)) pending.clear();
+    await attempt('No se pudo guardar la portada', () =>
+      pending.commit(
+        (file) => uploadImage(file, 'portadas'),
+        (coverImage) => applyCover({ coverImage }),
+      ),
+    );
     setSaving(false);
   };
 
-  return { previewUrl: pending.previewUrl, saving, pick, save, discard: pending.clear };
+  const remove = async () => {
+    const confirmed = await showConfirmation(
+      'Quitar la portada',
+      'La imagen se borrará del servidor y el curso se mostrará sin portada.',
+      'Quitar portada',
+    );
+    if (confirmed) await attempt('No se pudo quitar la portada', () => applyCover({ coverImage: null }));
+  };
+
+  return { previewUrl: pending.previewUrl, saving, pick, save, discard: pending.clear, remove };
 }
 
 export type CoverEditor = ReturnType<typeof useCoverEditor>;

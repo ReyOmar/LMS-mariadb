@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException, Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { Country } from '../common/domain/country';
 import { StorageService } from './storage.service';
@@ -98,6 +98,21 @@ export class FileOwnershipService {
     if ('country' in owner && file.country !== owner.country) {
       throw new ForbiddenException('Ese archivo pertenece a otra sede. Súbelo de nuevo.');
     }
+  }
+
+  /**
+   * Retira una subida que no llegó a guardarse en ninguna fila, porque el guardado falló o se
+   * descartó antes. Sólo la de quien lo pide, y si una fila ya la usa —el guardado sí llegó a la
+   * base aunque su respuesta se perdiera—, la conserva.
+   *
+   * @throws NotFoundException si la clave no consta como subida de `uploaderGuid`.
+   */
+  async discardOwnUpload(key: string, uploaderGuid: string): Promise<void> {
+    const file = await this.prisma.storedFile.findUnique({ where: { key }, select: { uploaderGuid: true } });
+    if (file?.uploaderGuid !== uploaderGuid) {
+      throw new NotFoundException('No consta ninguna subida tuya con ese archivo.');
+    }
+    await this.deleteUnreferenced([key]);
   }
 
   /**

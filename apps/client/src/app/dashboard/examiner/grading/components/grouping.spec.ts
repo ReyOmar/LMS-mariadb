@@ -1,5 +1,4 @@
 import {
-  closeRoundOf,
   groupByModuleAndAssignment,
   filteredTotal,
   normalizeTypedScore,
@@ -189,29 +188,5 @@ describe('gradingStart', () => {
       feedback: '',
       previous: null,
     });
-  });
-});
-
-describe('closeRoundOf', () => {
-  const delivered = (guid: string, student: string): ExaminerSubmission =>
-    ({
-      ...submission(guid, 'GRADED', 'Módulo 1', 'Informe'),
-      student: { guid: student },
-      fileName: 'informe.pdf',
-      fileUrl: `/api/storage/download/${guid}`,
-      filePurged: false,
-      roundClosed: false,
-    }) as ExaminerSubmission;
-
-  it('al certificarse el alumno, sus entregas cargadas pierden la descarga y conservan el nombre del archivo', () => {
-    const [retired] = closeRoundOf([delivered('e1', 'ana')], 'ana');
-
-    expect(retired).toMatchObject({ fileName: 'informe.pdf', fileUrl: null, filePurged: true, roundClosed: true });
-  });
-
-  it('no toca las entregas de los demás alumnos', () => {
-    const other = delivered('e2', 'beto');
-
-    expect(closeRoundOf([other], 'ana')).toEqual([other]);
   });
 });

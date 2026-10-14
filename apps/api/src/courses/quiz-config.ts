@@ -94,9 +94,23 @@ export function serializeQuizConfig(config: QuizConfig): string {
  * recurso y rehacerla en lugar de encontrarse un error.
  */
 export function quizConfigForEditor(stored: string | null): string | null {
+  const config = readQuizConfig(stored);
+  return config && JSON.stringify(config);
+}
+
+/**
+ * Intentos permitidos de un cuestionario; 0 son ilimitados. Sin configuración o con ella dañada
+ * no se sabe cuántos son: `null`, y no 0, para no tomarlo por un cuestionario sin límite.
+ */
+export function allowedAttemptsOf(stored: string | null): number | null {
+  return readQuizConfig(stored)?.allowedAttempts ?? null;
+}
+
+/** Como `parseQuizConfig`, pero `null` en lugar del error para quien sólo la consulta. */
+function readQuizConfig(stored: string | null): QuizConfig | null {
   if (!stored) return null;
   try {
-    return JSON.stringify(parseQuizConfig(stored));
+    return parseQuizConfig(stored);
   } catch {
     return null;
   }

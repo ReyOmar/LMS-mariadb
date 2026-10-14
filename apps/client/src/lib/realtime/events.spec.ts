@@ -15,12 +15,20 @@ describe('agrupación de avisos en tiempo real', () => {
     expect(alta).toBe(otraAlta);
   });
 
-  it('la retirada de archivos al certificar se agrupa por curso, como las matrículas', () => {
-    const inA = batchKey('submission:files-retired', { courseGuid: 'curso-a', userGuid: 'ana' });
-    const inB = batchKey('submission:files-retired', { courseGuid: 'curso-b', userGuid: 'ana' });
+  it('el cierre de una vuelta se agrupa por curso y alumno: dos certificados a la vez llegan los dos', () => {
+    const ana = batchKey('round:closed', { courseGuid: 'curso-a', userGuid: 'ana' });
+    const luis = batchKey('round:closed', { courseGuid: 'curso-a', userGuid: 'luis' });
+    const anaInB = batchKey('round:closed', { courseGuid: 'curso-b', userGuid: 'ana' });
 
-    expect(inA).toBe('submission:files-retired:curso-a');
-    expect(inA).not.toBe(inB);
+    expect(ana).toBe('round:closed:curso-a:ana');
+    expect(new Set([ana, luis, anaInB]).size).toBe(3);
+    expect(batchKey('round:closed', { courseGuid: 'curso-a', userGuid: 'ana' })).toBe(ana);
+  });
+
+  it('los demás avisos de un curso no se separan por alumno', () => {
+    expect(batchKey('enrollment:changed', { courseGuid: 'curso-a', userGuid: 'ana' })).toBe(
+      batchKey('enrollment:changed', { courseGuid: 'curso-a', userGuid: 'luis' }),
+    );
   });
 
   it('los avisos de un curso usan su guid', () => {

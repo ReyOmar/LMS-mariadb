@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -24,12 +24,14 @@ function table(rows: Row[]) {
 
 /**
  * Registro de subidas y filas que guardan claves, con lo mínimo para el servicio.
- * La portada de la profesora Ana es suya; la de Beto, de otra persona de su misma sede.
+ * La portada de la profesora Ana es suya; la de Beto, de otra persona de su misma sede. La
+ * compartida también la subió Ana, y ya la usa un curso.
  */
 function campusRows({ failQueries = false }: { failQueries?: boolean } = {}) {
   const registry: Record<string, Row> = {
     'portadas/ana.png': { folder: 'portadas', uploaderGuid: 'ana', country: 'COLOMBIA' },
     'portadas/beto.png': { folder: 'portadas', uploaderGuid: 'beto', country: 'COLOMBIA' },
+    'portadas/compartida.png': { folder: 'portadas', uploaderGuid: 'ana', country: 'COLOMBIA' },
     'logos/colombia.png': { folder: 'logos', uploaderGuid: 'admin-co', country: 'COLOMBIA' },
   };
 
@@ -193,6 +195,32 @@ describe('FileOwnershipService · retirar archivos', () => {
     const { service, storage } = campus({ failQueries: true });
 
     await expect(service.deleteUnreferenced(['portadas/vieja.png'])).resolves.toBeUndefined();
+    expect(storage.deleteFiles).not.toHaveBeenCalled();
+  });
+});
+
+describe('FileOwnershipService · retirar una subida que no llegó a guardarse', () => {
+  it('retira la subida propia que ninguna fila usa', async () => {
+    const { service, storage } = campus();
+
+    await service.discardOwnUpload('portadas/ana.png', 'ana');
+
+    expect(storage.deleteFiles).toHaveBeenCalledWith(['portadas/ana.png']);
+  });
+
+  it('conserva la subida propia que una fila ya usa: el guardado llegó a la base', async () => {
+    const { service, storage } = campus();
+
+    await service.discardOwnUpload('portadas/compartida.png', 'ana');
+
+    expect(storage.deleteFiles).toHaveBeenCalledWith([]);
+  });
+
+  it('no retira la subida de otra persona ni una clave que no consta', async () => {
+    const { service, storage } = campus();
+
+    await expect(service.discardOwnUpload('portadas/beto.png', 'ana')).rejects.toThrow(NotFoundException);
+    await expect(service.discardOwnUpload('portadas/inventada.png', 'ana')).rejects.toThrow(NotFoundException);
     expect(storage.deleteFiles).not.toHaveBeenCalled();
   });
 });

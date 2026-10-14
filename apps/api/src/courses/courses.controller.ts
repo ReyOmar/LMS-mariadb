@@ -133,12 +133,6 @@ export class CoursesController {
   }
 
   @Roles('ADMIN', 'TEACHER')
-  @Get('/resources/:resourceGuid')
-  getResource(@CurrentUser() user: JwtPayload, @Param('resourceGuid') resourceGuid: string) {
-    return this.content.getResource(resourceGuid, user);
-  }
-
-  @Roles('ADMIN', 'TEACHER')
   @Patch('/resources/:resourceGuid')
   updateResource(
     @CurrentUser() user: JwtPayload,

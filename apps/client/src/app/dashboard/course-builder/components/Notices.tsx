@@ -45,7 +45,7 @@ function Frame({ icon, iconClass, title, children, actions, priority, onClose }:
 }
 
 interface ExitProps {
-  /** Hay una portada elegida sin guardar, que se descartará al salir. */
+  /** Hay una portada elegida sin guardar: impide publicar y se descartará al salir. */
   unsavedCover: boolean;
   onPublishAndExit: () => void;
   onExitWithoutPublishing: () => void;
@@ -95,7 +95,10 @@ export function DraftExitAlert({ unsavedCover, onPublishAndExit, onExitWithoutPu
         <>
           <br />
           <br />
-          <strong className="text-foreground">La portada elegida no se ha guardado y se descartará.</strong>
+          <strong className="text-foreground">
+            La portada elegida no se ha guardado: guárdala o descártala antes de publicar. Si sales sin publicar, se
+            descartará.
+          </strong>
         </>
       )}
     </Frame>

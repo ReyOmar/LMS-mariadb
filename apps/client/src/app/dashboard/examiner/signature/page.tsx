@@ -10,7 +10,7 @@ import { PageLoader } from '@/components/ui/PageLoader';
 import { LoadFailed } from '@/components/ui/LoadFailed';
 import { UnsavedChangesBar } from '@/components/ui/UnsavedChangesBar';
 import { PageHeading } from '../components/PageHeading';
-import { useSignatureSettings } from './useSignatureSettings';
+import { useSignatureSettings, type SignatureDraft } from './useSignatureSettings';
 import { SignatureSection } from './components/SignatureSection';
 import { SignatureImage } from './components/SignatureImage';
 import { SignatureFields } from './components/SignatureFields';
@@ -21,8 +21,17 @@ export default function ExaminerSignature() {
   const { showAlert } = useAlerts();
   const signature = useSignatureSettings();
   const image = usePendingFile();
+
+  const persist = (changes: Partial<SignatureDraft>) =>
+    image.file
+      ? image.commit(
+          (file) => uploadImage(file, 'firmas'),
+          (signatureUrl) => signature.persist({ ...changes, signatureUrl }),
+        )
+      : signature.persist(changes);
+
   const { draft, edit, save, hasChanges, saving } = useDraft(signature.saved, {
-    persist: signature.persist,
+    persist,
     successMessage: 'Tu firma se actualizó correctamente.',
     hasPendingFiles: image.file !== null,
   });
@@ -48,15 +57,6 @@ export default function ExaminerSignature() {
     edit({ signatureUrl: null });
   };
 
-  const uploadPendingImage = async () => {
-    if (!image.file) return {};
-    const signatureUrl = await uploadImage(image.file, 'firmas');
-    // Con la clave en el borrador, reintentar tras un fallo al guardar no vuelve a subirla.
-    edit({ signatureUrl });
-    image.clear();
-    return { signatureUrl };
-  };
-
   return (
     <div className="space-y-8 pb-28 animate-in fade-in duration-300">
       <PageHeading
@@ -66,7 +66,7 @@ export default function ExaminerSignature() {
       />
 
       <SignatureSection icon={Upload} title="Imagen de firma escaneada">
-        <SignatureImage imageUrl={imageUrl} onPick={pickImage} onRemove={removeImage} />
+        <SignatureImage imageUrl={imageUrl} disabled={saving} onPick={pickImage} onRemove={removeImage} />
       </SignatureSection>
 
       <SignatureSection icon={FileSignature} title="Datos de la firma">
@@ -81,7 +81,7 @@ export default function ExaminerSignature() {
         />
       </SignatureSection>
 
-      {hasChanges && <UnsavedChangesBar saving={saving} onSave={() => void save(uploadPendingImage)} />}
+      {hasChanges && <UnsavedChangesBar saving={saving} onSave={() => void save()} />}
     </div>
   );
 }

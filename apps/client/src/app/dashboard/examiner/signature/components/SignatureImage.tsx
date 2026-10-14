@@ -10,12 +10,14 @@ const FORMAT_HINT = `${imageFormatNames('firmas')} — máximo ${formatMb(IMAGE_
 interface Props {
   /** La elegida sin guardar o la guardada; `null` si no hay firma. */
   imageUrl: string | null;
+  /** Mientras se guarda: la imagen que se sube es la que se ve. */
+  disabled: boolean;
   onPick: (file: File) => void;
   onRemove: () => void;
 }
 
 /** Imagen escaneada de la firma: elegirla, cambiarla o quitarla hasta pulsar «Guardar». */
-export function SignatureImage({ imageUrl, onPick, onRemove }: Props) {
+export function SignatureImage({ imageUrl, disabled, onPick, onRemove }: Props) {
   const input = useRef<HTMLInputElement>(null);
   const pickFile = () => input.current?.click();
 
@@ -26,6 +28,7 @@ export function SignatureImage({ imageUrl, onPick, onRemove }: Props) {
         type="file"
         accept={imageAccept('firmas')}
         className="hidden"
+        disabled={disabled}
         onChange={(e) => {
           const file = e.target.files?.[0];
           // Vaciarlo permite volver a elegir el mismo archivo.
@@ -49,14 +52,16 @@ export function SignatureImage({ imageUrl, onPick, onRemove }: Props) {
             <button
               type="button"
               onClick={pickFile}
-              className="text-xs font-bold px-3 py-2 bg-primary/10 text-primary rounded-lg hover:bg-primary/20 transition-colors"
+              disabled={disabled}
+              className="text-xs font-bold px-3 py-2 bg-primary/10 text-primary rounded-lg hover:bg-primary/20 transition-colors disabled:opacity-50 disabled:pointer-events-none"
             >
               Cambiar
             </button>
             <button
               type="button"
               onClick={onRemove}
-              className="text-xs font-bold px-3 py-2 bg-red-500/10 text-red-700 dark:text-red-400 rounded-lg hover:bg-red-500/20 transition-colors"
+              disabled={disabled}
+              className="text-xs font-bold px-3 py-2 bg-red-500/10 text-red-700 dark:text-red-400 rounded-lg hover:bg-red-500/20 transition-colors disabled:opacity-50 disabled:pointer-events-none"
               aria-label="Quitar firma"
             >
               <Trash2 className="h-3.5 w-3.5" />
@@ -67,7 +72,8 @@ export function SignatureImage({ imageUrl, onPick, onRemove }: Props) {
         <button
           type="button"
           onClick={pickFile}
-          className="w-full flex flex-col items-center justify-center gap-3 p-8 bg-background border-2 border-dashed border-border/60 rounded-xl hover:border-primary/40 transition-colors group"
+          disabled={disabled}
+          className="w-full flex flex-col items-center justify-center gap-3 p-8 bg-background border-2 border-dashed border-border/60 rounded-xl hover:border-primary/40 transition-colors group disabled:opacity-50 disabled:pointer-events-none"
         >
           <Upload className="h-8 w-8 text-muted-foreground group-hover:text-primary transition-colors" />
           <span className="text-center">

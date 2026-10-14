@@ -10,7 +10,6 @@ import type { Course } from '@/types/models';
 import { useCourseWorkspace, type CourseWorkspace as Workspace } from '../useCourseWorkspace';
 import { useOutlineActions } from '../useOutlineActions';
 import { useCourseExit } from '../useCourseExit';
-import { useCoverEditor } from '../useCoverEditor';
 import { CourseInUseAlert, DraftExitAlert } from './Notices';
 import { CourseHeader } from './CourseHeader';
 import { CourseSettings } from './CourseSettings';
@@ -77,7 +76,6 @@ interface OpenCourseProps {
 function OpenCourse({ course, workspace, initialSelection, canDelete, leave }: OpenCourseProps) {
   const router = useRouter();
   const outline = useOutlineActions(workspace);
-  const cover = useCoverEditor(workspace.saveCover);
   const exit = useCourseExit({
     courseGuid: course.guid,
     isDraft: course.status === 'DRAFT',
@@ -114,9 +112,8 @@ function OpenCourse({ course, workspace, initialSelection, canDelete, leave }: O
               key={course.guid}
               course={course}
               readOnly={readOnly}
-              cover={cover}
+              cover={workspace.cover}
               onSave={(changes) => void workspace.saveFields(changes)}
-              onRemoveCover={() => void workspace.removeCover()}
             />
           )}
 
@@ -155,7 +152,7 @@ function OpenCourse({ course, workspace, initialSelection, canDelete, leave }: O
 
       {exit.asking && (
         <DraftExitAlert
-          unsavedCover={cover.previewUrl !== null}
+          unsavedCover={workspace.cover.previewUrl !== null}
           onPublishAndExit={() => void exit.publishAndLeave()}
           onExitWithoutPublishing={exit.leaveWithoutPublishing}
           onCancel={exit.stay}

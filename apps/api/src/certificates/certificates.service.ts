@@ -300,7 +300,10 @@ export class CertificatesService {
     return true;
   }
 
-  /** Avisa al momento a las pantallas abiertas del alumno y, si se retiraron archivos, a las del personal. */
+  /**
+   * Avisa al momento a las pantallas abiertas del alumno y a las del personal del curso, que
+   * dejan de ofrecer calificar a quien ya cerró su vuelta.
+   */
   private announce(issued: IssuedCertificate): void {
     const { certificateGuid, courseGuid, userGuid, country, data } = issued;
     this.realtime.emitToUsers(
@@ -309,9 +312,7 @@ export class CertificatesService {
       country,
       [userGuid],
     );
-    if (issued.filesRetired) {
-      this.realtime.emitToCourseStaff('submission:files-retired', { courseGuid, userGuid }, country, data.teacherGuid);
-    }
+    this.realtime.emitToCourseStaff('round:closed', { courseGuid, userGuid }, country, data.teacherGuid);
 
     void this.notify(issued);
   }

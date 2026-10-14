@@ -13,6 +13,9 @@ export const FOLDERS = [...PUBLIC_FOLDERS, ...RESERVED_FOLDERS] as const;
 
 export type Folder = (typeof FOLDERS)[number];
 
+/** Donde sube directamente quien gestiona contenido; las entregas y las fotos tienen su propia ruta. */
+export const UPLOAD_FOLDERS: readonly Folder[] = ['portadas', 'recursos', 'firmas', 'logos', 'fondos'];
+
 /** Imágenes que un navegador enseña dentro de un `<img>`. */
 const WEB_IMAGES = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg'] as const;
 

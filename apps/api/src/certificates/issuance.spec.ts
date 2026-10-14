@@ -428,17 +428,15 @@ describe('CertificatesService — emisión del certificado', () => {
     ]);
   });
 
-  it('avisa al personal del curso de que se retiraron los archivos de esa vuelta', async () => {
+  it('avisa al personal del curso de que la vuelta del alumno quedó cerrada', async () => {
     const { service, staffEvents } = setup();
 
     await service.issueIfEligible('curso-1', 'ana', 'COLOMBIA');
 
-    expect(staffEvents).toEqual([
-      ['submission:files-retired', { courseGuid: 'curso-1', userGuid: 'ana' }, 'COLOMBIA', 'carlos'],
-    ]);
+    expect(staffEvents).toEqual([['round:closed', { courseGuid: 'curso-1', userGuid: 'ana' }, 'COLOMBIA', 'carlos']]);
   });
 
-  it('sin archivos que retirar no avisa al personal ni lo menciona en la campana', async () => {
+  it('sin archivos que retirar también avisa al personal del cierre, pero la campana no menciona archivos', async () => {
     // Un curso de cuestionarios: los intentos no llevan archivo.
     const { service, staffEvents, notifications, deleted } = setup({
       submissions: [
@@ -451,7 +449,26 @@ describe('CertificatesService — emisión del certificado', () => {
     await settle();
 
     expect(deleted).toEqual([]);
-    expect(staffEvents).toEqual([]);
+    expect(staffEvents).toEqual([['round:closed', { courseGuid: 'curso-1', userGuid: 'ana' }, 'COLOMBIA', 'carlos']]);
     expect(notifications[0].message).not.toMatch(/archivos/);
+  });
+
+  it('dos emisiones simultáneas avisan del cierre una sola vez', async () => {
+    const { service, staffEvents } = setup();
+
+    await Promise.all([
+      service.issueIfEligible('curso-1', 'ana', 'COLOMBIA'),
+      service.issueIfEligible('curso-1', 'ana', 'COLOMBIA'),
+    ]);
+
+    expect(staffEvents).toHaveLength(1);
+  });
+
+  it('con la vuelta ya cerrada no vuelve a avisar del cierre', async () => {
+    const { service, staffEvents } = setup({ alreadyClosed: true });
+
+    await service.issueIfEligible('curso-1', 'ana', 'COLOMBIA');
+
+    expect(staffEvents).toEqual([]);
   });
 });

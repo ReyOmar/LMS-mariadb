@@ -4,12 +4,13 @@ import { useCallback } from 'react';
 import api from '@/lib/api';
 import { usePagedList } from '@/hooks/usePagedList';
 import { useLiveRefresh } from '@/hooks/useLiveRefresh';
-import { useRealtimeEvent } from '@/contexts/RealtimeContext';
 import type { RealtimeEvent } from '@/lib/realtime/events';
-import type { ExaminerSubmission, FilesRetired } from '../../types';
-import { closeRoundOf, type SubmissionFilter } from './grouping';
+import type { ExaminerSubmission } from '../../types';
+import { closeRoundOf } from '../../closed-round';
+import { useRoundClosed } from '../../hooks/useRoundClosed';
+import type { SubmissionFilter } from './grouping';
 
-const QUEUE_EVENTS: readonly RealtimeEvent[] = ['submission:new', 'submission:graded'];
+const QUEUE_EVENTS: readonly RealtimeEvent[] = ['submission:new', 'submission:graded', 'round:closed'];
 
 interface SubmissionsResponse {
   cursor: string | null;
@@ -37,14 +38,7 @@ export function useSubmissionQueue(courseGuid: string, filter: SubmissionFilter,
   const { refresh, updateItems } = submissions;
 
   useLiveRefresh(QUEUE_EVENTS, refresh);
-
-  // La primera página llega al día con `refresh`; las cargadas con «Ver más» se corrigen aquí.
-  useRealtimeEvent('submission:files-retired', (data) => {
-    const retired = data as FilesRetired;
-    if (retired.courseGuid !== courseGuid) return;
-    updateItems((items) => closeRoundOf(items, retired.userGuid));
-    void refresh();
-  });
+  useRoundClosed((round) => updateItems((items) => closeRoundOf(items, round)));
 
   return submissions;
 }
