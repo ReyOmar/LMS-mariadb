@@ -8,8 +8,7 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 /* ═══════════════════════════════════════════════════════════
-   SISTEMA DE DISEÑO — «Asfalto y Señalización»
-   Identidad visual para plataforma LMS de movilidad/transporte
+   SISTEMA DE DISEÑO
    ═══════════════════════════════════════════════════════════ */
 
 @theme {
@@ -53,11 +52,14 @@
   --radius-lg: var(--radius);
   --radius-md: calc(var(--radius) - 2px);
   --radius-sm: calc(var(--radius) - 4px);
+
+  /* ── Tipografía: `<body>` lleva `font-sans`; la sede la cambia desde `lib/theme.ts` ── */
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
 /* ═══════════════════════════════════════════════════════════
    PALETA DE COLOR — MODO CLARO
-   Azul Industrial + Ámbar Señalización + Verde Semáforo
    ═══════════════════════════════════════════════════════════ */
 @layer base {
   :root {
@@ -102,8 +104,6 @@
     --radius: 0.75rem;
 
     /* Sombras */
-    --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.04);
-    --shadow-md: 0 4px 12px -1px rgba(0, 0, 0, 0.06), 0 2px 4px -2px rgba(0, 0, 0, 0.04);
     --shadow-lg: 0 10px 25px -3px rgba(0, 0, 0, 0.08), 0 4px 8px -4px rgba(0, 0, 0, 0.04);
     --shadow-glow-primary: 0 0 20px rgba(26, 120, 194, 0.15);
     --shadow-glow-accent: 0 0 20px rgba(245, 158, 11, 0.15);
@@ -149,8 +149,6 @@
     --info: 207 85% 55%;
     --info-foreground: 220 30% 8%;
 
-    --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.2);
-    --shadow-md: 0 4px 12px -1px rgba(0, 0, 0, 0.3), 0 2px 4px -2px rgba(0, 0, 0, 0.2);
     --shadow-lg: 0 10px 25px -3px rgba(0, 0, 0, 0.4), 0 4px 8px -4px rgba(0, 0, 0, 0.2);
     --shadow-glow-primary: 0 0 25px rgba(56, 152, 224, 0.2);
     --shadow-glow-accent: 0 0 25px rgba(245, 178, 50, 0.2);
@@ -191,11 +189,6 @@
   }
   body {
     @apply bg-background text-foreground;
-    font-family:
-      var(--font-inter),
-      system-ui,
-      -apple-system,
-      sans-serif;
     font-feature-settings:
       'rlig' 1,
       'calt' 1,
@@ -204,10 +197,8 @@
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
   }
-  /* En el móvil el aviso de almacenamiento es una franja a todo lo ancho: mientras se ve, el
-     final de la página queda por encima. Desde `sm:` (40rem) es una tarjeta en una esquina, y
-     reservar su alto dejaría una franja vacía bajo toda la página; lo que se fija abajo sí se
-     sigue apartando de ella con `--storage-notice-space`. */
+  /* En el móvil el aviso de almacenamiento es una franja a todo lo ancho que taparía el final de
+     la página; desde `sm:` es una tarjeta en una esquina y reservar su alto dejaría un hueco. */
   @media (width < 40rem) {
     body {
       padding-bottom: var(--storage-notice-space, 0px);
@@ -221,11 +212,6 @@
   h6 {
     letter-spacing: -0.02em;
     font-weight: 700;
-  }
-  code,
-  pre,
-  .font-mono {
-    font-family: 'JetBrains Mono', 'Fira Code', monospace;
   }
 }
 
@@ -282,6 +268,18 @@
   }
   66% {
     transform: translate(-20px, 20px) scale(0.9);
+  }
+}
+
+/* Papelillos de la felicitación al terminar un curso */
+@keyframes confettiFall {
+  0% {
+    transform: translateY(-10vh) rotate(0deg);
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(110vh) rotate(720deg);
+    opacity: 0;
   }
 }
 
@@ -472,15 +470,5 @@ input[type='password']::-ms-clear {
   .sidebar-nav .sidebar-link {
     min-height: 44px;
     padding: 0.625rem 0.75rem;
-  }
-}
-
-/* Títulos más pequeños en pantallas estrechas */
-@media (max-width: 640px) {
-  h1 {
-    font-size: 1.5rem !important;
-  }
-  h2 {
-    font-size: 1.25rem !important;
   }
 }

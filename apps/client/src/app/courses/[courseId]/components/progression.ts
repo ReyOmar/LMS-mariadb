@@ -1,95 +1,114 @@
-import type { CourseModule, Resource } from '@/types/models';
+// Con orden estricto un recurso se abre al completar todos los anteriores: el certificado acredita todo
+// el material. El servidor aplica la misma regla (`apps/api/src/courses/progression.ts`).
 
-/**
- * Orden en que el alumno recorre un curso.
- *
- * La regla es que no se salta contenido: un recurso se abre cuando los anteriores de su
- * módulo están completados, y un módulo cuando el anterior lo está entero. Es la garantía
- * de que el certificado acredita haber pasado por todo el material, así que conviene que
- * viva en un sitio, sin estado ni marcado alrededor, y no repartida por la pantalla.
- *
- * Todas las funciones reciben la lista de completados en vez de leerla de fuera: así el
- * mismo cálculo sirve para pintar el temario, para decidir qué se abre y para elegir por
- * dónde retomar.
- */
+import type { CourseProgress } from '@/types/models';
 
-/** Un módulo tal y como lo necesita el recorrido: sólo su lista ordenada de recursos. */
-type PathModule = Pick<CourseModule, 'guid'> & { resources?: Pick<Resource, 'guid'>[] };
-
-/**
- * Un módulo está abierto si el anterior se completó entero.
- * El primero siempre lo está, y un módulo vacío no bloquea a los siguientes: si no tiene
- * contenido, no hay nada que exigir antes de seguir.
- */
-export function isModuleOpen(modules: PathModule[], index: number, completed: string[]): boolean {
-  if (index <= 0) return true;
-
-  const previousResources = modules[index - 1]?.resources ?? [];
-  if (previousResources.length === 0) return true;
-
-  return previousResources.every((resource) => completed.includes(resource.guid));
+interface PathModule {
+  resources?: { guid: string }[];
 }
 
-/** Un recurso está abierto si su módulo lo está y todos los que van antes se completaron. */
-export function isResourceOpen(
-  modules: PathModule[],
-  moduleIndex: number,
-  resourceIndex: number,
-  completed: string[],
-): boolean {
-  if (!isModuleOpen(modules, moduleIndex, completed)) return false;
-  if (resourceIndex <= 0) return true;
+type ResourceOf<M extends PathModule> = NonNullable<M['resources']>[number];
 
-  const resources = modules[moduleIndex]?.resources ?? [];
-  return resources.slice(0, resourceIndex).every((resource) => completed.includes(resource.guid));
-}
-
-/** Dónde está cada recurso dentro del curso. */
-interface CoursePosition {
-  moduleGuid: string;
-  moduleIndex: number;
-  resourceIndex: number;
+/** Avance del alumno: lo completado y lo entregado que espera nota. */
+export interface PathProgress {
+  completed: ReadonlySet<string>;
+  awaitingGrade: ReadonlySet<string>;
 }
 
 /**
- * Primer recurso sin completar, que es por donde se retoma el curso.
- * Devuelve `null` cuando no queda ninguno: el curso está terminado.
+ * El avance que devuelve la API. Lo desbloqueado porque su nota tarda demasiado cuenta como
+ * completado para seguir avanzando, aunque siga esperando la calificación.
  */
-export function whereToResume(
-  modules: PathModule[],
-  completed: string[],
-): (CoursePosition & { resourceGuid: string }) | null {
-  for (let moduleIndex = 0; moduleIndex < modules.length; moduleIndex++) {
-    const resources = modules[moduleIndex].resources ?? [];
+export function pathProgressFrom(
+  progress: Pick<CourseProgress, 'completed' | 'unlockedByWait' | 'pendingAssignments'>,
+): PathProgress {
+  return {
+    completed: new Set([...progress.completed, ...progress.unlockedByWait]),
+    awaitingGrade: new Set(progress.pendingAssignments.map((assignment) => assignment.resourceGuid)),
+  };
+}
 
-    for (let resourceIndex = 0; resourceIndex < resources.length; resourceIndex++) {
-      if (completed.includes(resources[resourceIndex].guid)) continue;
+export interface SyllabusEntry<R> {
+  resource: R;
+  open: boolean;
+  completed: boolean;
+  awaitingGrade: boolean;
+}
 
-      return {
-        resourceGuid: resources[resourceIndex].guid,
-        moduleGuid: modules[moduleIndex].guid,
-        moduleIndex,
-        resourceIndex,
+export interface SyllabusModule<M extends PathModule> {
+  module: M;
+  open: boolean;
+  /** Tiene contenido y está todo completado. */
+  finished: boolean;
+  entries: SyllabusEntry<ResourceOf<M>>[];
+}
+
+/** El temario tal como lo ve el alumno: qué tiene abierto, qué completó y qué espera nota. */
+export function buildSyllabus<M extends PathModule>(
+  modules: M[],
+  { completed, awaitingGrade }: PathProgress,
+  strictOrder: boolean,
+): SyllabusModule<M>[] {
+  let everythingBeforeCompleted = true;
+
+  return modules.map((module) => {
+    const moduleOpen = !strictOrder || everythingBeforeCompleted;
+    const entries = (module.resources ?? []).map((resource) => {
+      const entry = {
+        resource,
+        open: !strictOrder || everythingBeforeCompleted,
+        completed: completed.has(resource.guid),
+        awaitingGrade: awaitingGrade.has(resource.guid),
       };
-    }
-  }
-
-  return null;
-}
-
-/** Último recurso del curso, que es lo que se abre cuando ya no queda nada pendiente. */
-export function lastResource(modules: PathModule[]): (CoursePosition & { resourceGuid: string }) | null {
-  for (let moduleIndex = modules.length - 1; moduleIndex >= 0; moduleIndex--) {
-    const resources = modules[moduleIndex].resources ?? [];
-    if (resources.length === 0) continue;
+      everythingBeforeCompleted &&= entry.completed;
+      return entry;
+    });
 
     return {
-      resourceGuid: resources[resources.length - 1].guid,
-      moduleGuid: modules[moduleIndex].guid,
-      moduleIndex,
-      resourceIndex: resources.length - 1,
+      module,
+      open: moduleOpen,
+      finished: entries.length > 0 && entries.every((entry) => entry.completed),
+      entries,
     };
-  }
+  });
+}
 
-  return null;
+function allEntries<M extends PathModule>(syllabus: SyllabusModule<M>[]): SyllabusEntry<ResourceOf<M>>[] {
+  return syllabus.flatMap((item) => item.entries);
+}
+
+/** Por dónde se retoma: el primer recurso pendiente o, si ya no queda ninguno, el último para repasar. */
+export function resumeEntry<M extends PathModule>(syllabus: SyllabusModule<M>[]): SyllabusEntry<ResourceOf<M>> | null {
+  const entries = allEntries(syllabus);
+  return entries.find((entry) => !entry.completed) ?? entries.at(-1) ?? null;
+}
+
+export function findEntry<M extends PathModule>(
+  syllabus: SyllabusModule<M>[],
+  resourceGuid: string | null,
+): SyllabusEntry<ResourceOf<M>> | null {
+  return allEntries(syllabus).find((entry) => entry.resource.guid === resourceGuid) ?? null;
+}
+
+/** El primer recurso del módulo de `resourceGuid`: adonde vuelve quien suspende un cuestionario. */
+export function moduleStart<M extends PathModule>(
+  syllabus: SyllabusModule<M>[],
+  resourceGuid: string,
+): ResourceOf<M> | null {
+  const owner = syllabus.find((item) => item.entries.some((entry) => entry.resource.guid === resourceGuid));
+  return owner?.entries[0]?.resource ?? null;
+}
+
+/** Todo está completado y el curso tiene contenido: el servidor pudo cerrar ya la vuelta. */
+export function isPathCompleted<M extends PathModule>(syllabus: SyllabusModule<M>[]): boolean {
+  const entries = allEntries(syllabus);
+  return entries.length > 0 && entries.every((entry) => entry.completed && !entry.awaitingGrade);
+}
+
+/** El alumno hizo todo lo suyo, pero alguna entrega espera todavía la nota del examinador. */
+export function isOnlyAwaitingGrades<M extends PathModule>(syllabus: SyllabusModule<M>[]): boolean {
+  const entries = allEntries(syllabus);
+  return (
+    entries.some((entry) => entry.awaitingGrade) && entries.every((entry) => entry.completed || entry.awaitingGrade)
+  );
 }

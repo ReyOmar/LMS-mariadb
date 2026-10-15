@@ -106,8 +106,10 @@ Sube al servidor, por cada aplicación:
 dist/   prisma/   prisma.config.ts   package.json   package-lock.json
 ```
 
-**Cliente** (`~/lms-client`): el contenido de `apps/client/prod`. Ya incluye sus
-dependencias; no hay que instalar nada.
+**Cliente** (`~/lms-client`): el contenido de `apps/client/prod`, es decir, la carpeta
+`apps/` que hay dentro. Queda `~/lms-client/apps/client/server.js`, con sus dependencias y
+sus archivos estáticos (`public/` y `.next/static`, oculta en el administrador de archivos):
+no hay que instalar nada.
 
 Las dependencias de la API se instalan en el servidor, desde el terminal de cPanel y dentro
 de `~/lms-api` (con el entorno de Node de la aplicación activado, como indica el propio
@@ -229,7 +231,7 @@ requisito es MariaDB y no MySQL.
 | ------------------------ | ----------------------- |
 | Application root         | `lms-client`            |
 | Application URL          | `campus.tu-dominio.com` |
-| Application startup file | `server.js`             |
+| Application startup file | `apps/client/server.js` |
 | Environment              | Production              |
 
 ```

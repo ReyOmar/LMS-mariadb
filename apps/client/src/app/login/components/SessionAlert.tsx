@@ -1,10 +1,9 @@
 'use client';
 
-import { Clock, KeyRound, Monitor, ShieldAlert, UserCog } from 'lucide-react';
-
+import { Clock, KeyRound, Monitor, ShieldAlert, UserCog, type LucideIcon } from 'lucide-react';
 import type { LogoutReason } from '@/lib/api';
 
-const NOTICES: Record<LogoutReason, { icon: typeof Clock; title: string; text: string; tone: string }> = {
+const NOTICES: Record<LogoutReason, { icon: LucideIcon; title: string; text: string; tone: string }> = {
   expired: {
     icon: Clock,
     title: 'Tu sesión caducó',
@@ -37,12 +36,7 @@ const NOTICES: Record<LogoutReason, { icon: typeof Clock; title: string; text: s
   },
 };
 
-/**
- * Explica por qué el usuario acabó en el login.
- *
- * Volver a una pantalla de acceso sin explicación hace pensar que algo se rompió; nombrar
- * el motivo y decir qué hacer a continuación evita el aviso al soporte.
- */
+/** Por qué acabó en el acceso sin pedirlo: sin explicación parecería que algo se rompió. */
 export function SessionAlert({ reason, onContinue }: { reason: LogoutReason; onContinue: () => void }) {
   const notice = NOTICES[reason];
   const Icon = notice.icon;

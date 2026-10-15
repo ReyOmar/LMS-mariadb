@@ -1,4 +1,5 @@
 import './globals.css';
+import type { ReactNode } from 'react';
 import type { Metadata } from 'next';
 import Script from 'next/script';
 import { ThemeProvider } from '@/components/ui/ThemeProvider';
@@ -18,19 +19,7 @@ export const metadata: Metadata = {
   description: 'Plataforma de capacitación y certificación en seguridad vial.',
 };
 
-/**
- * Orden de los proveedores, de fuera hacia dentro:
- *  1. Tema claro/oscuro, que no depende de nada.
- *  2. Sede, que decide qué configuración pedir.
- *  3. Sesión, que confirma la sede real del usuario.
- *  4. Tiempo real, que necesita el token de la sesión.
- *  5. Configuración, que depende de la sede y escucha cambios en tiempo real.
- *  6. Avisos, que cualquier pantalla usa.
- *
- * El cierre de las pantallas de carga queda fuera de todos ellos: tiene que seguir montado
- * aunque la sesión o la sede sustituyan todo lo que hay dentro.
- */
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     // `data-scroll-behavior` le dice a Next.js que el desplazamiento suave de `globals.css`
     // es deliberado, para que lo suspenda al cambiar de pantalla.
@@ -44,6 +33,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         className="min-h-screen bg-background font-sans antialiased text-foreground transition-colors duration-300"
       >
         <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
+          {/* Cada proveedor depende de los de fuera: la sede elige la configuración, la sesión confirma la
+              sede y el tiempo real usa su token. */}
           <CountryProvider>
             <SessionProvider>
               <RealtimeProvider>
@@ -58,6 +49,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               </RealtimeProvider>
             </SessionProvider>
           </CountryProvider>
+          {/* Fuera de los proveedores: sigue montado aunque la sesión o la sede sustituyan lo de dentro. */}
           <PageLoaderOverlay />
         </ThemeProvider>
       </body>

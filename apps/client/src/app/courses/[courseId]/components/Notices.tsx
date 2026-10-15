@@ -1,22 +1,13 @@
 'use client';
 
-import { useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import Link from 'next/link';
 import { AlertTriangle, ArrowLeft, Award, Clock, Eye, Sparkles, Trophy, X } from 'lucide-react';
 import { plural } from '@/lib/text';
 import { useDialog } from '@/hooks/useDialog';
+import { MY_COURSES } from '../useCourseContent';
 
-/**
- * Los momentos en que el visor de curso deja de mostrar contenido y habla con el alumno:
- * el curso se cerró para mantenimiento, ya lo terminó, acaba de terminarlo, o ha llegado
- * al final pero le faltan tareas por calificar.
- *
- * Comparten el molde de tarjeta centrada para que ninguno parezca un error del sistema:
- * todos son situaciones normales del recorrido.
- */
-
-// ── Pantallas completas ────────────────────────────────────────────────────
-
+/** Molde común de los avisos del visor, para que ninguno parezca un error: todos son parte del recorrido. */
 function Card({ children, border }: { children: ReactNode; border: string }) {
   return (
     <div className="min-h-screen bg-background flex flex-col items-center justify-center p-8 animate-in fade-in duration-500">
@@ -30,7 +21,7 @@ function Card({ children, border }: { children: ReactNode; border: string }) {
 function BackToMyCourses({ className = '' }: { className?: string }) {
   return (
     <Link
-      href="/dashboard/student/courses"
+      href={MY_COURSES}
       className={`inline-flex items-center gap-2 text-muted-foreground hover:text-foreground text-sm transition-colors ${className}`}
     >
       <ArrowLeft className="h-4 w-4" /> Volver a mis cursos
@@ -46,7 +37,7 @@ export function CourseUnderMaintenance({ title }: { title: string }) {
         <div className="w-24 h-24 bg-amber-500/20 rounded-full flex items-center justify-center mx-auto mb-8 shadow-inner">
           <AlertTriangle className="h-12 w-12 text-amber-500" />
         </div>
-        <h1 className="text-3xl font-black mb-4 text-foreground tracking-tight">Curso en mantenimiento</h1>
+        <h1 className="text-2xl sm:text-3xl font-black mb-4 text-foreground tracking-tight">Curso en mantenimiento</h1>
         <p className="text-muted-foreground mb-2 text-lg leading-relaxed">
           El administrador o examinador ha iniciado un período de mantenimiento para el curso{' '}
           <strong className="text-foreground">{title}</strong>.
@@ -55,7 +46,7 @@ export function CourseUnderMaintenance({ title }: { title: string }) {
           Todos los contenidos se conservan intactos. Vuelve más tarde cuando el curso sea publicado de nuevo.
         </p>
         <Link
-          href="/dashboard/student/courses"
+          href={MY_COURSES}
           className="inline-flex items-center gap-2 bg-primary hover:bg-primary/90 text-primary-foreground px-8 py-4 rounded-2xl font-bold shadow-lg transition-all hover:scale-105 active:scale-95"
         >
           <ArrowLeft className="h-5 w-5" />
@@ -127,8 +118,6 @@ export function CourseAlreadyEnded({
   );
 }
 
-// ── Diálogos sobre el curso ────────────────────────────────────────────────
-
 function Header({
   background,
   bar,
@@ -159,8 +148,7 @@ function Header({
 
       <div className="relative z-10">
         <div
-          className={`w-24 h-24 bg-gradient-to-br rounded-full flex items-center justify-center mx-auto mb-5 ring-4 ring-background shadow-xl ${circle}`}
-          style={{ animation: 'bounce 2s infinite' }}
+          className={`w-24 h-24 bg-gradient-to-br rounded-full flex items-center justify-center mx-auto mb-5 ring-4 ring-background shadow-xl animate-bounce motion-reduce:animate-none ${circle}`}
         >
           {icon}
         </div>
@@ -188,12 +176,7 @@ function Background({ children }: { children: ReactNode }) {
 
 const CONFETTI_COLORS = ['#4f46e5', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4', '#ec4899', '#f97316'];
 
-/**
- * Papelillos de la celebración. Son decorativos, así que no reciben eventos del ratón.
- *
- * Se sortean una sola vez: si se sortearan en cada pintado, todos saltarían de sitio cuando
- * la ventana vuelve a pintarse al aparecer sus botones.
- */
+/** Se sortean una sola vez: si no, saltarían de sitio al repintarse la ventana cuando aparecen sus botones. */
 function Confetti() {
   const [pieces] = useState(() =>
     Array.from({ length: 50 }, (_, i) => ({
@@ -209,35 +192,34 @@ function Confetti() {
   );
 
   return (
-    <>
-      <div className="absolute inset-0 overflow-hidden pointer-events-none">
-        {pieces.map((style, i) => (
-          <div key={i} className="absolute rounded-full" style={style} />
-        ))}
-      </div>
-      <style>{`
-        @keyframes confettiFall {
-          0% { transform: translateY(-10vh) rotate(0deg); opacity: 1; }
-          100% { transform: translateY(110vh) rotate(720deg); opacity: 0; }
-        }
-      `}</style>
-    </>
+    <div aria-hidden="true" className="absolute inset-0 overflow-hidden pointer-events-none motion-reduce:hidden">
+      {pieces.map((style, i) => (
+        <div key={i} className="absolute" style={style} />
+      ))}
+    </div>
   );
 }
 
-/** Acaba de terminar el curso. Las acciones aparecen con retardo, para que se lea el aviso. */
+/** Los botones del certificado tardan en aparecer, para no cortar la felicitación. */
+const ACTIONS_DELAY_MS = 2000;
+
+/** Acaba de terminar el curso. */
 export function Celebration({
   title,
-  actionsVisible,
   onKeepGoing,
   onViewCertificate,
 }: {
   title: string;
-  actionsVisible: boolean;
   onKeepGoing: () => void;
   onViewCertificate: () => void;
 }) {
   const { dialogProps, titleId } = useDialog({ onClose: onKeepGoing });
+  const [actionsVisible, setActionsVisible] = useState(false);
+
+  useEffect(() => {
+    const timer = setTimeout(() => setActionsVisible(true), ACTIONS_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, []);
 
   return (
     <Background>
