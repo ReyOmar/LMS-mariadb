@@ -1,28 +1,20 @@
 'use client';
 
-import { FormEvent, Suspense, useCallback, useEffect, useState } from 'react';
+import { Suspense, useCallback, useEffect, useState, type FormEvent } from 'react';
 import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { ArrowLeft, BadgeCheck, Search, ShieldAlert, ShieldCheck } from 'lucide-react';
-import api, { errorMessage, retryAfterSeconds } from '@/lib/api';
-import { useCountdown } from '@/hooks/useCountdown';
+import api from '@/lib/api';
 import { formatScore } from '@/lib/grading';
+import { useRateLimitedForm } from '@/hooks/useRateLimitedForm';
 import { PageLoader } from '@/components/ui/PageLoader';
+import { FormError } from '@/components/ui/FormError';
+import { SubmitButton } from '@/components/ui/SubmitButton';
 import { longDate } from '@/lib/dates';
 import { plural } from '@/lib/text';
 import { issuedBy, type CertificateIssuer } from './issuer';
 
-/**
- * Verificación pública de un certificado.
- *
- * Aquí cualquiera —una empresa, un auditor— puede comprobar con el código impreso que un
- * certificado es auténtico, sin necesidad de cuenta.
- *
- * La respuesta es deliberadamente escueta: nombre, curso, fecha y sede que lo emitió. Lo
- * justo para confirmar el documento que se tiene delante, sin exponer datos de contacto ni
- * el historial de nadie.
- */
-
+/** Lo justo para confirmar el documento que se tiene delante, sin datos de contacto ni historial de nadie. */
 interface VerifiedCertificate {
   /** Nombre del titular tal como figura en el diploma. */
   studentName: string;
@@ -61,34 +53,24 @@ function Verifier() {
   const params = useSearchParams();
   const [code, setCode] = useState('');
   const [result, setResult] = useState<Result | null>(null);
-  const [checking, setChecking] = useState(false);
-  const [error, setError] = useState('');
-  const rateLimit = useCountdown();
-  const startWait = rateLimit.start;
+  const form = useRateLimitedForm();
+  const { submit } = form;
 
   const verify = useCallback(
-    async (codeToCheck: string) => {
+    (codeToCheck: string) => {
       const cleaned = codeToCheck.trim();
       if (!cleaned) return;
-
-      setChecking(true);
-      setError('');
-      setResult(null);
-      try {
+      void submit(async () => {
+        setResult(null);
         const { data } = await api.get<VerifyResponse>(`/certificates/verify/${encodeURIComponent(cleaned)}`);
         setResult(
           data.valid
             ? { status: 'valid', certificate: data.certificate }
             : { status: 'invalid', message: data.message },
         );
-      } catch (failure) {
-        startWait(retryAfterSeconds(failure));
-        setError(errorMessage(failure, 'No se pudo comprobar el certificado.'));
-      } finally {
-        setChecking(false);
-      }
+      }, 'No se pudo comprobar el certificado.');
     },
-    [startWait],
+    [submit],
   );
 
   // Permite enlazar directamente desde un QR o un correo: /verify?code=CERT-...
@@ -96,31 +78,31 @@ function Verifier() {
     const fromUrl = params?.get('code');
     if (!fromUrl) return;
     setCode(fromUrl);
-    void verify(fromUrl);
+    verify(fromUrl);
   }, [params, verify]);
 
-  const submit = (event: FormEvent) => {
+  const verifyTyped = (event: FormEvent) => {
     event.preventDefault();
-    void verify(code);
+    verify(code);
   };
 
   return (
     <div className="min-h-screen bg-background flex flex-col">
       <header className="border-b border-border/50 bg-card/50 backdrop-blur-sm">
-        <div className="max-w-3xl mx-auto px-6 h-16 flex items-center justify-between">
+        <div className="max-w-3xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-4">
           <Link
             href="/"
             className="flex items-center gap-2 text-sm font-medium text-muted-foreground hover:text-primary transition-colors"
           >
             <ArrowLeft className="h-4 w-4" /> Volver al inicio
           </Link>
-          <span className="flex items-center gap-2 font-bold text-primary">
+          <span className="hidden sm:flex items-center gap-2 font-bold text-primary">
             <ShieldCheck className="h-5 w-5" /> Verificación de certificados
           </span>
         </div>
       </header>
 
-      <main className="flex-1 px-6 py-16">
+      <main className="flex-1 px-4 sm:px-6 py-12 sm:py-16">
         <div className="max-w-2xl mx-auto">
           <div className="text-center mb-10">
             <div className="inline-flex h-16 w-16 items-center justify-center rounded-3xl bg-primary/10 mb-6">
@@ -133,7 +115,7 @@ function Verifier() {
             </p>
           </div>
 
-          <form onSubmit={submit} className="flex flex-col sm:flex-row gap-3 mb-10">
+          <form onSubmit={verifyTyped} className="flex flex-col sm:flex-row gap-3 mb-10">
             <div className="relative flex-1">
               <Search className="absolute left-4 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
               <input
@@ -145,23 +127,16 @@ function Verifier() {
                 className="h-13 w-full rounded-2xl border border-border bg-card pl-11 pr-4 py-4 font-mono text-sm tracking-wider focus:outline-none focus:ring-2 focus:ring-primary"
               />
             </div>
-            <button
-              type="submit"
-              disabled={checking || !code.trim() || rateLimit.waiting}
-              className="h-13 rounded-2xl bg-primary px-8 py-4 font-bold text-primary-foreground hover:bg-primary/90 disabled:opacity-60 transition-colors"
-            >
-              {checking ? 'Comprobando…' : rateLimit.label('Verificar')}
-            </button>
+            <SubmitButton
+              form={form}
+              idle="Verificar"
+              busy="Comprobando…"
+              disabled={!code.trim()}
+              className="h-13 w-full sm:w-auto sm:min-w-36"
+            />
           </form>
 
-          {error && (
-            <p
-              role="alert"
-              className="rounded-2xl border border-destructive/20 bg-destructive/10 px-5 py-4 text-sm font-medium text-destructive"
-            >
-              {error}
-            </p>
-          )}
+          <FormError message={form.error} />
 
           {result?.status === 'invalid' && (
             <div className="rounded-3xl border border-amber-500/30 bg-amber-500/5 p-8 text-center">
@@ -175,7 +150,7 @@ function Verifier() {
             <div className="rounded-3xl border-2 border-emerald-500/30 bg-emerald-500/5 p-8">
               <div className="flex items-center gap-3 mb-6">
                 <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-emerald-500/15">
-                  <ShieldCheck className="h-6 w-6 text-emerald-600" />
+                  <ShieldCheck className="h-6 w-6 text-emerald-600 dark:text-emerald-400" />
                 </span>
                 <div>
                   <h2 className="text-xl font-bold">Certificado auténtico</h2>
@@ -187,24 +162,24 @@ function Verifier() {
               </div>
 
               <dl className="space-y-4">
-                <Field label="Titular" value={result.certificate.studentName} highlighted />
-                <Field label="Programa" value={result.certificate.course} highlighted />
-                <Field label="Fecha de emisión" value={longDate(result.certificate.issuedAt)} />
-                <Field
+                <CertificateFact label="Titular" value={result.certificate.studentName} highlighted />
+                <CertificateFact label="Programa" value={result.certificate.course} highlighted />
+                <CertificateFact label="Fecha de emisión" value={longDate(result.certificate.issuedAt)} />
+                <CertificateFact
                   label="Intensidad horaria"
                   value={`${result.certificate.hours} ${plural(result.certificate.hours, 'hora', 'horas')}`}
                 />
                 {result.certificate.validUntil && (
-                  <Field
+                  <CertificateFact
                     label={result.certificate.unexpired ? 'Válido hasta' : 'Venció el'}
                     value={longDate(result.certificate.validUntil)}
                   />
                 )}
-                <Field
+                <CertificateFact
                   label="Calificación"
                   value={formatScore(result.certificate.averageScore, result.certificate.issuer.country)}
                 />
-                <Field label="Código" value={result.certificate.verificationCode} monospace />
+                <CertificateFact label="Código" value={result.certificate.verificationCode} monospace />
               </dl>
             </div>
           )}
@@ -214,7 +189,7 @@ function Verifier() {
   );
 }
 
-function Field({
+function CertificateFact({
   label,
   value,
   highlighted,
