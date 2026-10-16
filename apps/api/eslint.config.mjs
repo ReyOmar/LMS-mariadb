@@ -35,6 +35,25 @@ export default tseslint.config(
     },
   },
   {
+    // Scripts de mantenimiento que se ejecutan con `node` en el servidor, sin compilar.
+    files: ['prisma/**/*.js'],
+    languageOptions: {
+      sourceType: 'commonjs',
+      globals: {
+        require: 'readonly',
+        module: 'writable',
+        __dirname: 'readonly',
+        process: 'readonly',
+        console: 'readonly',
+        Buffer: 'readonly',
+        URL: 'readonly',
+      },
+    },
+    rules: {
+      '@typescript-eslint/no-require-imports': 'off',
+    },
+  },
+  {
     ignores: ['dist/**', 'node_modules/**', 'coverage/**', 'jest.config.js'],
   },
 );

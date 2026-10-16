@@ -113,26 +113,34 @@ export class MailService implements OnModuleInit {
     private readonly settings: SettingsService,
     private readonly storage: StorageService,
   ) {
-    this.sender = this.config.get<string>('SMTP_FROM') ?? 'noreply@lms.local';
-    this.senderName = this.config.get<string>('SMTP_FROM_NAME') ?? 'Campus Virtual';
-    this.appUrl = (this.config.get<string>('APP_URL') ?? 'http://localhost:3100').replace(/\/+$/, '');
+    this.sender = this.setting('SMTP_FROM') ?? 'noreply@lms.local';
+    this.senderName = this.setting('SMTP_FROM_NAME') ?? 'Campus Virtual';
+    this.appUrl = (this.setting('APP_URL') ?? 'http://localhost:3100').replace(/\/+$/, '');
     // Los correos necesitan URLs absolutas: una clave de almacenamiento relativa se ve
     // como una imagen rota en el cliente de correo.
-    this.apiUrl = (this.config.get<string>('API_PUBLIC_URL') ?? 'http://localhost:3200').replace(/\/+$/, '');
+    this.apiUrl = (this.setting('API_PUBLIC_URL') ?? 'http://localhost:3200').replace(/\/+$/, '');
+  }
+
+  /**
+   * Una variable de entorno, o `undefined` si falta o está vacía. En cPanel es fácil dejar una
+   * variable creada sin valor, y Brevo rechaza un remitente con el nombre o el correo vacíos.
+   */
+  private setting(name: string): string | undefined {
+    return this.config.get<string>(name)?.trim() || undefined;
   }
 
   async onModuleInit(): Promise<void> {
-    const brevoApiKey = this.config.get<string>('BREVO_API_KEY');
+    const brevoApiKey = this.setting('BREVO_API_KEY');
     if (brevoApiKey) {
       this.brevoApiKey = brevoApiKey;
       this.logger.log('Correo activo mediante la API HTTP de Brevo');
       return;
     }
 
-    const host = this.config.get<string>('SMTP_HOST');
-    const user = this.config.get<string>('SMTP_USER');
-    const password = this.config.get<string>('SMTP_PASS');
-    const port = Number(this.config.get<string>('SMTP_PORT') ?? 587);
+    const host = this.setting('SMTP_HOST');
+    const user = this.setting('SMTP_USER');
+    const password = this.setting('SMTP_PASS');
+    const port = Number(this.setting('SMTP_PORT') ?? 587);
 
     // Sin usuario es un relé que no pide autenticación, como el buzón local de desarrollo.
     if (host) {

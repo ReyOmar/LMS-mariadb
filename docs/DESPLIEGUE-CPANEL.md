@@ -1,722 +1,498 @@
 # Despliegue en cPanel
 
-Guía para poner el LMS en un alojamiento cPanel con Node.js (Passenger) y MariaDB.
+Guía para **actualizar en cPanel la instalación de la versión de julio de 2026** (la que usaba
+WebSockets, calificaba de 0 a 5 y no tenía sedes) a la versión actual. La segunda parte es la
+referencia de la configuración.
+
+## El servidor
+
+| Qué                  | Valor                                                                                                              |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| Carpeta del proyecto | `/home/investig/lms-pesv-project`                                                                                  |
+| API                  | Raíz `lms-pesv-project/apps/api` · `https://api-lms.investigaciongipia.com`                                        |
+| Cliente              | Raíz `lms-pesv-project/apps/client/prod/apps/client` · arranque `server.js` · `https://lms.investigaciongipia.com` |
+| Node.js              | 20.20.2 (vale: hace falta 20.19 o superior)                                                                        |
+| Base de datos        | `investig_lms_db`, usuario `investig_lms`                                                                          |
+| Archivos subidos     | Hoy en `apps/api/uploads`; pasan a `/home/investig/lms-data/uploads`                                               |
+
+Las contraseñas no van en esta guía: cuando un paso pide la cadena de la base, cópiala de las
+variables de la API en _Setup Node.js App_.
 
 ---
 
-## 1. Sobre los WebSockets: ya no hacen falta
+# Parte 1 · Actualización desde la versión de julio
 
-**Resumen: no tienes que escribir al hosting.** El sistema ya no usa WebSockets.
+## Qué cambia
 
-El problema que observaste es real y conocido. Las aplicaciones Node en cPanel se sirven
-detrás de Apache con Passenger, y la configuración estándar no propaga la cabecera
-`Upgrade` que necesita el protocolo WebSocket. La conexión se queda a medias, el navegador
-reintenta en bucle y el tiempo real nunca llega a funcionar. Pedir que habiliten
-`mod_proxy_wstunnel` es posible en un VPS, pero en alojamiento compartido casi nunca lo
-conceden, y aunque lo hicieran quedarías atado a esa configuración.
+| Tema                   | Julio                                        | Ahora                                                                                                                  |
+| ---------------------- | -------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| Sedes                  | Una sola                                     | Colombia y México, separadas. **Todo lo existente pasa a Colombia**; México empieza vacío, con su propio administrador |
+| Notas                  | 0–5, aprobación 3,0                          | 0–100. Las notas se multiplican por 20: un 4,5 pasa a 90 y la aprobación 3,0 a **60** (se puede subir por curso)       |
+| Estructura de un curso | Curso › módulo › lección › recurso           | Curso › módulo › recurso. Los recursos de cada lección quedan seguidos en su módulo, en el mismo orden                 |
+| Archivos               | `apps/api/uploads`, dentro de la aplicación  | `/home/investig/lms-data/uploads`, fuera de la aplicación; el material reservado se sirve con enlace firmado           |
+| Tiempo real            | WebSockets (no funcionaban detrás de Apache) | Server-Sent Events: HTTP normal, sin configurar nada                                                                   |
+| Arranque de la API     | `app.js`                                     | `dist/main.js`                                                                                                         |
+| Base de datos          | MySQL o MariaDB                              | **Sólo MariaDB** (10.6 o superior): la API usa `max_statement_time`, que MySQL no tiene                                |
+| Sesiones               | Varias por cuenta                            | Una por cuenta. **Todo el mundo tendrá que volver a entrar** después de actualizar                                     |
+| Protección de datos    | —                                            | Cada persona acepta la política de datos la primera vez que entra; queda registrada la fecha y la versión              |
+| Cuentas desactivadas   | Existían                                     | No existen: una cuenta desactivada en julio podrá volver a entrar (el diagnóstico las lista)                           |
 
-La solución aplicada elimina el problema en lugar de rodearlo: el tiempo real pasó a
-**Server-Sent Events**. Encaja porque todo lo que el sistema empuja va en una sola
-dirección —notificaciones, presencia, avisos de calificación, revocación de sesión— y SSE
-es exactamente eso: una respuesta HTTP que se mantiene abierta y va enviando líneas de
-texto. Al ser HTTP/1.1 corriente, atraviesa Apache, Passenger y cualquier proxy intermedio
-sin configuración especial.
+La base se migra con un script incluido en el paquete (`apps/api/prisma/migracion-julio/migrar.js`).
+Se ha ensayado sobre una copia con datos de julio: el resultado tiene **exactamente** la
+estructura de una instalación nueva, y la API y el cliente funcionan sobre ella (acceso por
+sede, cursos, entregas, cuestionarios, certificados y descargas de los archivos antiguos).
 
-La única acción que viajaba en sentido contrario (avisar de que se está editando un curso)
-es ahora una petición `POST`/`DELETE` normal.
+Calcula **una hora** de campus cerrado. Lo que más tarda es copiar los archivos.
 
-### Lo único que conviene comprobar
+## Paso 1 · Generar el paquete (en tu equipo)
 
-| Aspecto                   | Qué mirar                                                         | Si falla                                                                                                                                                     |
-| ------------------------- | ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Búfer de Apache           | Los avisos llegan en el momento, no de golpe al cabo de un minuto | La API ya envía `X-Accel-Buffering: no` y `Cache-Control: no-transform`. Si aun así se agrupan, pide que desactiven `mod_deflate` para `text/event-stream`   |
-| Tiempo máximo de conexión | El flujo aguanta abierto más de 30 s                              | La API manda un latido cada 25 s para evitar el cierre por inactividad; el cliente reconecta solo si se corta                                                |
-| Un solo proceso           | Cada pestaña abierta mantiene una conexión                        | Deja la API en **un proceso**; ver el apartado siguiente. Un proceso Node aguanta miles de conexiones abiertas, porque una conexión en espera no consume CPU |
-
-Si el alojamiento cortara el flujo de forma agresiva, la aplicación **sigue funcionando**:
-el tiempo real se degrada y los datos se refrescan al navegar, pero nada se rompe.
-
----
-
-## 2. Requisitos
-
-- Node.js 20.19+, 22.12+ o 24+ (cPanel → _Setup Node.js App_); es lo que exige Prisma 7
-- MariaDB 10.6 o superior (cPanel → _MySQL Databases_)
-- Dos subdominios: uno para el cliente y otro para la API
-
-Ejemplo:
-
-| Parte             | Subdominio                  | Puerto interno |
-| ----------------- | --------------------------- | -------------- |
-| Cliente (Next.js) | `campus.tu-dominio.com`     | 3100           |
-| API (NestJS)      | `api-campus.tu-dominio.com` | 3200           |
-
-El cliente deduce la URL de la API a partir del prefijo del host, de modo que con esos
-nombres no hace falta recompilar para cada dominio.
-
----
-
-## 3. Base de datos
-
-1. cPanel → **MySQL Databases** → crea la base (`usuario_lms`) y un usuario.
-2. Asigna al usuario **todos los privilegios** sobre esa base.
-3. Anota la cadena de conexión:
-
-```
-mysql://usuario_lmsuser:CONTRASEÑA@127.0.0.1:3306/usuario_lms
+```bash
+git pull
+npm run init
+npm run package:cpanel -- --api-url https://api-lms.investigaciongipia.com/api
 ```
 
-Si la contraseña lleva caracteres especiales, codifícalos (`@` → `%40`, `#` → `%23`).
+Deja un único archivo, `despliegue/lms-cpanel.zip` (≈20 MB), con la misma estructura que la
+carpeta del proyecto en el servidor:
 
-4. Fija el cotejamiento por defecto de la base. En phpMyAdmin, con la base elegida, pestaña
-   **SQL**:
+```
+apps/api/           dist/, prisma/ (con el script de migración), prisma.config.ts,
+                    package.json, package-lock.json — las dependencias se instalan allí
+apps/client/prod/   el servidor del cliente, con todas sus dependencias
+```
+
+`--api-url` fija dentro del cliente la dirección de la API: Next la incrusta al compilar, así
+que la variable `NEXT_PUBLIC_API_URL` del panel no cuenta, y tampoco la de tu `.env` local (un
+túnel o una dirección de desarrollo dejarían el campus sin conexión).
+
+## Paso 2 · Ensayo en local con una copia de producción (recomendado)
+
+Antes de tocar el servidor, repite la migración sobre una copia real. Descarga la base de
+producción (phpMyAdmin → `investig_lms_db` → **Exportar** → SQL) y, con el Docker del proyecto
+levantado (`docker compose up -d`):
+
+```bash
+docker exec lms-mariadb mariadb -uroot -proot -e "CREATE DATABASE lms_ensayo CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci; GRANT ALL ON lms_ensayo.* TO 'lms_user'@'%';"
+docker exec -i lms-mariadb mariadb -uroot -proot lms_ensayo < investig_lms_db.sql
+cd apps/api
+export DATABASE_URL="mysql://lms_user:lms_password@127.0.0.1:3307/lms_ensayo"
+export STORAGE_DIR="$HOME/lms-ensayo-uploads"
+node prisma/migracion-julio/migrar.js diagnostico
+```
+
+Sigue después los pasos 7.3 a 7.7 en tu equipo (el 7.5 sólo si descargas también
+`apps/api/uploads` para usarla de `--origen`). Si salen bien en local, saldrán bien en el
+servidor. Al terminar, borra la base: `docker exec lms-mariadb mariadb -uroot -proot -e "DROP DATABASE lms_ensayo;"`.
+
+## Paso 3 · Comprobaciones previas
+
+En phpMyAdmin → **SQL**:
 
 ```sql
-ALTER DATABASE usuario_lms CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+SELECT VERSION();
 ```
 
-Prisma crea cada tabla con `utf8mb4_unicode_ci`, pero MariaDB 11 usa por defecto
-`utf8mb4_uca1400_ai_ci`. Una tabla creada fuera de Prisma —una importación, una copia, una
-tabla auxiliar hecha a mano— heredaría el de la base, y la primera consulta que la cruce con
-las de la aplicación falla con «Illegal mix of collations». Por lo mismo, **toda la
-estructura se cambia con Prisma** (`npx prisma db push`), nunca con `CREATE`/`ALTER TABLE` a
-mano.
+Tiene que decir `MariaDB` y ser 10.6 o superior. Si es MySQL, no sigas: pide MariaDB al
+alojamiento.
 
----
-
-## 4. Preparar los artefactos
-
-En tu equipo, no en el servidor:
+En la **Terminal** de cPanel, el espacio que ocupan los archivos subidos:
 
 ```bash
-npm run init
-npm run build
+du -sh ~/lms-pesv-project/apps/api/uploads
 ```
 
-Esto deja:
+Necesitas libre en la cuenta el doble de esa cifra (se copian antes de borrar los antiguos) más
+unos 600 MB para las dependencias y las copias de seguridad. La cuota se ve en la portada de
+cPanel (_Uso del disco_).
 
-- `apps/api/dist` — la API compilada
-- `apps/client/prod` — el cliente en modo _standalone_, con todo lo que necesita
+## Paso 4 · Cerrar el campus
 
-Sube al servidor, por cada aplicación:
+**Setup Node.js App** → **Detener aplicación** en la API y en el cliente. A partir de aquí
+nadie escribe en la base mientras se migra.
 
-**API** (`~/lms-api`), desde `apps/api`:
+## Paso 5 · Copias de seguridad
 
-```
-dist/   prisma/   prisma.config.ts   package.json   package-lock.json
-```
-
-**Cliente** (`~/lms-client`): el contenido de `apps/client/prod`, es decir, la carpeta
-`apps/` que hay dentro. Queda `~/lms-client/apps/client/server.js`, con sus dependencias y
-sus archivos estáticos (`public/` y `.next/static`, oculta en el administrador de archivos):
-no hay que instalar nada.
-
-Las dependencias de la API se instalan en el servidor, desde el terminal de cPanel y dentro
-de `~/lms-api` (con el entorno de Node de la aplicación activado, como indica el propio
-panel):
+En la Terminal:
 
 ```bash
-npm ci
+mkdir -p ~/respaldo-julio
+mysqldump --single-transaction --routines -u investig_lms -p investig_lms_db > ~/respaldo-julio/base.sql
+tar --exclude=lms-pesv-project/apps/api/node_modules -czf ~/respaldo-julio/proyecto.tar.gz -C ~ lms-pesv-project
+ls -lh ~/respaldo-julio
+```
+
+`mysqldump` pide la contraseña de la base (la que va en `DATABASE_URL`, entre `investig_lms:` y
+`@`; si allí aparece algo como `%5D`, escribe el carácter real: `%5D` es `]`). Comprueba que
+`base.sql` no está vacío. La copia del proyecto incluye `apps/api/uploads`. **No sigas sin estas
+dos copias**: el paso 7.4 sólo se deshace restaurándolas.
+
+## Paso 6 · Sustituir el código
+
+En la Terminal:
+
+```bash
+cd ~/lms-pesv-project
+
+# 1. Los archivos subidos salen de la aplicación
+mkdir -p ~/lms-data
+mv apps/api/uploads ~/lms-data/uploads-julio
+
+# 2. Vaciar la API, conservando node_modules (el enlace al entorno de Node que crea cPanel)
+find apps/api -mindepth 1 -maxdepth 1 ! -name node_modules -exec rm -rf {} +
+
+# 3. Retirar el cliente de julio (el paquete trae el nuevo completo)
+rm -rf apps/client/prod
+
+ls -la apps/api apps/client
+```
+
+`apps/api` queda vacía, o sólo con `node_modules` si existía. Es normal no verla: cPanel guarda
+las dependencias en `~/nodevenv/lms-pesv-project/apps/api/20/lib/node_modules` y no siempre crea
+el enlace en la carpeta de la aplicación. El paso 7.1 las instala allí en cualquier caso.
+
+Después, en el **Administrador de archivos**: entra en `lms-pesv-project`, **Cargar**
+`lms-cpanel.zip`, selecciónalo, **Extraer** en `/lms-pesv-project` y borra el zip. Comprueba
+que existen `apps/api/dist/main.js` y `apps/client/prod/apps/client/server.js`.
+
+## Paso 7 · Dependencias y migración de la base
+
+### 7.1 · Dependencias de la API
+
+Entra en el entorno de Node de la API (es el comando que muestra su página en _Setup Node.js
+App_) e instala:
+
+```bash
+source /home/investig/nodevenv/lms-pesv-project/apps/api/20/bin/activate && cd /home/investig/lms-pesv-project/apps/api
+npm install --include=dev
 npx prisma generate
 ```
 
-`npm ci` instala también las herramientas de Prisma, que hacen falta para generar el
-cliente de base de datos, crear las tablas y sembrar los datos iniciales. Por eso no se usa
-`--omit=dev`.
+Usa `npm install` y no `npm ci`: `npm ci` borra `node_modules`, que aquí es un enlace gestionado
+por cPanel. Las herramientas de Prisma son dependencias de desarrollo y hacen falta para migrar,
+por eso se pide `--include=dev`: en modo _Production_ el panel pone `NODE_ENV=production` y npm las omitiría. El cliente no necesita instalar nada.
 
----
-
-## 5. Configurar las aplicaciones Node
-
-cPanel → **Setup Node.js App** → _Create Application_, una por cada parte.
-
-### API
-
-| Campo                    | Valor                       |
-| ------------------------ | --------------------------- |
-| Application root         | `lms-api`                   |
-| Application URL          | `api-campus.tu-dominio.com` |
-| Application startup file | `dist/main.js`              |
-| Node.js version          | 20+                         |
-| Environment              | Production                  |
-
-Variables de entorno (botón _Add Variable_):
-
-```
-NODE_ENV           production
-DATABASE_URL       mysql://usuario_lmsuser:CLAVE@127.0.0.1:3306/usuario_lms
-JWT_SECRET         <64 caracteres aleatorios>
-APP_PORT           3200
-CORS_ORIGIN        https://campus.tu-dominio.com
-APP_URL            https://campus.tu-dominio.com
-API_PUBLIC_URL     https://api-campus.tu-dominio.com
-BREVO_API_KEY      <clave de Brevo>
-STORAGE_DIR        /home/usuario/lms-data/uploads
-```
-
-`STORAGE_DIR` es la carpeta de los archivos subidos, fuera de la aplicación (apartado 8).
-
-Opcional: `DATABASE_POOL_SIZE` (ver _Conexiones con la base de datos_, más abajo).
-
-Genera el secreto con:
+Si `npm install` se niega con un mensaje de CloudLinux sobre la carpeta `node_modules`, pulsa
+**Ejecutar NPM Install** en la página de la API y vuelve a esta Terminal. En cualquier caso,
+comprueba que están las herramientas de Prisma antes de seguir:
 
 ```bash
-node -e "console.log(require('crypto').randomBytes(64).toString('hex'))"
+npx prisma --version
 ```
 
-La API **no arranca** si `JWT_SECRET` falta, es corto o es uno de los valores de ejemplo.
-Es deliberado: con un secreto adivinable, cualquiera puede fabricarse un token de
-administrador.
+### 7.2 · Preparar la Terminal
 
-`NODE_ENV=production` no es opcional aunque el desplegable _Environment_ ya diga
-_Production_: es lo que hace que la API lea estas variables en vez de buscar un `.env`, y
-lo que mantiene la documentación interna (`/docs`) fuera de internet.
+La Terminal no ve las variables de la aplicación: exporta las dos que usa la migración. En
+`DATABASE_URL` pega el valor tal cual está en las variables de la API, entre comillas simples.
 
-No hace falta declarar `TRUST_PROXY`: por defecto la API confía en el bucle local, que es
-por donde entra Apache, y así cuenta las peticiones **por visitante**. Sólo tendrías que
-tocarlo si algún día pones otro proxy delante, y sólo con direcciones propias.
+```bash
+export DATABASE_URL='mysql://investig_lms:…@127.0.0.1:3306/investig_lms_db'
+export STORAGE_DIR='/home/investig/lms-data/uploads'
+```
 
-### La API corre en un solo proceso
-
-No subas el número de procesos de la API en cPanel, aunque haya mucha gente conectada.
-Tres cosas viven en la memoria del proceso y dejarían de funcionar bien si hubiera varios:
-
-- **El tiempo real.** Un aviso sólo llega a quien esté conectado al mismo proceso que lo
-  emite: con dos procesos, la mitad de la gente no se entera de una calificación o de que un
-  curso entró en mantenimiento.
-- **El bloqueo de edición de cursos.** Dos administradores en procesos distintos podrían
-  editar el mismo curso a la vez sin verse.
-- **El límite de peticiones.** Cada proceso cuenta por su lado, así que el tope de 5
-  intentos por minuto sobre una misma cuenta se convertiría en 5 por cada proceso.
-
-Las sesiones no dependen de esto: qué token vale lo decide la base de datos, así que cerrar
-sesión o cambiar la contraseña corta el acceso en la siguiente petición en cualquier caso.
-
-Un proceso basta de sobra para este uso. Medido con 60 personas navegando a la vez: 375
-peticiones por segundo, sin fallos y con el 95 % de las respuestas por debajo de 280 ms. Si
-algún día hiciera falta más, el camino es un servidor mayor, no más procesos: repartir la
-carga exigiría llevar esas tres piezas a un servicio compartido (por ejemplo Redis), y un
-alojamiento cPanel normalmente no lo ofrece.
-
-### Conexiones con la base de datos
-
-La API abre como mucho **10 conexiones** simultáneas con MariaDB y las reutiliza. En cPanel
-el número de conexiones por usuario de base suele estar limitado (`max_user_connections`), y
-ese cupo lo comparten phpMyAdmin, las copias de seguridad y el terminal. Para verlo, en
-phpMyAdmin → **SQL**:
+Y en phpMyAdmin → `investig_lms_db` → **SQL** (no cambia ninguna tabla; evita errores de
+«_Illegal mix of collations_» en tablas creadas después fuera de Prisma):
 
 ```sql
-SHOW VARIABLES LIKE 'max_user_connections';
+ALTER DATABASE investig_lms_db CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 ```
 
-`0` significa que no hay límite por usuario. Si hay uno, deja al menos 3 libres: con un
-límite de 10, define `DATABASE_POOL_SIZE=7` en las variables de la API y reiníciala. Más de
-10 rara vez ayuda: las consultas sólo competirían por la misma CPU del servidor de base. El
-máximo admitido es 50.
-
-El resto de límites va fijo en el código (`apps/api/src/prisma/pool-settings.ts`):
-
-| Límite                          | Valor | Para qué                                                                                          |
-| ------------------------------- | ----- | ------------------------------------------------------------------------------------------------- |
-| Duración máxima de una consulta | 15 s  | Una consulta desbocada no retiene una conexión: MariaDB la corta (error 1969) y la petición falla |
-| Espera por una conexión libre   | 10 s  | Si todas están ocupadas, la petición falla en vez de quedarse colgada                             |
-| Conexiones ociosas conservadas  | 2     | Las demás se cierran tras 50 s sin uso, antes del `wait_timeout` de algunos alojamientos          |
-
-La duración máxima se aplica con `max_statement_time`, que sólo tiene MariaDB: por eso el
-requisito es MariaDB y no MySQL.
-
-### Cliente
-
-| Campo                    | Valor                   |
-| ------------------------ | ----------------------- |
-| Application root         | `lms-client`            |
-| Application URL          | `campus.tu-dominio.com` |
-| Application startup file | `apps/client/server.js` |
-| Environment              | Production              |
-
-```
-NODE_ENV             production
-PORT                 3100
-NEXT_PUBLIC_API_URL  https://api-campus.tu-dominio.com/api
-```
-
----
-
-## 6. Crear las tablas y los datos iniciales
-
-Desde el terminal de cPanel, en `~/lms-api`:
+### 7.3 · Diagnóstico
 
 ```bash
-npx prisma db push
+node prisma/migracion-julio/migrar.js diagnostico
+```
+
+Sólo lee. Cuenta lo que hay y avisa:
+
+- **✗ (impide seguir)**: correos con tildes u otros caracteres no ASCII, que ya no podrían
+  entrar —cámbialos en phpMyAdmin por su forma ASCII:
+  `UPDATE usuarios SET email = '…' WHERE email = '…';`—, notas por encima de 5 o más de una
+  fila de configuración. Corrige y repite el diagnóstico.
+- **! (aviso)**: cuentas desactivadas que volverán a poder entrar, módulos con varias
+  lecciones, imágenes incrustadas en textos con la dirección antigua (hay que volver a
+  insertarlas desde el constructor) o valores de archivo que no se reconocen.
+
+### 7.4 · Migrar
+
+```bash
+node prisma/migracion-julio/migrar.js antes
+npx prisma db push --accept-data-loss
+node prisma/migracion-julio/migrar.js despues
+```
+
+- **`antes`** convierte las notas a 0–100, pasa cada recurso de su lección a su módulo
+  conservando el orden, asigna todo a Colombia, guarda en cada certificado el nombre del
+  titular y el título del curso, convierte las rutas de archivo a `carpeta/nombre` y retira las
+  claves ajenas de julio para que `db push` las cree limpias. **Sólo se ejecuta una vez**: si se
+  repite, se niega, porque volvería a multiplicar las notas. Si se cortara a mitad, restaura
+  `base.sql` (ver _Volver a julio_) y empieza de nuevo el paso 7.
+- **`db push`** aplica el esquema nuevo. Antes enumera lo que va a perder; es lo esperado:
+  - columnas que ya no se usan: `usuarios.activo`, `lms_cursos.escala`, `emite_certificado` y
+    `deleted_at`, `lms_entregas.contenido_texto` e `ip_address`,
+    `lms_progreso_recurso.tiempo_invertido`, `lms_recursos.leccion_guid` y `deleted_at`, y de
+    `lms_configuracion` `idioma`, `contrasena_defecto`, `email_remitente`, `email_nombre` y
+    `bienvenida_html`;
+  - tablas: `lms_lecciones` (sus recursos ya están en los módulos), `lms_metricas_capacitacion`
+    (se calcula al vuelo), `lms_token_revocations` y `_migracion_julio` (la marca del paso
+    anterior);
+  - cambios de tipo de las notas a `Decimal(5,2)`, que con valores de 0 a 100 no pierden nada.
+
+  Debe terminar con «_Your database is now in sync with your Prisma schema_». Si se detuviera
+  con `errno: 121 "Duplicate key on write or update"`, ejecútalo otra vez: aplica lo que falta.
+
+- **`despues`** marca como terminadas las matrículas ya certificadas, calcula el avance de cada
+  matrícula, retira índices redundantes y adapta las plantillas de correo a la escala 0–100
+  («/5.0» pasa a «puntos»). Puede repetirse sin daño.
+
+### 7.5 · Colocar los archivos
+
+```bash
+node prisma/migracion-julio/migrar.js archivos --origen ~/lms-data/uploads-julio
+```
+
+Copia cada archivo que usa la base a su sitio en `/home/investig/lms-data/uploads`
+(`portadas/`, `entregas/`, `certificados/`…), lo encuentre suelto o en su carpeta. Al final
+lista los que la base usa y no están; si aparece alguno, búscalo en la copia y repite el paso,
+que no vuelve a copiar lo que ya está. Si no aparece (una foto de perfil, por ejemplo), quien lo
+subió puede subirlo de nuevo.
+
+Copia, no mueve: necesitas el doble de espacio mientras tanto. Si la cuota no da, añade
+`--mover`. Lo que quede en `uploads-julio` no lo usa nadie; bórralo cuando hayas comprobado el
+campus.
+
+### 7.6 · Administradores y correos de cada sede
+
+```bash
 npx prisma db seed
 ```
 
-`db push` crea el esquema. La semilla crea **un administrador por sede** y las plantillas
-de correo, e imprime las contraseñas **una sola vez**: anótalas antes de cerrar el
-terminal.
+Crea `admin.co@pesv.com` (Colombia) y `admin.mx@pesv.com` (México) si no existen, e imprime sus
+contraseñas **una sola vez**: anótalas. El administrador de julio y el resto de cuentas siguen
+igual; si no quieres el `admin.co` adicional, bórralo después desde el panel. También crea las
+plantillas de correo de México y los eventos nuevos, sin tocar las existentes.
 
-Se puede ejecutar en producción sin miedo: **no pisa nada**. Un administrador que ya exista
-se deja intacto —ni su contraseña ni su rol— y una plantilla ya creada se respeta aunque se
-haya editado desde el panel. Volver a ejecutarla no duplica nada.
-
-La configuración de cada sede (marca, textos, contacto) la crea la propia API al arrancar,
-así que no hay que sembrarla.
-
----
-
-## 7. Comprobaciones
+### 7.7 · Comprobar
 
 ```bash
-curl https://api-campus.tu-dominio.com/api/health
+node prisma/migracion-julio/migrar.js comprobar
 ```
 
-Debe responder `"status": "healthy"` y `database.status: "ok"`.
+Repasa el esquema, la escala de las notas, las cuentas por sede y rol, las plantillas de cada
+sede, que todos los cuestionarios se puedan leer y que cada archivo esté en su sitio. Debe
+terminar con «Todo en orden» o con la lista concreta de lo que falta.
 
-Después, en el navegador:
+## Paso 8 · Configurar y arrancar la API
 
-1. `https://campus.tu-dominio.com` carga la portada con la marca de la sede de Colombia.
-2. Al cambiar de sede con el selector de la cabecera, la marca pasa a la de México.
-3. El acceso con el administrador de la semilla pide cambiar la contraseña.
-4. Dentro del panel, el indicador de conexión se mantiene activo: el flujo SSE funciona.
+**Setup Node.js App** → `api-lms.investigaciongipia.com` → editar:
 
----
+- **Archivo de inicio de la aplicación**: `dist/main.js` (antes `app.js`). Lo demás (raíz,
+  URL, Node 20.20.2, modo _Production_) se queda igual.
+- **Variables**, con _Añadir variable_:
 
-## 8. Archivos subidos
+  | Variable         | Valor                                    |
+  | ---------------- | ---------------------------------------- |
+  | `STORAGE_DIR`    | `/home/investig/lms-data/uploads`        |
+  | `API_PUBLIC_URL` | `https://api-lms.investigaciongipia.com` |
 
-Los archivos del campus se guardan en el disco del servidor, en la carpeta que indica
-`STORAGE_DIR`. Ponla **fuera de la aplicación**, por ejemplo `/home/usuario/lms-data/uploads`:
-`~/lms-api` se sustituye al desplegar, y si se borra o se recrea la aplicación en _Setup
-Node.js App_, lo que hubiera dentro se pierde. Sin `STORAGE_DIR` se usa `~/lms-api/uploads`,
-que sólo vale en desarrollo; en producción la API lo avisa en el registro al arrancar.
-
-Al arrancar, la API crea la carpeta y sus subcarpetas sin permisos para otras cuentas del
-servidor:
-
-| Carpeta                                          | Qué guarda                                   | Cómo se sirve                                        |
-| ------------------------------------------------ | -------------------------------------------- | ---------------------------------------------------- |
-| `logos`, `portadas`, `fondos`                    | Marca de cada sede y portadas de los cursos  | Sin firma; las cachés compartidas pueden guardarlas  |
-| `avatars`                                        | Fotos de perfil                              | Sin firma; sólo las guarda la caché del navegador    |
-| `entregas`, `certificados`, `firmas`, `recursos` | Lo que documenta a una persona y el material | Con un enlace firmado que caduca en una hora         |
-| `.tmp`                                           | Archivos a medio escribir                    | Nunca; al arrancar se retira lo que lleve más de 1 h |
-
-Cada archivo se escribe primero en `.tmp` y pasa a su carpeta sólo cuando está entero: si el
-proceso se corta a mitad, no queda ningún archivo a medias con su nombre definitivo.
-
-- **Copias de seguridad.** Al estar en la cuenta, la carpeta entra en la copia del directorio
-  personal de cPanel. Restaura siempre la base y la carpeta **del mismo momento**: un archivo
-  que falte deja su enlace roto. Si falta el PDF de un certificado, la API lo recompone al
-  descargarlo con los datos que guardó al emitirlo; los emitidos antes de guardarse esos
-  datos sólo se recuperan de la copia.
-- **Espacio.** Cuenta con lo que ocupen el material de los cursos, las entregas de las
-  vueltas en curso, los PDF de los certificados, las imágenes de marca y las fotos de perfil,
-  más el doble del archivo más grande mientras se guarda (el temporal de la subida y su copia).
-- **Comprobación.** `GET /api/health` responde `storage: { status: "ok" }` si la API puede
-  escribir en la carpeta. Con `error`, el registro de arranque dice por qué (ruta, permisos o
-  disco lleno); la API arranca igualmente para que el resto del campus siga funcionando.
-
-**Cuándo se borra un archivo.** Ninguna tarea programada borra archivos. Lo que se borra del
-disco, y sólo eso:
-
-- **Los archivos que entrega un alumno, al emitirse su certificado.** Cada entrega conserva el
-  nombre del archivo, la nota y el comentario, y el PDF del certificado se guarda siempre. Si
-  se le vuelve a matricular, empieza de cero y al certificarse otra vez se retiran los de esa
-  vuelta. Una vuelta certificada ya no admite entregas nuevas.
-- **Lo sustituido o quitado desde el panel**: la portada, la foto de perfil, el logotipo, el
-  favicon, el fondo, la firma o el material anteriores, y la entrega que el alumno reenvía.
-- **Lo que pertenece a algo eliminado**: un recurso, un módulo o un curso, con las entregas de
-  sus tareas, o una cuenta.
-
-Las portadas, la configuración de la sede y las fotos de perfil nunca se borran solas. Detalle
-en `docs/DECISIONES.md`, «¿Cuándo se borra un archivo?».
-
-### Tamaño máximo de los archivos
-
-| Qué se sube                                                                                   | Dónde se fija el límite                                                               |
-| --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
-| Entrega de una tarea                                                                          | Constructor → la tarea → _Peso máximo estudiante (MB)_. Vacío: el general de la sede  |
-| Material que adjuntan los docentes                                                            | Panel → _Tema y apariencia → Subida de archivos_ (general de la sede; 10 MB de serie) |
-| Logotipo, favicon, portadas, fotos de perfil (5 MB), fondo del acceso (10 MB) y firmas (2 MB) | Fijo                                                                                  |
-
-Ningún límite puede superar el **tope técnico**, la variable opcional `MAX_UPLOAD_MB` de la
-API: 2048 (2 GB) si no se define, 4096 (4 GB) como mucho. El alumno ve el tamaño máximo antes de
-elegir el archivo, y lo que lo supere se rechaza con un mensaje que dice el límite.
-
-Para que un archivo grande llegue a la API, **lo que hay delante tiene que dejarlo pasar**:
-
-- **Apache (`LimitRequestBody`).** Desde Apache 2.4.54 corta por defecto en 1 GiB. Para
-  admitir más, añade esta línea al `.htaccess` de la carpeta del subdominio de la API (el
-  que _Setup Node.js App_ rellena con su configuración de Passenger), fuera del bloque que
-  gestiona cPanel:
-
-  ```
-  LimitRequestBody 0
-  ```
-
-  `0` quita el límite de Apache; el de la plataforma lo sigue aplicando la API. No sirve
-  poner `2147483648`: el máximo que Apache acepta es 2147483647, algo menos de lo que ocupa
-  un archivo de 2 GB con su envoltorio. Si el `.htaccess` no lo admite, pídelo al hosting
-  para ese subdominio.
-
-- **ModSecurity**, si el alojamiento lo tiene activo: su `SecRequestBodyLimit` también
-  corta las subidas. Pide que lo suban para el subdominio de la API o que desactiven
-  ModSecurity en él (cPanel → _ModSecurity_).
-- **Cloudflare u otro proxy delante.** Con el proxy de Cloudflare (nube naranja) en los
-  planes Free y Pro no pasa nada de más de 100 MB, y la respuesta tiene que llegar en 100 s
-  (error 524). Pon el subdominio de la API en _DNS only_ (nube gris).
-- **Espacio temporal.** Cada archivo se escribe en un temporal mientras llega (y Passenger
-  puede guardar otra copia antes de pasárselo a la API). El de la API va a `/tmp`, que en
-  algunos alojamientos es pequeño: con archivos grandes define `UPLOAD_TMP_DIR` con una
-  carpeta de la cuenta, por ejemplo `/home/usuario/lms-tmp`. Los temporales se borran al
-  terminar cada subida, también si se rechaza o se corta.
-
-La API no pone tiempo máximo a una subida y el navegador sólo la cancela si deja de avanzar
-durante dos minutos. El `Timeout` de Apache cuenta la inactividad, no la duración total, así
-que una conexión lenta pero constante no se corta.
-
-Tras cambiar `MAX_UPLOAD_MB` o `UPLOAD_TMP_DIR`, reinicia la API. Comprueba el resultado
-con una tarea de límite alto y un archivo algo mayor de 1 GB.
-
----
-
-## 9. Correo
-
-En alojamiento compartido los puertos SMTP salientes suelen estar cerrados. Por eso el
-sistema usa preferentemente la **API HTTP de Brevo**, que va por el puerto 443:
-
-1. Crea una cuenta en Brevo y genera una clave de API.
-2. Añade `BREVO_API_KEY` a las variables de la aplicación API.
-3. Verifica el dominio remitente en Brevo para que los correos no acaben en spam.
-
-Si prefieres SMTP, rellena `SMTP_HOST`, `SMTP_USER` y `SMTP_PASS`; sólo se usan cuando
-`BREVO_API_KEY` está vacío.
-
----
-
-## 10. Actualizaciones
-
-```bash
-# En local
-npm run build
-
-# Sube dist/, prisma/, prisma.config.ts, package.json y package-lock.json (API)
-# y el contenido de prod/ (cliente). Después, en el terminal de cPanel (~/lms-api):
-npm ci                 # sólo si cambiaron las dependencias
-npx prisma generate
-npx prisma db push     # sólo si cambió el esquema
-
-# cPanel → Setup Node.js App → Restart, en las dos aplicaciones
-```
-
-Reinicia siempre la API después de cambiar una variable de entorno: se leen al arrancar.
-
-**Despliega siempre las dos partes juntas.** El cliente y la API comparten las rutas y los
-nombres de los campos; un cliente de una versión contra la API de otra deja pantallas sin
-datos.
-
-### Al actualizar a la versión que retira las entregas al certificar
-
-- **Al emitirse un certificado se borran del disco los archivos entregados en ese curso**; las
-  entregas conservan el nombre, la nota y el comentario. Las vueltas ya certificadas se ponen
-  al día solas en el primer arranque, sin hacer nada: el registro dice cuántos archivos retiró.
-- **Una vuelta certificada queda cerrada.** La API ya no admite en ella entregas,
-  recalificaciones, intentos de cuestionario ni intentos adicionales; para repetir el curso
-  se vuelve a matricular. Un intento adicional sólo se concede a quien agotó los suyos sin
-  superar el cuestionario.
-- **Las entregas archivadas dejan de guardar archivo.** El `db push` retira la columna
-  `url_archivo_adjunto` de `lms_entregas_archivadas` y su índice. Los archivos a los que
-  apuntaba —entregas de vueltas ya certificadas de alumnos rematriculados— hay que borrarlos
-  **antes**, porque después nada los referencia:
-  1. Lista sus claves en phpMyAdmin → **SQL** y exporta el resultado como CSV, sin
-     cabecera, a `~/archivadas.txt`:
-
-     ```sql
-     SELECT a.url_archivo_adjunto FROM lms_entregas_archivadas a
-     WHERE a.url_archivo_adjunto IS NOT NULL
-       AND NOT EXISTS (SELECT 1 FROM lms_entregas e WHERE e.url_archivo_adjunto = a.url_archivo_adjunto);
-     ```
-
-  2. Borra esos archivos de `STORAGE_DIR`. Cada clave es su ruta dentro de la carpeta, y sólo
-     se admiten las de `entregas/`:
-
-     ```bash
-     cd /home/usuario/lms-data/uploads &&
-       tr -d '"\r' < ~/archivadas.txt | grep -E '^entregas/[^/]+$' | while read -r clave; do rm -f -- "$clave"; done
-     ```
-
-  3. Retira esas claves del registro de subidas y vacía la columna:
-
-     ```sql
-     DELETE FROM lms_archivos WHERE clave IN (
-       SELECT a.url_archivo_adjunto FROM lms_entregas_archivadas a
-       WHERE a.url_archivo_adjunto IS NOT NULL
-         AND NOT EXISTS (SELECT 1 FROM lms_entregas e WHERE e.url_archivo_adjunto = a.url_archivo_adjunto));
-     UPDATE lms_entregas_archivadas SET url_archivo_adjunto = NULL;
-     ```
-
-  4. `npx prisma db push`. Con la columna ya vacía no hay datos que perder.
-
-- **Retomar tras una baja conserva la fecha de inscripción** de la vuelta, que es la que imprime
-  el certificado; sólo una vuelta nueva la renueva.
-
-### Al actualizar a la versión con los archivos sólo en el disco
-
-- **Cloudflare R2 ya no se usa.** Si tenías definidas las variables `R2_*`, copia antes el
-  bucket entero a la carpeta nueva conservando las rutas (`carpeta/nombre`), por ejemplo con
-  `rclone copy r2:lms-uploads /home/usuario/lms-data/uploads`, y borra esas variables.
-- **La carpeta sale de la aplicación.** Si los archivos estaban en `~/lms-api/uploads`,
-  muévelos antes de desplegar y define `STORAGE_DIR` (apartado 8):
+  Las demás (`APP_URL`, `CORS_ORIGIN`, `DATABASE_URL`, `JWT_SECRET`, `NODE_ENV`, `SMTP_*`) se
+  quedan como están. Recomendado: cambia `JWT_SECRET` por uno nuevo, ya que todo el mundo tendrá
+  que volver a entrar de todas formas:
 
   ```bash
-  mkdir -p ~/lms-data && mv ~/lms-api/uploads ~/lms-data/uploads
+  node -e "console.log(require('crypto').randomBytes(64).toString('hex'))"
   ```
 
-  Si quedaran temporales `*.parcial` de cortes anteriores, puedes borrarlos: nunca fueron
-  archivos completos.
+**Guardar** y **Reiniciar**. Comprueba:
 
-- **Dependencias y esquema.** Ejecuta `npm ci` (se retira el cliente de R2) y
-  `npx prisma db push`, que añade a los certificados la columna `datos_pdf` sin tocar datos.
-- **Logotipo y favicon sólo en PNG o JPG.** Son los formatos que imprime el certificado y que
-  muestran los correos. Uno ya subido en SVG, WebP o GIF se sigue viendo en el campus, pero
-  no sale en los certificados: súbelo de nuevo.
-- **`MAX_UPLOAD_MB` admite como mucho 4096.** Un valor mayor se reduce a ese, con aviso.
+```bash
+curl https://api-lms.investigaciongipia.com/api/health
+```
 
-### Al actualizar a la versión con límites por usuario y correos sólo en ASCII
+Debe responder `"status":"healthy"`, `"database":{"status":"ok"…}` y
+`"storage":{"status":"ok"}`. Si no responde, el registro de la aplicación (normalmente
+`~/lms-pesv-project/apps/api/stderr.log`) dice por qué; ver _Problemas frecuentes_.
 
-- **Índices nuevos.** Hay dos, sobre el archivo de las entregas y de las entregas
-  archivadas: aceleran la limpieza de archivos sustituidos. `npx prisma db push` los crea sin
-  tocar ningún dato.
-- **Los correos de las cuentas sólo admiten caracteres ASCII.** La base compara los correos
-  sin distinguir tildes, y un correo con ellas podía usarse para pedir cosas en nombre de
-  otra cuenta. Antes de actualizar, comprueba que ninguna cuenta tenga uno, porque ya no
-  podría entrar:
+En el primer arranque la API hace dos cosas solas, y lo deja en el registro: crea la
+configuración de la sede de México y **borra los archivos de las entregas de los cursos ya
+certificados** (conservando nombre, nota y comentario), como ya hacía julio al emitir cada
+certificado.
 
-  ```sql
-  SELECT email FROM usuarios WHERE email REGEXP '[^ -~]';
-  ```
+## Paso 9 · Arrancar el cliente
 
-  Si aparece alguno, cámbialo en la base por su forma ASCII (los dominios internacionales
-  se escriben `xn--…`): `UPDATE usuarios SET email = '…' WHERE email = '…';`. La interfaz
-  no permite cambiar el correo de una cuenta.
+En el cliente (`lms.investigaciongipia.com`) no cambia nada: misma raíz, mismo `server.js`, sin
+instalar dependencias. La variable `NEXT_PUBLIC_API_URL` puede quedarse o borrarse: no se usa.
+**Reiniciar** (o **Iniciar**).
 
-  Comprueba también las solicitudes de acceso:
+## Paso 10 · Comprobar el campus
 
-  ```sql
-  SELECT email, estado FROM lms_solicitudes_acceso WHERE email REGEXP '[^ -~]';
-  ```
+1. `https://lms.investigaciongipia.com` muestra la portada con la marca de siempre, en la sede
+   de Colombia. El selector de la cabecera cambia a México.
+2. Entra con el administrador de julio. Pide aceptar la política de datos.
+3. En _Usuarios_, _Cursos_ y _Tareas_ están los datos de siempre; las notas, sobre 100.
+4. Abre un curso como alumno: los recursos están en orden y las imágenes y los PDF se ven.
+5. `https://lms.investigaciongipia.com/verify?code=CODIGO`, con el código de un certificado
+   emitido en julio, dice que es válido. Los enlaces antiguos (`/verificar?codigo=…`,
+   `/dashboard/…` en español) redirigen solos.
+6. El indicador de conexión del panel se mantiene activo: el tiempo real funciona.
+7. Sube una portada de prueba y comprueba que se ve.
+8. Envía un correo de prueba (por ejemplo, _¿Olvidaste tu contraseña?_ con tu cuenta). Si no
+   llega, el registro de la API lo dice; ver _Correo_.
 
-  Si sale alguna `PENDIENTE`, cambia su correo por la forma ASCII antes de aprobarla
-  (`UPDATE lms_solicitudes_acceso SET email = '…' WHERE email = '…';`): aprobada tal cual,
-  la cuenta nacería con un correo con el que no se puede entrar. Si las tildes están antes
-  de la @, no hay forma ASCII: recházala y pide a la persona que solicite acceso con otro
-  correo. Las que no estén pendientes pueden quedarse: si la persona vuelve a solicitar
-  acceso, la solicitud toma el correo que escriba entonces.
+Después, en cada sede:
 
-- **SMTP sin usuario.** `SMTP_HOST` basta para un relé que no pide autenticación;
-  `SMTP_USER` y `SMTP_PASS` sólo hacen falta si el servidor los exige, como Brevo.
+- **Portada pública → Textos legales**: completa el responsable del tratamiento (razón social,
+  NIT o RFC, domicilio, correo de privacidad).
+- **México**: entra con `admin.mx@pesv.com`, cambia la contraseña y configura marca y textos.
+- Revisa la **nota de aprobación** de los cursos: quedó en el equivalente de julio (60 si era
+  3,0). La de los cursos nuevos es 80.
+- Si el diagnóstico avisó de cuentas desactivadas, elimínalas desde _Usuarios_ si no deben
+  entrar.
 
-### Al actualizar a la versión con el código en inglés
+Avisa a los usuarios de que tendrán que volver a iniciar sesión.
 
-Esta versión renombró el código, las rutas de la API y las páginas del cliente al inglés.
-Las tablas, columnas y valores existentes conservan su nombre. Los cambios de la base son
-estos:
+## Si algo sale mal: volver a julio
 
-- **Columnas nuevas** para la prueba de la autorización de datos (`usuarios` y
-  `lms_solicitudes_acceso`) y para identificar al responsable del tratamiento
-  (`lms_configuracion`).
-- **Un índice** en `lms_progreso_recurso(recurso_guid, usuario_guid)` que acelera el
-  monitoreo.
-- **Columnas retiradas** de `lms_configuracion` que nada usaba: `contrasena_defecto` (la
-  contraseña temporal compartida, sustituida por una aleatoria por cuenta), `idioma`,
-  `email_remitente`, `email_nombre` y `bienvenida_html`.
-- **La columna `usuarios.activo`** y su índice: se retiró la función de activar y desactivar
-  cuentas, y ninguna cuenta estaba desactivada.
-- **Dos columnas nuevas en `lms_matriculas`**: `fecha_finalizacion` (cuándo se certificó la
-  vuelta actual; nula mientras el curso está en curso) y `recursos_completados` (recuento
-  del avance que usa el monitoreo). Con ellas, quien ya se certificó deja de recibir el
-  recordatorio «Tienes formación pendiente» y los paneles dejan de recorrer toda la historia.
-- **Índices**: nuevos en `lms_matriculas(curso_guid, activa, fecha_finalizacion)`,
-  `lms_notificaciones(usuario_guid, tipo, created_at)`, `lms_entregas(fecha_entrega)` y
-  `lms_entregas(estado, usuario_guid, calificacion)`; ampliados
-  `lms_entregas(tarea_guid, usuario_guid)` → `(tarea_guid, usuario_guid, estado, calificacion)`
-  y `lms_sesion_activa(usuario_guid, curso_guid)` → `(usuario_guid, curso_guid, fin_sesion)`;
-  retirado `lms_certificados(usuario_guid)`, que la restricción única ya cubre.
-- **Certificados que sobreviven a la cuenta**: `lms_certificados.usuario_guid` admite nulo,
-  la nueva columna `nombre_titular` guarda el nombre con que se emitió y `pais`, la sede que
-  lo emitió. Si se borra la cuenta del alumno, su certificado sigue verificándose con ese
-  nombre y esa sede.
-- **Plantillas de correo por sede**: `lms_plantillas_correo.pais`. Cada sede edita las suyas.
-- **Tablas nuevas**: `lms_versiones_legales` (los textos legales que aceptó cada persona),
-  `lms_entregas_archivadas` (las entregas de una vuelta ya certificada cuando el alumno
-  vuelve a matricularse) y `lms_archivos` (quién subió cada archivo).
-- **`lms_recursos.quiz_config`** pasa a `MEDIUMTEXT`: un cuestionario largo no cabía en
-  `TEXT`. **`lms_cursos.emite_certificado`** se retira: nunca tuvo efecto.
-
-Pasos, en este orden:
-
-1. **Preparar los datos que el esquema nuevo exige**, en MariaDB y antes del `db push`
-   (el `db push` no puede añadir una columna obligatoria a una tabla con filas):
-
-   ```sql
-   -- Nombre del titular de cada certificado, tomado de su cuenta.
-   ALTER TABLE lms_certificados ADD COLUMN nombre_titular VARCHAR(191) NOT NULL DEFAULT '';
-   UPDATE lms_certificados ce JOIN usuarios u ON u.guid = ce.usuario_guid
-   SET ce.nombre_titular = CONCAT(u.nombre, ' ', u.apellido);
-
-   -- Sede que emitió cada certificado, tomada de la cuenta o, si ya no existe, del curso.
-   ALTER TABLE lms_certificados
-     ADD COLUMN pais ENUM('COLOMBIA', 'MEXICO') NOT NULL DEFAULT 'COLOMBIA';
-   UPDATE lms_certificados ce
-   LEFT JOIN usuarios u ON u.guid = ce.usuario_guid
-   LEFT JOIN lms_cursos cu ON cu.guid = ce.curso_guid
-   SET ce.pais = COALESCE(u.pais, cu.pais, ce.pais);
-
-   -- Las plantillas existentes pasan a ser las de Colombia y se copian para México.
-   ALTER TABLE lms_plantillas_correo
-     ADD COLUMN pais ENUM('COLOMBIA', 'MEXICO') NOT NULL DEFAULT 'COLOMBIA';
-   INSERT INTO lms_plantillas_correo
-     (evento_id, pais, nombre_interno, asunto, cuerpo_html, activo, es_sistema, created_at, updated_at)
-   SELECT evento_id, 'MEXICO', nombre_interno, asunto, cuerpo_html, activo, es_sistema, NOW(3), NOW(3)
-   FROM lms_plantillas_correo WHERE pais = 'COLOMBIA';
-   ```
-
-   El `db push` del paso siguiente retira después esos valores por defecto provisionales.
-
-2. **Aplicar el esquema.** Como se retiran columnas, Prisma pide confirmarlo expresamente:
+1. **Detener aplicación** en la API y el cliente.
+2. Restaura la base: phpMyAdmin → `investig_lms_db` → marcar todas las tablas → **Eliminar**, y
+   después **Importar** `~/respaldo-julio/base.sql` (o en la Terminal,
+   `mysql -u investig_lms -p investig_lms_db < ~/respaldo-julio/base.sql` sobre la base vacía).
+3. Restaura el proyecto:
 
    ```bash
-   npx prisma db push --accept-data-loss
+   cd ~/lms-pesv-project
+   find apps/api -mindepth 1 -maxdepth 1 ! -name node_modules -exec rm -rf {} +
+   rm -rf apps/client/prod
+   tar -xzf ~/respaldo-julio/proyecto.tar.gz -C ~
    ```
 
-   Lo único que se pierde es el contenido de esas cinco columnas de configuración, de
-   `usuarios.activo` (que valía `1` en todas las cuentas) y de `lms_cursos.emite_certificado`.
+   La copia trae también `apps/api/uploads`.
 
-3. **Rellenar las columnas nuevas de `lms_matriculas`**, en MariaDB, justo después del
-   `db push` y antes de reiniciar la API. Sin este paso, todas las matrículas figurarían en
-   curso —los ya certificados seguirían recibiendo recordatorios— y el monitoreo vería a
-   todos en el 0 %.
-
-   ```sql
-   -- Matrículas cuya vuelta actual ya se certificó. La vuelta empieza en fecha_matricula,
-   -- que se renueva al volver a matricular: un certificado anterior a esa fecha es de la
-   -- vuelta pasada y la matrícula sigue en curso.
-   UPDATE lms_matriculas m
-   JOIN (SELECT usuario_guid, curso_guid, MAX(fecha_completado) AS fecha
-         FROM lms_certificados
-         WHERE curso_guid IS NOT NULL
-         GROUP BY usuario_guid, curso_guid) c
-     ON c.usuario_guid = m.usuario_guid AND c.curso_guid = m.curso_guid
-   SET m.fecha_finalizacion = c.fecha
-   WHERE m.fecha_finalizacion IS NULL AND c.fecha >= m.fecha_matricula;
-
-   -- Recursos completados de cada matrícula.
-   UPDATE lms_matriculas m
-   SET m.recursos_completados = (
-     SELECT COUNT(*)
-     FROM lms_progreso_recurso p
-     JOIN lms_recursos r ON r.guid = p.recurso_guid
-     JOIN lms_modulos mo ON mo.guid = r.modulo_guid
-     WHERE p.usuario_guid = m.usuario_guid AND mo.curso_guid = m.curso_guid
-   );
-   ```
-
-   Se pueden repetir sin daño. A partir de aquí la API los mantiene sola: el certificado
-   cierra la matrícula, volver a matricular la reabre y una tarea nocturna (3:15, hora de
-   Colombia) reconcilia el recuento de las matrículas en curso.
-
-4. **Retirar los índices que otros hacen redundantes.** El `db push` no los quita solo
-   porque respaldan una clave ajena, aunque otro índice que empieza por la misma columna ya
-   la cubre:
-
-   ```sql
-   DROP INDEX lms_progreso_recurso_recurso_guid_idx ON lms_progreso_recurso;
-   DROP INDEX lms_certificados_usuario_guid_idx ON lms_certificados;
-   ```
-
-5. **Actualizar los correos.** En `~/lms-api`, ejecutar la semilla:
-
-   ```bash
-   npx prisma db seed
-   ```
-
-   Crea en las dos sedes los eventos de correo nuevos (por ejemplo `SOLICITUD_RECHAZADA`,
-   el aviso de solicitud no aprobada) y pone al día las variables de los existentes. No
-   toca las plantillas que ya están guardadas, editadas o no.
-
-   Para que los correos de calificación ya guardados muestren el comentario del
-   examinador, en MariaDB:
-
-   ```sql
-   UPDATE lms_plantillas_correo p JOIN lms_eventos_correo e ON e.id = p.evento_id
-   SET p.cuerpo_html = REPLACE(p.cuerpo_html, '{{mensaje_aprobacion}}', '{{mensaje_aprobacion}}\n{{comentario}}')
-   WHERE e.identificador = 'CALIFICACION_RECIBIDA' AND p.cuerpo_html NOT LIKE '%{{comentario}}%';
-   ```
-
-   Se puede repetir sin daño. La plantilla de bienvenida ya guardada (`USUARIO_APROBADO`)
-   tampoco recibe sola la variable nueva `{{sede}}`: el administrador de cada sede puede
-   añadirla desde _Plantillas de correo_ o copiar el texto de serie, que está en
-   `apps/api/prisma/email-templates.ts`.
-
-Después de actualizar:
-
-- **Cada persona acepta la política de datos al entrar**, porque ninguna cuenta tiene aún
-  registrada esa autorización. Queda guardada la fecha y la versión como prueba.
-- **El administrador de cada sede completa el responsable del tratamiento** en _Portada
-  pública → Textos legales_ (razón social, NIT o RFC, domicilio y correo para ejercer los
-  derechos). Mientras falten, la página legal usa el nombre de la plataforma y el contacto
-  de la portada.
-
-- **Nadie pierde la sesión.** El rol y la sede de cada petición se leen de la base, no del
-  token.
-- **Los enlaces antiguos siguen funcionando.** Las páginas en español (`/cursos/…`,
-  `/verificar?codigo=…`, `/dashboard/mensajes`, etc.) redirigen de forma permanente a las
-  nuevas, de modo que los correos ya enviados y las notificaciones guardadas no se rompen.
-- **La sede elegida en la portada vuelve una vez a Colombia** en cada navegador, porque la
-  preferencia se guarda con otro nombre. Quien entre con su cuenta ve su sede igualmente.
-
-### Al actualizar desde una versión anterior a las claves ajenas del chat
-
-Esta versión añade claves ajenas que faltaban en dos tablas —contactos de chat y
-conversaciones vaciadas—, de modo que lo de cada persona desaparezca con ella. Si la instalación viene de antes, puede tener filas apuntando a usuarios ya
-borrados, y la base **rechazará la restricción** mientras queden:
-
-```
-Error: Cannot add or update a child row: a foreign key constraint fails
-```
-
-Antes del `db push`, retira esos restos:
-
-```sql
-DELETE t FROM lms_contacto_chat       t LEFT JOIN usuarios u ON u.guid = t.solicitante_guid WHERE u.guid IS NULL;
-DELETE t FROM lms_contacto_chat       t LEFT JOIN usuarios u ON u.guid = t.receptor_guid    WHERE u.guid IS NULL;
-DELETE t FROM lms_conversacion_oculta t LEFT JOIN usuarios u ON u.guid = t.usuario_guid     WHERE u.guid IS NULL;
-DELETE t FROM lms_conversacion_oculta t LEFT JOIN usuarios u ON u.guid = t.contacto_guid    WHERE u.guid IS NULL;
-```
-
-Son filas que ya no se podían usar para nada: apuntan a cuentas inexistentes.
-
-La tabla `lms_token_revocations` desaparece en esta versión: qué sesión vale lo dice ahora
-la propia cuenta, y el `db push` la retira sola. Nadie pierde la sesión al actualizar.
+4. En la API, archivo de inicio `app.js` otra vez; entra en su entorno (paso 7.1) y ejecuta
+   `npm install`.
+5. **Iniciar** las dos aplicaciones.
 
 ---
 
-## 11. Problemas frecuentes
+# Parte 2 · Referencia
 
-| Síntoma                                                                                                                   | Causa                                                                                             | Solución                                                                                                                      |
-| ------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| El registro dice `max_user_connections` o `Too many connections`                                                          | La API y otras herramientas superan el cupo de conexiones del usuario de base                     | Baja `DATABASE_POOL_SIZE` (apartado 5, _Conexiones con la base de datos_) y reinicia la API                                   |
-| El registro dice `retrieve connection from pool timeout` o `max_statement_time exceeded`                                  | Consultas lentas que ocupan todas las conexiones                                                  | Busca en el registro qué ruta las lanza; no subas los límites sin saber cuál es                                               |
-| La API no arranca y el registro dice `JWT_SECRET`                                                                         | Secreto ausente o demasiado corto                                                                 | Genera uno de 64 caracteres y reinicia                                                                                        |
-| El navegador bloquea las peticiones por CORS                                                                              | `CORS_ORIGIN` no coincide con el dominio del cliente                                              | Ponlo exacto, con `https://` y sin barra final                                                                                |
-| Las imágenes no cargan                                                                                                    | `API_PUBLIC_URL` sin definir                                                                      | Defínela y reinicia la API                                                                                                    |
-| El tiempo real no conecta                                                                                                 | Proxy agrupando la respuesta                                                                      | Revisa el apartado 1                                                                                                          |
-| Los certificados salen sin logotipo                                                                                       | El logotipo no está subido en esa sede, o se subió en SVG, WebP o GIF antes de exigirse PNG o JPG | Panel → Tema y apariencia, en cada sede: súbelo en PNG o JPG                                                                  |
-| Un alumno no puede entrar                                                                                                 | Está intentando acceder a la sede equivocada                                                      | Que cambie de sede con el selector de la portada o de la pantalla de acceso                                                   |
-| `prisma db push` se detiene con `errno: 121 "Duplicate key on write or update"`                                           | Prisma intenta volver a crear una clave ajena que ya existe; los pasos anteriores sí se aplicaron | Ejecuta `npx prisma db push` otra vez: aplica lo que falta (también las claves ajenas). Comprueba al final que dice «in sync» |
-| La API no arranca y el registro menciona `@prisma/client` o `.prisma/client`                                              | Falta generar el cliente de base de datos                                                         | `npx prisma generate` en `~/lms-api` y reinicia                                                                               |
-| `npm run build` falla con «`<Html>` should not be imported outside of pages/\_document»                                   | Artefactos de una compilación anterior en `.next`                                                 | `pre-build.js` los retira antes de compilar; si aun así ocurre, borra `apps/client/.next` y repite                            |
-| La compilación falla con «An error occurred in `next/font`»                                                               | La fuente se descarga de Google al compilar, y a veces limita las peticiones seguidas             | Repite la compilación al cabo de un minuto                                                                                    |
-| El certificado acredita «1 hora»                                                                                          | El curso no declara su duración                                                                   | Constructor → el curso → _Duración del programa_                                                                              |
-| Una subida grande falla con «El servidor rechazó el archivo por su tamaño antes de procesarlo» o con un error de conexión | Apache (`LimitRequestBody`), ModSecurity o un proxy la cortan antes de llegar a la API            | Apartado 8, _Tamaño máximo de los archivos_                                                                                   |
-| Una subida grande falla con «Ha ocurrido un error interno» y el registro de la API dice `ENOSPC`                          | No queda espacio en la carpeta temporal                                                           | Define `UPLOAD_TMP_DIR` con una carpeta de la cuenta y reinicia la API                                                        |
-| Una subida falla con «No queda espacio en el servidor para guardar el archivo»                                            | El disco o la cuota de la cuenta están llenos en `STORAGE_DIR`; el registro nombra el archivo     | Libera espacio o amplía la cuota del alojamiento                                                                              |
-| Una subida falla con «El almacenamiento de archivos no está disponible», o `/api/health` dice `storage: error`            | La API no puede escribir en `STORAGE_DIR`: no existe, no es de la cuenta o está en solo lectura   | Revisa la ruta y sus permisos y reinicia la API; el registro de arranque dice qué falló                                       |
+## Requisitos
+
+- Node.js 20.19+, 22.12+ o 24+ (cPanel → _Setup Node.js App_).
+- MariaDB 10.6 o superior, con un usuario con todos los privilegios sobre la base.
+- Dos subdominios: el del cliente y el de la API (por ejemplo `lms.` y `api-lms.`).
+
+## Tiempo real sin WebSockets
+
+Las aplicaciones Node de cPanel se sirven detrás de Apache con Passenger, que no propaga la
+cabecera `Upgrade` de los WebSockets: por eso el tiempo real de julio no llegaba a funcionar.
+Ahora va por **Server-Sent Events**, una respuesta HTTP que se mantiene abierta, y atraviesa
+Apache sin configurar nada. La API manda `X-Accel-Buffering: no` y un latido cada 25 s. Si los
+avisos llegaran agrupados con retraso, pide al alojamiento que desactive `mod_deflate` para
+`text/event-stream`. Si el flujo se cortara, el campus sigue funcionando: los datos se
+refrescan al navegar.
+
+## La API corre en un solo proceso
+
+No subas el número de procesos de la API. El tiempo real, el bloqueo de edición de cursos y
+el límite de peticiones viven en la memoria del proceso: con varios, un aviso sólo llegaría a
+quien esté conectado al mismo proceso, dos administradores podrían editar el mismo curso a la
+vez y el tope de intentos de acceso se multiplicaría. Un proceso aguanta de sobra este uso
+(medido: 60 personas a la vez, 375 peticiones por segundo, el 95 % por debajo de 280 ms).
+
+## Variables de la API
+
+| Variable                                                                          | Obligatoria | Para qué                                                                              |
+| --------------------------------------------------------------------------------- | ----------- | ------------------------------------------------------------------------------------- |
+| `NODE_ENV`                                                                        | Sí          | `production`: lee la configuración del panel y oculta `/docs`                         |
+| `DATABASE_URL`                                                                    | Sí          | `mysql://usuario:clave@127.0.0.1:3306/base`; codifica los especiales (`@` → `%40`)    |
+| `JWT_SECRET`                                                                      | Sí          | 32 caracteres o más; la API no arranca con uno corto o de ejemplo                     |
+| `STORAGE_DIR`                                                                     | Sí          | Carpeta de archivos, fuera de la aplicación                                           |
+| `CORS_ORIGIN`                                                                     | Sí          | Dominio del cliente, exacto; varios separados por comas                               |
+| `APP_URL`                                                                         | Sí          | Dominio del cliente, para los enlaces de los correos                                  |
+| `API_PUBLIC_URL`                                                                  | Sí          | Dominio de la API, para las imágenes de los correos                                   |
+| `BREVO_API_KEY`                                                                   | Recomendada | Correo por la API HTTP de Brevo (puerto 443)                                          |
+| `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM`, `SMTP_FROM_NAME` | No          | Sólo si no hay `BREVO_API_KEY`                                                        |
+| `DATABASE_POOL_SIZE`                                                              | No          | Conexiones con la base (10 por defecto, 50 como mucho)                                |
+| `MAX_UPLOAD_MB`                                                                   | No          | Tope técnico de una subida (2048 por defecto, 4096 como mucho)                        |
+| `UPLOAD_TMP_DIR`                                                                  | No          | Carpeta temporal de las subidas si `/tmp` es pequeño                                  |
+| `STORAGE_SECRET`                                                                  | No          | Firma de las descargas; por defecto, `JWT_SECRET`                                     |
+| `TRUST_PROXY`                                                                     | No          | No hace falta en cPanel: por defecto confía en el bucle local, por donde entra Apache |
+
+Reinicia la API después de cambiar cualquier variable: se leen al arrancar.
+
+### Conexiones con la base de datos
+
+La API abre como mucho 10 conexiones. En cPanel el usuario de base suele tener un cupo
+(`SHOW VARIABLES LIKE 'max_user_connections';` en phpMyAdmin; `0` es sin límite) que comparten
+phpMyAdmin y las copias. Si hay límite, deja al menos 3 libres con `DATABASE_POOL_SIZE`. Cada
+consulta tiene 15 s como máximo y espera 10 s por una conexión libre
+(`apps/api/src/prisma/pool-settings.ts`).
+
+## Archivos subidos
+
+Viven en `STORAGE_DIR`, fuera de la aplicación, para que un despliegue no los toque y entren en
+la copia del directorio personal. La API crea al arrancar las subcarpetas:
+
+| Carpeta                                          | Qué guarda                                   | Cómo se sirve                         |
+| ------------------------------------------------ | -------------------------------------------- | ------------------------------------- |
+| `logos`, `portadas`, `fondos`                    | Marca de cada sede y portadas de los cursos  | Sin firma                             |
+| `avatars`                                        | Fotos de perfil                              | Sin firma                             |
+| `entregas`, `certificados`, `firmas`, `recursos` | Lo que documenta a una persona y el material | Enlace firmado que caduca en una hora |
+| `.tmp`                                           | Archivos a medio escribir                    | Nunca                                 |
+
+Restaura siempre la base y esta carpeta **del mismo momento**. `GET /api/health` dice
+`storage: ok` si la API puede escribir en ella.
+
+Para subidas de más de 1 GB, Apache las corta antes de llegar a la API: añade
+`LimitRequestBody 0` al `.htaccess` del subdominio de la API, fuera del bloque de cPanel. Si hay
+ModSecurity o el proxy de Cloudflare delante del subdominio de la API, también limitan el
+tamaño (en Cloudflare, ponlo en _DNS only_).
+
+## Correo
+
+En alojamiento compartido los puertos SMTP salientes suelen estar cerrados, así que lo
+recomendable es la API HTTP de Brevo: crea una clave en Brevo, ponla en `BREVO_API_KEY` y
+verifica allí el dominio remitente. Con `BREVO_API_KEY` vacía se usa SMTP (`SMTP_HOST` y, si el
+servidor lo pide, `SMTP_USER` y `SMTP_PASS`). Sin ninguno el campus funciona, pero no sale
+ningún correo.
+
+## Actualizaciones posteriores
+
+```bash
+# En tu equipo
+npm run package:cpanel -- --api-url https://api-lms.investigaciongipia.com/api
+```
+
+Copia de la base, **Detener aplicación** en las dos, y en la Terminal:
+
+```bash
+cd ~/lms-pesv-project
+find apps/api -mindepth 1 -maxdepth 1 ! -name node_modules -exec rm -rf {} +
+rm -rf apps/client/prod
+# subir lms-cpanel.zip a lms-pesv-project y extraerlo allí
+source /home/investig/nodevenv/lms-pesv-project/apps/api/20/bin/activate && cd apps/api
+npm install --include=dev
+npx prisma generate
+npx prisma db push      # sólo si cambió el esquema; nunca con --accept-data-loss sin leer qué pierde
+```
+
+**Reiniciar** las dos aplicaciones. Despliega siempre las dos partes juntas: comparten rutas y
+nombres de campos. Los archivos subidos no se tocan: viven en `/home/investig/lms-data/uploads`.
+
+## Problemas frecuentes
+
+| Síntoma                                                                      | Causa                                                             | Solución                                                                          |
+| ---------------------------------------------------------------------------- | ----------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| La API no arranca y el registro dice `JWT_SECRET`                            | Secreto ausente o de menos de 32 caracteres                       | Genera uno de 64 y reinicia                                                       |
+| La API no arranca y el registro menciona `@prisma/client` o `.prisma/client` | Falta generar el cliente de la base                               | `npx prisma generate` en `apps/api` y reinicia                                    |
+| `migrar.js` dice «Falta DATABASE_URL»                                        | La Terminal no ve las variables de la aplicación                  | `export DATABASE_URL='…'` (paso 6.2)                                              |
+| `db push` se detiene con `errno: 121 "Duplicate key on write or update"`     | MariaDB rechaza recrear una clave ajena con el mismo nombre       | Ejecuta `npx prisma db push --accept-data-loss` otra vez hasta que diga «in sync» |
+| `npm install` se queja de la carpeta `node_modules`                          | Se borró el enlace que crea cPanel                                | Pulsa **Run NPM Install** en _Setup Node.js App_ y repite `npx prisma generate`   |
+| «No hay conexión con el servidor» al entrar                                  | El cliente no llega a la API                                      | Comprueba `/api/health` y que el paquete se generó con el `--api-url` correcto    |
+| El navegador bloquea las peticiones por CORS                                 | `CORS_ORIGIN` no coincide con el dominio del cliente              | Ponlo exacto, con `https://` y sin barra final                                    |
+| Las imágenes no salen en los correos                                         | Falta `API_PUBLIC_URL`                                            | Defínela y reinicia                                                               |
+| `/api/health` dice `storage: error`                                          | `STORAGE_DIR` no existe, no es de la cuenta o el disco está lleno | Revisa la ruta y el espacio; el registro de arranque dice qué falló               |
+| Una imagen o un PDF antiguo no se ve                                         | El archivo no estaba en el origen al ejecutar `archivos`          | `comprobar` lista los que faltan; búscalos en la copia y repite `archivos`        |
+| `max_user_connections` o `Too many connections` en el registro               | La API y otras herramientas superan el cupo del usuario de base   | Baja `DATABASE_POOL_SIZE` y reinicia                                              |
+| Los certificados salen sin logotipo                                          | El logotipo de la sede no es PNG ni JPG                           | Panel → _Tema y apariencia_: súbelo en PNG o JPG                                  |
+| Un alumno no puede entrar                                                    | Está en la sede equivocada                                        | Que cambie de sede con el selector de la pantalla de acceso                       |

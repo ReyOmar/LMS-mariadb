@@ -11,6 +11,7 @@
     "build:api": "dotenv -e .env -v NODE_ENV=production -- npm run build --prefix apps/api",
     "build:client": "dotenv -e .env -v NODE_ENV=production -- npm run build --prefix apps/client",
     "build": "concurrently --success all -n api,client -c green,cyan \"npm run build:api\" \"npm run build:client\"",
+    "package:cpanel": "node scripts/empaquetar-cpanel.mjs",
     "start:api": "dotenv -e .env -- npm run start --prefix apps/api",
     "start:client": "dotenv -e .env -v PORT=3100 -- npm run start --prefix apps/client",
     "start": "concurrently -k -n api,client -c green,cyan \"npm run start:api\" \"npm run start:client\"",

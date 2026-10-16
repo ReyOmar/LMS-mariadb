@@ -32,3 +32,6 @@ generated/
 .vscode/
 .idea/
 
+
+# Paquetes para cPanel (npm run package:cpanel)
+despliegue/

@@ -125,7 +125,7 @@ plantillas de correo. La configuración de cada sede la crea la API al arrancar.
 ## Cómo funciona el tiempo real
 
 Sobre **Server-Sent Events**, no WebSocket. El motivo está explicado en
-[docs/DESPLIEGUE-CPANEL.md](docs/DESPLIEGUE-CPANEL.md#1-sobre-los-websockets-ya-no-hacen-falta):
+[docs/DESPLIEGUE-CPANEL.md](docs/DESPLIEGUE-CPANEL.md#tiempo-real-sin-websockets):
 en cPanel, Apache no propaga la cabecera `Upgrade` y la conexión WebSocket nunca llega a
 establecerse.
 
