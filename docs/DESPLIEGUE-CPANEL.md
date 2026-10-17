@@ -386,10 +386,17 @@ Avisa a los usuarios de que tendrán que volver a iniciar sesión.
 Las aplicaciones Node de cPanel se sirven detrás de Apache con Passenger, que no propaga la
 cabecera `Upgrade` de los WebSockets: por eso el tiempo real de julio no llegaba a funcionar.
 Ahora va por **Server-Sent Events**, una respuesta HTTP que se mantiene abierta, y atraviesa
-Apache sin configurar nada. La API manda `X-Accel-Buffering: no` y un latido cada 25 s. Si los
-avisos llegaran agrupados con retraso, pide al alojamiento que desactive `mod_deflate` para
-`text/event-stream`. Si el flujo se cortara, el campus sigue funcionando: los datos se
-refrescan al navegar.
+Apache sin configurar nada. La API manda `X-Accel-Buffering: no` y un latido cada 25 s.
+
+El flujo sale **comprimido por la propia API**, evento a evento. Con «Optimize Website →
+Compress all content» de cPanel (o con LiteSpeed), el servidor comprime también el flujo y
+retiene lo comprimido hasta llenar su búfer: los avisos no llegarían nunca, sin ningún error
+a la vista. Lo que ya llega comprimido no lo vuelve a comprimir, así que pasa al instante y no
+hace falta tocar la compresión del alojamiento.
+
+Apache no avisa a la API de que alguien cerró la pestaña: se entera al escribirle, con los
+latidos. Por eso «En línea» puede tardar hasta un minuto en apagarse. Si el flujo se cortara,
+el campus sigue funcionando: los datos se refrescan al navegar.
 
 ## La API corre en un solo proceso
 

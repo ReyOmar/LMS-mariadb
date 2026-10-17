@@ -8,6 +8,7 @@ import { JwtPayload } from '../common/interfaces/jwt-payload.interface';
 import { PrismaService } from '../prisma/prisma.service';
 import { allowedOrigin } from '../common/cors';
 import { RealtimeService } from './realtime.service';
+import { acceptsGzip, eventStreamOutput } from './event-stream';
 
 @Controller('realtime')
 export class RealtimeController {
@@ -29,7 +30,8 @@ export class RealtimeController {
    * para poder mandar el token en la cabecera `Authorization` en lugar de en la URL.
    *
    * Se usa `reply.hijack()` para tomar el socket directamente: así la compresión global
-   * de Fastify no intenta bufferizar un flujo que nunca termina.
+   * de Fastify no intenta bufferizar un flujo que nunca termina. La compresión, si la hay, la
+   * hace `eventStreamOutput` evento a evento (ver por qué allí).
    */
   @SkipThrottle()
   @Get('stream')
@@ -38,6 +40,8 @@ export class RealtimeController {
     // fuera a Fastify y la que añade el marco nunca llegaría a escribirse. Con la API y el
     // cliente en dominios distintos, como en cPanel, el navegador rechazaría el flujo.
     const origin = this.getAllowedOrigin(req);
+
+    const compressed = acceptsGzip(req.headers['accept-encoding']);
 
     reply.hijack();
     const res = reply.raw;
@@ -49,20 +53,26 @@ export class RealtimeController {
       Connection: 'keep-alive',
       // Desactiva el búfer de nginx; Apache lo respeta a través de mod_proxy.
       'X-Accel-Buffering': 'no',
+      ...(compressed && { 'Content-Encoding': 'gzip' }),
+      // El origen y la compresión deciden la respuesta, así que las cachés deben separarlas.
+      Vary: origin ? 'Origin, Accept-Encoding' : 'Accept-Encoding',
       ...(origin && {
         'Access-Control-Allow-Origin': origin,
         'Access-Control-Allow-Credentials': 'true',
-        // El origen decide la respuesta, así que las cachés deben separarlas.
-        Vary: 'Origin',
       }),
     });
-    // Intervalo de reconexión sugerido al cliente si el flujo se corta.
-    res.write('retry: 3000\n\n');
-    res.flushHeaders?.();
 
-    const unsubscribe = this.realtime.register(user, res);
-    req.raw.on('close', unsubscribe);
-    req.raw.on('error', unsubscribe);
+    const output = eventStreamOutput(res, compressed);
+    // Intervalo de reconexión sugerido al cliente si el flujo se corta.
+    output.write('retry: 3000\n\n');
+
+    const unsubscribe = this.realtime.register(user, output);
+    const close = () => {
+      unsubscribe();
+      output.destroy();
+    };
+    req.raw.on('close', close);
+    req.raw.on('error', close);
   }
 
   /**

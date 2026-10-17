@@ -1,5 +1,5 @@
 import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
-import type { ServerResponse } from 'http';
+import type { Writable } from 'stream';
 import { Country } from '../common/domain/country';
 import { JwtPayload, UserRole } from '../common/interfaces/jwt-payload.interface';
 import { EventDestination, EventName, EventMessage } from './events';
@@ -26,7 +26,7 @@ interface Connection {
   readonly guid: string;
   readonly country: Country;
   readonly role: UserRole;
-  readonly res: ServerResponse;
+  readonly res: Writable;
 }
 
 /**
@@ -74,7 +74,7 @@ export class RealtimeService implements OnModuleDestroy {
    * Da de alta un flujo SSE ya preparado por el controlador.
    * @returns Función para darlo de baja, que el controlador invoca al cerrarse la conexión.
    */
-  register(user: JwtPayload, res: ServerResponse): () => void {
+  register(user: JwtPayload, res: Writable): () => void {
     this.limitConnectionsFor(user.sub);
 
     const connection: Connection = {
