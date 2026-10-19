@@ -1,10 +1,7 @@
-# LMS PESV Education — robots.txt
-# Only allow indexing of public pages (login, landing, certificate verification)
-
+# Sólo se indexa lo público: la portada, el acceso, los textos legales y la verificación de
+# certificados. El resto exige sesión.
 User-agent: *
 Allow: /
 Disallow: /dashboard/
-Disallow: /api/
-Disallow: /cursos/*/tareas/
-
-Sitemap: https://your-domain.com/sitemap.xml
+Disallow: /courses/
+Disallow: /reset-password

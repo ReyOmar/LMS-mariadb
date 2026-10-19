@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Prisma, Submission } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
@@ -251,7 +251,8 @@ export class AssessmentsService {
 
   /**
    * Con la matrícula bloqueada: dos envíos a la vez se ponen en fila y el segundo sustituye al
-   * primero, y uno que llega tras la baja o el certificado se rechaza.
+   * primero, y uno que llega tras la baja, el certificado o un suspenso que devolvió al alumno
+   * al principio del módulo se rechaza.
    */
   private saveDelivery(
     target: { assignmentGuid: string; courseGuid: string; userGuid: string; threshold: number },
@@ -260,6 +261,7 @@ export class AssessmentsService {
     const { assignmentGuid, courseGuid, userGuid, threshold } = target;
     return this.prisma.$transaction(async (tx) => {
       assertRoundOpen(await lockEnrollment(tx, userGuid, courseGuid), SUBMISSIONS_CLOSED);
+      await this.access.ensureUnlocked(courseGuid, assignmentGuid, userGuid, tx);
       const previous = await this.ownSubmission(tx, assignmentGuid, userGuid);
       ensureReplaceable(previous, threshold);
 
@@ -683,13 +685,16 @@ export class AssessmentsService {
    * si no, una tarea suspendida contaría como completada para el certificado.
    *
    * A quien se dio de baja o ya tiene el certificado de esta vuelta no se le califica: la nota
-   * movería el avance de una vuelta cerrada.
+   * movería el avance de una vuelta cerrada. Y la nota es de la versión que revisó el
+   * examinador: si el alumno la sustituyó entretanto, no se guarda.
    */
   async gradeSubmission(submissionGuid: string, dto: GradeSubmissionDto, user: JwtPayload) {
     const { submission, course } = await this.access.managedCourseOfSubmission(submissionGuid, user);
 
-    if (submission.status === 'DRAFT') {
-      throw new BadRequestException('Este intento todavía está en curso y no puede calificarse.');
+    // La nota de un cuestionario la pone la corrección automática, y el aprobado de cualquiera
+    // de sus intentos es el que cuenta: cambiarla a mano podría retirarle a quien lo superó.
+    if (submission.assignment?.quizConfig) {
+      throw new BadRequestException('Los cuestionarios se califican automáticamente: su nota no se cambia a mano.');
     }
 
     const threshold = passingThreshold(course.passingScore);
@@ -703,10 +708,15 @@ export class AssessmentsService {
     await this.prisma.$transaction(async (tx) => {
       assertRoundOpen(await lockEnrollment(tx, submission.userGuid, course.guid), GRADING_CLOSED);
 
-      await tx.submission.update({
-        where: { guid: submissionGuid },
+      const reviewed = await tx.submission.updateMany({
+        where: { guid: submissionGuid, submittedAt: new Date(dto.submittedAt) },
         data: { status: 'GRADED', score, feedback },
       });
+      if (reviewed.count === 0) {
+        throw new ConflictException(
+          'El alumno envió una versión nueva de esta entrega mientras la revisabas. Ábrela de nuevo para calificar la que está ahora.',
+        );
+      }
 
       if (!submission.assignmentGuid) return;
       if (passed) {

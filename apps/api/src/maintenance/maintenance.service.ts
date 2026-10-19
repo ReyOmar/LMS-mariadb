@@ -29,9 +29,8 @@ const DAY_MS = 24 * 60 * 60 * 1000;
  * Tareas de mantenimiento.
  *
  * **Ninguna borra archivos.** Un archivo sólo se retira cuando alguien elimina o sustituye
- * aquello a lo que pertenece o, si es una entrega, al emitirse el certificado de su vuelta
- * (ver «¿Cuándo se borra un archivo?» en `docs/DECISIONES.md`), y por eso este servicio no
- * recibe el almacenamiento.
+ * aquello a lo que pertenece o, si es una entrega, al emitirse el certificado de su vuelta,
+ * y por eso este servicio no recibe el almacenamiento.
  *
  * Todas llevan un candado en memoria que evita que una ejecución arranque mientras la
  * anterior sigue viva. En cPanel sólo corre una instancia del proceso, así que basta;
@@ -92,9 +91,9 @@ export class MaintenanceService {
   /**
    * Recuerda a los alumnos inactivos que tienen formación pendiente. Cada día a las 8:00.
    *
-   * Pendiente quiere decir una matrícula activa **sin terminar**: quien ya se certificó
-   * sigue matriculado —conserva el acceso al curso y al chat—, pero no tiene nada que
-   * retomar y no debe recibir el aviso.
+   * Pendiente quiere decir una matrícula activa **sin terminar** en un curso **publicado**:
+   * quien ya se certificó sigue matriculado —conserva el acceso al curso y al chat—, pero no
+   * tiene nada que retomar, y un curso en borrador todavía no se puede continuar.
    */
   @Cron('0 8 * * *', { timeZone: SCHEDULE_TIME_ZONE })
   sendInactivityReminders(): Promise<void> {
@@ -110,8 +109,9 @@ export class MaintenanceService {
               ...(after ? { guid: { gt: after } } : {}),
               role: 'STUDENT',
               OR: [{ lastAccessAt: { lt: cutoff } }, { lastAccessAt: null }],
-              // Sólo tiene sentido avisar a quien tiene formación sin terminar…
-              enrollments: { some: { active: true, completedAt: null } },
+              // Sólo tiene sentido avisar a quien tiene formación sin terminar en un curso que
+              // puede retomar: uno en borrador no se puede continuar…
+              enrollments: { some: { active: true, completedAt: null, course: { status: 'PUBLISHED' } } },
               // …y a quien no se avisó ya en este mismo periodo.
               notifications: { none: { type: 'INACTIVITY_REMINDER', createdAt: { gt: cutoff } } },
             },
@@ -146,6 +146,9 @@ export class MaintenanceService {
       ? Math.floor((Date.now() - student.lastAccessAt.getTime()) / DAY_MS)
       : INACTIVITY_DAYS;
 
+    // Primero el correo: el aviso de la campana es lo que marca a quien ya se avisó, así que
+    // sólo se crea si el correo salió y a quien falló se le vuelve a intentar mañana.
+    await this.mail.sendInactivityReminder(student.email, student.firstName, days, student.country);
     await this.notifications.create({
       userGuid: student.guid,
       country: student.country,
@@ -154,7 +157,6 @@ export class MaintenanceService {
       message: `Llevas ${days} ${plural(days, 'día', 'días')} sin entrar. Retoma tus cursos cuando puedas.`,
       actionUrl: '/dashboard',
     });
-    await this.mail.sendInactivityReminder(student.email, student.firstName, days, student.country);
   }
 
   // ── Desbloqueo por espera ────────────────────────────────────────────────
@@ -373,41 +375,16 @@ export class MaintenanceService {
   @Cron('45 3 * * *', { timeZone: SCHEDULE_TIME_ZONE })
   cleanHiddenMessages(): Promise<void> {
     return this.run('limpieza de mensajes ocultos', async () => {
-      const cutoffs = await this.prisma.hiddenConversation.findMany({
-        select: { userGuid: true, contactGuid: true, hiddenUntil: true },
-      });
-      if (cutoffs.length === 0) return 'sin conversaciones vaciadas';
-
-      const cutoffByPair = new Map(
-        cutoffs.map((cutoff) => [`${cutoff.userGuid}|${cutoff.contactGuid}`, cutoff.hiddenUntil]),
-      );
-
-      // Sólo interesan las parejas en las que ambos lados han vaciado: el mensaje se borra
-      // hasta el más antiguo de los dos cortes, que es lo que ninguno de los dos ve.
-      let deleted = 0;
-      const seenPairs = new Set<string>();
-
-      for (const cutoff of cutoffs) {
-        const pair = [cutoff.userGuid, cutoff.contactGuid].sort().join('|');
-        if (seenPairs.has(pair)) continue;
-        seenPairs.add(pair);
-
-        const otherCutoff = cutoffByPair.get(`${cutoff.contactGuid}|${cutoff.userGuid}`);
-        if (!otherCutoff) continue;
-
-        const limit = cutoff.hiddenUntil < otherCutoff ? cutoff.hiddenUntil : otherCutoff;
-        const { count } = await this.prisma.message.deleteMany({
-          where: {
-            createdAt: { lte: limit },
-            OR: [
-              { senderGuid: cutoff.userGuid, recipientGuid: cutoff.contactGuid },
-              { senderGuid: cutoff.contactGuid, recipientGuid: cutoff.userGuid },
-            ],
-          },
-        });
-        deleted += count;
-      }
-
+      // Un mensaje de A a B se borra si A ocultó la conversación con B y B la de A, hasta el
+      // más antiguo de los dos cortes: lo que ninguno de los dos ve. Lo ya borrado no vuelve a
+      // aparecer, así que repetirlo cada noche sólo recorre los cortes por su índice.
+      const deleted = await this.prisma.$executeRaw`
+        DELETE m FROM lms_mensajes m
+        JOIN lms_conversacion_oculta mine
+          ON mine.usuario_guid = m.remitente_guid AND mine.contacto_guid = m.destinatario_guid
+        JOIN lms_conversacion_oculta theirs
+          ON theirs.usuario_guid = m.destinatario_guid AND theirs.contacto_guid = m.remitente_guid
+        WHERE m.created_at <= LEAST(mine.oculta_hasta, theirs.oculta_hasta)`;
       return `${deleted} mensaje(s) ocultos por ambas partes borrados`;
     });
   }

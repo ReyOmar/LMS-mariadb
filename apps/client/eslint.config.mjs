@@ -30,16 +30,7 @@ const config = [
   },
   {
     // `prod/` es la copia del build autónomo que se sube a cPanel, no código fuente.
-    ignores: [
-      '.next/**',
-      'prod/**',
-      'out/**',
-      'node_modules/**',
-      'next-env.d.ts',
-      'pre-build.js',
-      'post-build.js',
-      'public/**',
-    ],
+    ignores: ['.next/**', 'prod/**', 'node_modules/**', 'next-env.d.ts', 'pre-build.js', 'post-build.js', 'public/**'],
   },
 ];
 

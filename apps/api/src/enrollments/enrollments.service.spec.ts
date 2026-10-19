@@ -73,6 +73,7 @@ function baseWith({
   const lifecycle: string[] = [];
   const deleted = { progress: 0, submissions: [] as string[] };
   const archived: Record<string, unknown>[] = [];
+  const seatQueries: unknown[] = [];
   let updatedEnrollment: Record<string, unknown> | null = null;
   let createdEnrollment: Record<string, unknown> | null = null;
 
@@ -91,8 +92,9 @@ function baseWith({
         updatedEnrollment = data;
         return { id: 7, ...data };
       },
-      count: async () => {
+      count: async (query: unknown) => {
         steps.push('recuento');
+        seatQueries.push(query);
         return enrolled;
       },
     },
@@ -162,6 +164,7 @@ function baseWith({
     lifecycle,
     deleted,
     archived,
+    seatQueries,
     mail,
     notifications,
     enrollment: () => updatedEnrollment,
@@ -280,6 +283,14 @@ describe('EnrollmentsService · cupo', () => {
 
     // Sin el bloqueo, dos altas simultáneas contarían lo mismo y las dos entrarían.
     expect(steps).toEqual(['bloqueo', 'recuento']);
+  });
+
+  it('quien ya se certificó conserva el acceso, pero no ocupa plaza', async () => {
+    const { service, seatQueries } = baseWith({ previous: null, maxStudents: 30, enrolled: 10 });
+
+    await service.enroll(COURSE, STUDENT_ID, ADMIN);
+
+    expect(seatQueries).toEqual([{ where: { courseGuid: COURSE, active: true, completedAt: null } }]);
   });
 
   it('con el cupo lleno no matricula y lo dice en singular o en plural según la cifra', async () => {

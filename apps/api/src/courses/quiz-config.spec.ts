@@ -154,7 +154,7 @@ describe('configuración de cuestionarios', () => {
       const config = {
         questions: [{ id: 'p1', prompt: 'x', options: [{ id: 'a', text: 'sí', isCorrect: true }] }],
       };
-      expect(() => validateQuizConfig(JSON.stringify(config))).toThrow(/dos opciones/);
+      expect(() => validateQuizConfig(JSON.stringify(config))).toThrow(/al menos 2 opciones/);
     });
 
     it('exige exactamente una opción correcta', () => {

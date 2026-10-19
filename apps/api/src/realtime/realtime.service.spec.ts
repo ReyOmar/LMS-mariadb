@@ -39,7 +39,7 @@ describe('RealtimeService · estado inicial por sede', () => {
 
   it('quien se conecta en México no ve los cursos que se editan en Colombia', () => {
     service.register(sessionFor('TEACHER', 'COLOMBIA', 'profe-co'), fakeStream().res as never);
-    service.acquireCourseEdit('curso-co', editorCO);
+    service.acquireCourseEdit('curso-co', 'profe-co', editorCO);
 
     const mexico = fakeStream();
     service.register(sessionFor('ADMIN', 'MEXICO', 'admin-mx'), mexico.res as never);
@@ -49,12 +49,40 @@ describe('RealtimeService · estado inicial por sede', () => {
 
   it('quien se conecta en Colombia sí ve los de su sede', () => {
     service.register(sessionFor('TEACHER', 'COLOMBIA', 'profe-co'), fakeStream().res as never);
-    service.acquireCourseEdit('curso-co', editorCO);
+    service.acquireCourseEdit('curso-co', 'profe-co', editorCO);
 
     const colombia = fakeStream();
     service.register(sessionFor('ADMIN', 'COLOMBIA', 'admin-co'), colombia.res as never);
 
     expect(colombia.events.find((e) => e.event === 'course:editing-sync')?.data).toEqual({ 'curso-co': editorCO });
+  });
+
+  it('el aviso de edición llega al personal del curso, no a los alumnos ni a otros examinadores', () => {
+    const admin = fakeStream();
+    const student = fakeStream();
+    const otherTeacher = fakeStream();
+    service.register(sessionFor('ADMIN', 'COLOMBIA', 'admin-co'), admin.res as never);
+    service.register(sessionFor('STUDENT', 'COLOMBIA', 'alumno-co'), student.res as never);
+    service.register(sessionFor('TEACHER', 'COLOMBIA', 'otro-profe'), otherTeacher.res as never);
+
+    service.acquireCourseEdit('curso-co', 'profe-co', editorCO);
+    service.releaseCourseLock('curso-co', 'profe-co');
+
+    const editing = (stream: ReturnType<typeof fakeStream>) =>
+      stream.events.filter((e) => e.event.startsWith('course:editing') && e.event !== 'course:editing-sync');
+    expect(editing(admin).map((e) => e.event)).toEqual(['course:editing', 'course:editing-released']);
+    expect(editing(student)).toEqual([]);
+    expect(editing(otherTeacher)).toEqual([]);
+  });
+
+  it('al conectar, un alumno no recibe los cursos en edición', () => {
+    service.register(sessionFor('TEACHER', 'COLOMBIA', 'profe-co'), fakeStream().res as never);
+    service.acquireCourseEdit('curso-co', 'profe-co', editorCO);
+
+    const student = fakeStream();
+    service.register(sessionFor('STUDENT', 'COLOMBIA', 'alumno-co'), student.res as never);
+
+    expect(student.events.find((e) => e.event === 'course:editing-sync')?.data).toEqual({});
   });
 
   it('la presencia inicial sólo incluye a los conectados de la misma sede', () => {
@@ -67,13 +95,17 @@ describe('RealtimeService · estado inicial por sede', () => {
   });
 
   it('sólo quien tiene el aviso de edición puede liberarlo', () => {
-    service.acquireCourseEdit('curso-co', editorCO);
+    service.acquireCourseEdit('curso-co', 'profe-co', editorCO);
 
     service.releaseCourseLock('curso-co', 'otro-profe');
-    expect(service.acquireCourseEdit('curso-co', { ...editorCO, guid: 'otro-profe' }).guid).toBe('profe-co');
+    expect(service.acquireCourseEdit('curso-co', 'profe-co', { ...editorCO, guid: 'otro-profe' }).guid).toBe(
+      'profe-co',
+    );
 
     service.releaseCourseLock('curso-co', 'profe-co');
-    expect(service.acquireCourseEdit('curso-co', { ...editorCO, guid: 'otro-profe' }).guid).toBe('otro-profe');
+    expect(service.acquireCourseEdit('curso-co', 'profe-co', { ...editorCO, guid: 'otro-profe' }).guid).toBe(
+      'otro-profe',
+    );
   });
 });
 
@@ -131,13 +163,15 @@ describe('RealtimeService · cierre de sesiones', () => {
     const admin = fakeStream();
     service.register(sessionFor('ADMIN', 'COLOMBIA', 'admin-co'), admin.res as never);
     service.register(sessionFor('TEACHER', 'COLOMBIA', 'profe-co'), fakeStream().res as never);
-    service.acquireCourseEdit('curso-co', editorCO);
+    service.acquireCourseEdit('curso-co', 'profe-co', editorCO);
 
     service.revokeSession('profe-co', 'account_deleted');
 
     expect(admin.events).toContainEqual({ event: 'presence:update', data: { guid: 'profe-co', status: 'offline' } });
     expect(admin.events).toContainEqual({ event: 'course:editing-released', data: { courseGuid: 'curso-co' } });
-    expect(service.acquireCourseEdit('curso-co', { ...editorCO, guid: 'otro-profe' }).guid).toBe('otro-profe');
+    expect(service.acquireCourseEdit('curso-co', 'profe-co', { ...editorCO, guid: 'otro-profe' }).guid).toBe(
+      'otro-profe',
+    );
   });
 
   it('cada aviso de presencia lleva sólo el cambio, no la lista entera de la sede', () => {

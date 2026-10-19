@@ -58,13 +58,6 @@ export function averageScore(scores: readonly unknown[]): number | null {
   return valid.reduce((sum, score) => sum + score, 0) / valid.length;
 }
 
-/** Porcentaje entero para barras de progreso y anillos. */
-export function percent(score: unknown): number {
-  const num = toScore(score);
-  if (num === null) return 0;
-  return Math.min(100, Math.max(0, Math.round(num)));
-}
-
 /**
  * Color semántico de una nota, en clases de Tailwind.
  * Aprobado en verde, cerca del umbral en ámbar y claramente insuficiente en rojo.

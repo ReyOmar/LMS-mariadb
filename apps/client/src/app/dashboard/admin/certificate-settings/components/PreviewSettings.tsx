@@ -2,14 +2,15 @@ import { BookOpen, Info, Palette } from 'lucide-react';
 import type { CertificateSettings } from '../certificate';
 import { useCertificateSample } from '../useCertificateSample';
 import { CertificatePreview, type Brand } from './CertificatePreview';
-import { INPUT_CLASS, SettingsCard } from './SettingsCard';
+import { SectionCard } from '@/components/ui/SectionCard';
+import { INPUT_CLASS } from './input';
 import { SignerDetails } from './SignerDetails';
 
 export function PreviewSettings({ settings, brand }: { settings: CertificateSettings; brand: Brand }) {
   const sample = useCertificateSample();
 
   return (
-    <SettingsCard icon={Palette} title="Vista previa">
+    <SectionCard icon={Palette} title="Vista previa">
       <div className="space-y-4">
         <div className="bg-blue-500/5 border border-blue-500/20 rounded-xl p-4 flex items-start gap-3">
           <Info className="h-5 w-5 text-blue-700 dark:text-blue-400 shrink-0 mt-0.5" />
@@ -49,6 +50,6 @@ export function PreviewSettings({ settings, brand }: { settings: CertificateSett
           Vista previa con datos de ejemplo. Los cambios se aplican a los certificados que se emitan a partir de ahora.
         </p>
       </div>
-    </SettingsCard>
+    </SectionCard>
   );
 }

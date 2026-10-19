@@ -9,6 +9,19 @@ const PDFDocument = require('pdfkit');
 const WIDTH = 842;
 const HEIGHT = 595;
 
+/** Textos fijos del diploma. La vista previa del panel de certificados repite los mismos. */
+export const CERTIFICATE_TEXT = {
+  title: 'CERTIFICADO',
+  subtitle: 'DE FINALIZACIÓN ACADÉMICA',
+  grantedTo: 'El presente documento se otorga a:',
+  completion: 'Por haber completado y aprobado satisfactoriamente los requisitos del programa formativo:',
+  signatureTitle: 'Instructor / Examinador Académico',
+  verification: 'Código de verificación institucional',
+} as const;
+
+/** Con más, el texto legal invade la fila de cifras, que se dibuja a una altura fija. */
+export const MAX_LEGAL_TEXT_LENGTH = 280;
+
 /** Lo que dice el certificado. */
 export interface CertificateContent {
   studentName: string;
@@ -88,13 +101,13 @@ function draw(doc: PDFKit.PDFDocument, data: CertificateData): void {
     .fontSize(32)
     .font('Times-Bold')
     .fillColor('#1E293B')
-    .text(data.customTitle || 'CERTIFICADO', 0, ySeparator + 15, { align: 'center', width: WIDTH });
+    .text(data.customTitle || CERTIFICATE_TEXT.title, 0, ySeparator + 15, { align: 'center', width: WIDTH });
 
   doc
     .fontSize(11)
     .font('Times-Roman')
     .fillColor('#64748B')
-    .text(data.subtitle || 'DE FINALIZACIÓN ACADÉMICA', 0, ySeparator + 50, {
+    .text(data.subtitle || CERTIFICATE_TEXT.subtitle, 0, ySeparator + 50, {
       align: 'center',
       width: WIDTH,
       characterSpacing: 5,
@@ -104,7 +117,7 @@ function draw(doc: PDFKit.PDFDocument, data: CertificateData): void {
     .fontSize(12)
     .font('Times-Italic')
     .fillColor('#94A3B8')
-    .text('El presente documento se otorga a:', 0, ySeparator + 80, { align: 'center', width: WIDTH });
+    .text(CERTIFICATE_TEXT.grantedTo, 0, ySeparator + 80, { align: 'center', width: WIDTH });
 
   doc
     .fontSize(28)
@@ -119,12 +132,7 @@ function draw(doc: PDFKit.PDFDocument, data: CertificateData): void {
     .fontSize(12)
     .font('Times-Italic')
     .fillColor('#64748B')
-    .text(
-      'Por haber completado y aprobado satisfactoriamente los requisitos del programa formativo:',
-      0,
-      yNameLine + 15,
-      { align: 'center', width: WIDTH },
-    );
+    .text(CERTIFICATE_TEXT.completion, 0, yNameLine + 15, { align: 'center', width: WIDTH });
 
   doc
     .fontSize(18)
@@ -147,7 +155,7 @@ function draw(doc: PDFKit.PDFDocument, data: CertificateData): void {
     .fontSize(8)
     .font('Times-Roman')
     .fillColor('#94A3B8')
-    .text(`Código de verificación institucional: ${data.verificationCode}`, 0, HEIGHT - 45, {
+    .text(`${CERTIFICATE_TEXT.verification}: ${data.verificationCode}`, 0, HEIGHT - 45, {
       align: 'center',
       width: WIDTH,
     });
@@ -255,7 +263,7 @@ function drawSignature(doc: PDFKit.PDFDocument, data: CertificateData): void {
     .fontSize(10)
     .font('Times-Italic')
     .fillColor('#64748B')
-    .text(data.signatureTitle || 'Instructor / Examinador Académico', 0, y + 22, { align: 'center', width: WIDTH });
+    .text(data.signatureTitle || CERTIFICATE_TEXT.signatureTitle, 0, y + 22, { align: 'center', width: WIDTH });
 }
 
 /** Línea horizontal con degradado, usada bajo la cabecera y bajo el nombre. */

@@ -1,7 +1,7 @@
 import type { Course, QuizConfig, Resource } from '@/types/models';
 import { displayTitle, quizTitleOf } from '@/lib/resources';
 import { parseQuizConfig } from '@/lib/quiz-config';
-import { breakableSpaces } from '@/lib/editor-html';
+import { breakableSpaces, hasContent } from '@/lib/editor-html';
 import { parseLimitMb } from '@/lib/upload-limits';
 import { NEW_RESOURCE_SEGMENT } from '@/app/dashboard/course-builder/components/paths';
 import { EMPTY_QUIZ, quizProblem } from '@/app/dashboard/course-builder/components/quiz-editing';
@@ -94,6 +94,12 @@ export function formProblem(kind: ResourceKind, form: ResourceForm, ceilingMb?: 
   return null;
 }
 
+/** Un enlace guarda su dirección en el contenido; el resto, el HTML del editor, o nada si quedó vacío. */
+function contentToSave(kind: ResourceKind, content: string): string {
+  if (kind === 'LINK') return content.trim();
+  return hasContent(content) ? breakableSpaces(content) : '';
+}
+
 /** El cuerpo que se envía a la API al guardar. */
 export function buildResourcePatch(
   kind: ResourceKind,
@@ -104,8 +110,7 @@ export function buildResourcePatch(
   const title = form.title.trim() || 'Recurso sin título';
   return {
     title: kind === 'QUIZ' ? quizTitleOf(title) : title,
-    // Un enlace guarda su dirección en el contenido; el resto, el HTML del editor.
-    contentHtml: kind === 'LINK' ? form.content.trim() : breakableSpaces(form.content),
+    contentHtml: contentToSave(kind, form.content),
     referenceUrl: form.referenceUrl.trim() || null,
     attachmentKey: attachment?.key ?? null,
     attachmentName: attachment?.name ?? null,

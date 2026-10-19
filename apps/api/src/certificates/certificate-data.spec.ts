@@ -79,14 +79,14 @@ describe('CertificateDataService — resultados de la vuelta', () => {
         { guid: 'tarea-1', type: 'ASSIGNMENT', title: 'Informe' },
       ],
     };
-    const service = new CertificateDataService(prisma as never, {} as never, settings as never, access as never);
-    return { service, scoreQueries, studyQueries };
+    const service = new CertificateDataService({} as never, settings as never, access as never);
+    return { service, prisma, scoreQueries, studyQueries };
   }
 
   it('promedia la mejor nota de cada evaluación', async () => {
-    const { service, scoreQueries } = setup();
+    const { service, prisma, scoreQueries } = setup();
 
-    const data = await service.gather('curso-1', 'ana', 'COLOMBIA');
+    const data = await service.gather(prisma as never, 'curso-1', 'ana', 'COLOMBIA');
 
     expect(data.certificate.averageScore).toBe(85);
     expect(scoreQueries[0]).toMatchObject({
@@ -97,18 +97,18 @@ describe('CertificateDataService — resultados de la vuelta', () => {
   });
 
   it('el tiempo de estudio empieza con la vuelta: lo repasado tras un certificado anterior no cuenta', async () => {
-    const { service, studyQueries } = setup();
+    const { service, prisma, studyQueries } = setup();
 
-    const data = await service.gather('curso-1', 'ana', 'COLOMBIA');
+    const data = await service.gather(prisma as never, 'curso-1', 'ana', 'COLOMBIA');
 
     expect(studyQueries[0]).toMatchObject({ where: { userGuid: 'ana', startedAt: { gte: ROUND_START } } });
     expect(data.certificate.startedAt).toEqual(ROUND_START);
   });
 
   it('el titular es el nombre completo con que se emite', async () => {
-    const { service } = setup();
+    const { service, prisma } = setup();
 
-    const data = await service.gather('curso-1', 'ana', 'COLOMBIA');
+    const data = await service.gather(prisma as never, 'curso-1', 'ana', 'COLOMBIA');
 
     expect(data.certificate.studentName).toBe('Ana Ramírez');
   });
@@ -147,7 +147,7 @@ describe('CertificateDataService — composición del PDF', () => {
 
   function setup() {
     const storage = { readFile: jest.fn(async () => null) };
-    const service = new CertificateDataService({} as never, storage as never, {} as never, {} as never);
+    const service = new CertificateDataService(storage as never, {} as never, {} as never);
     const warn = jest.spyOn(service['logger'], 'warn').mockImplementation(() => undefined);
     return { service, storage, warn };
   }

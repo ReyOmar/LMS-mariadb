@@ -1,4 +1,4 @@
-import { BadRequestException, Controller, Delete, Get, NotFoundException, Param, Post, Req, Res } from '@nestjs/common';
+import { BadRequestException, Controller, Delete, Get, Param, Post, Req, Res } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { SkipThrottle } from '@nestjs/throttler';
 import type { FastifyReply, FastifyRequest } from 'fastify';
@@ -6,6 +6,7 @@ import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
 import { JwtPayload } from '../common/interfaces/jwt-payload.interface';
 import { PrismaService } from '../prisma/prisma.service';
+import { CourseAccessService } from '../courses/course-access.service';
 import { allowedOrigin } from '../common/cors';
 import { RealtimeService } from './realtime.service';
 import { acceptsGzip, eventStreamOutput } from './event-stream';
@@ -15,6 +16,7 @@ export class RealtimeController {
   constructor(
     private readonly realtime: RealtimeService,
     private readonly prisma: PrismaService,
+    private readonly access: CourseAccessService,
     private readonly config: ConfigService,
   ) {}
 
@@ -82,15 +84,7 @@ export class RealtimeController {
   @Roles('ADMIN', 'TEACHER')
   @Post('courses/:courseGuid/lock')
   async acquireLock(@CurrentUser() user: JwtPayload, @Param('courseGuid') courseGuid: string) {
-    const course = await this.prisma.course.findFirst({
-      where: {
-        guid: courseGuid,
-        country: user.country,
-        ...(user.role === 'TEACHER' ? { teacherGuid: user.sub } : {}),
-      },
-      select: { guid: true },
-    });
-    if (!course) throw new NotFoundException('Curso no encontrado.');
+    const course = await this.access.managedCourse(courseGuid, user);
 
     const profile = await this.prisma.user.findUnique({
       where: { guid: user.sub },
@@ -98,7 +92,7 @@ export class RealtimeController {
     });
     if (!profile) throw new BadRequestException('Sesión no válida.');
 
-    const editor = this.realtime.acquireCourseEdit(courseGuid, {
+    const editor = this.realtime.acquireCourseEdit(courseGuid, course.teacherGuid, {
       guid: user.sub,
       name: `${profile.firstName} ${profile.lastName}`,
       role: user.role,

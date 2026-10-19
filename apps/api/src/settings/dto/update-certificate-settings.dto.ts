@@ -1,5 +1,6 @@
 import { IsBoolean, IsInt, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
 import { StrictBoolean } from '../../common/validation/transforms';
+import { MAX_LEGAL_TEXT_LENGTH } from '../../certificates/certificate-pdf';
 
 export class UpdateCertificateSettingsDto {
   @IsOptional()
@@ -14,6 +15,9 @@ export class UpdateCertificateSettingsDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(MAX_LEGAL_TEXT_LENGTH, {
+    message: `El texto legal no puede superar los ${MAX_LEGAL_TEXT_LENGTH} caracteres: no cabría en el certificado.`,
+  })
   certLegalText?: string | null;
 
   @IsOptional()

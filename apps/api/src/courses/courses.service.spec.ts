@@ -1,4 +1,4 @@
-import { ForbiddenException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException } from '@nestjs/common';
 import { CoursesService } from './courses.service';
 import { sessionFor } from '../common/testing/test-campus';
 import { fileOwnershipDouble } from '../common/testing/file-ownership-double';
@@ -15,6 +15,10 @@ function serviceWith(prisma: Record<string, unknown>, course: Record<string, unk
   const ownership = fileOwnershipDouble();
   const access = {
     managedCourse: async () => course,
+    editableCourse: async () => {
+      if (course.status !== 'DRAFT') throw new BadRequestException('El curso debe estar en Borrador.');
+      return course;
+    },
     courseInCountry: async () => course,
     ensureEnrollment: async () => undefined,
   };
@@ -37,11 +41,16 @@ function serviceWith(prisma: Record<string, unknown>, course: Record<string, unk
   const storage = { downloadUrl: (key: string) => `/descargas/${key}` };
   const defaults = {
     enrollment: { findMany: async () => [] },
-    $transaction: (operations: Promise<unknown>[]) => Promise.all(operations),
+  };
+  const client: Record<string, unknown> = {
+    ...defaults,
+    ...prisma,
+    $transaction: (work: Promise<unknown>[] | ((tx: unknown) => Promise<unknown>)) =>
+      typeof work === 'function' ? work(client) : Promise.all(work),
   };
   const removal = { remove: jest.fn(async () => undefined) };
   const service = new CoursesService(
-    { ...defaults, ...prisma } as never,
+    client as never,
     access as never,
     storage as never,
     mail as never,
@@ -316,6 +325,95 @@ describe('CoursesService · paso a Borrador con cuestionarios abiertos', () => {
   });
 });
 
+/**
+ * Las reglas de un curso publicado —nota mínima, orden, horas— rigen lo que ya hacen sus
+ * alumnos: como el contenido, sólo se cambian en Borrador. El cupo sí, sin quedar por debajo
+ * de los ya matriculados.
+ */
+describe('CoursesService · ficha de un curso publicado', () => {
+  function publishedWith(enrolled: number) {
+    const update = jest.fn(async () => ({ ...PUBLISHED, maxStudents: 30 }));
+    const steps: string[] = [];
+    const { service } = serviceWith(
+      {
+        $queryRaw: async () => {
+          steps.push('bloqueo del curso');
+          return [{ maxStudents: 10 }];
+        },
+        enrollment: {
+          findMany: async () => [],
+          count: async () => {
+            steps.push('recuento');
+            return enrolled;
+          },
+        },
+        course: { update },
+      },
+      PUBLISHED,
+    );
+    return { service, update, steps };
+  }
+
+  it('no deja cambiar la nota mínima, el orden ni las horas', async () => {
+    for (const change of [{ passingScore: 30 }, { strictOrder: false }, { durationHours: 2 }, { title: 'Otro' }]) {
+      const { service, update } = publishedWith(0);
+
+      await expect(service.updateCourse('curso-1', change, ADMIN)).rejects.toThrow(/Borrador/);
+      expect(update).not.toHaveBeenCalled();
+    }
+  });
+
+  it('deja ampliar el cupo, contando las plazas con el curso bloqueado', async () => {
+    const { service, update, steps } = publishedWith(12);
+
+    await service.updateCourse('curso-1', { maxStudents: 30 }, ADMIN);
+
+    expect(steps).toEqual(['bloqueo del curso', 'recuento']);
+    expect(update).toHaveBeenCalled();
+  });
+
+  it('no deja un cupo por debajo de los ya matriculados', async () => {
+    const { service, update } = publishedWith(12);
+
+    await expect(service.updateCourse('curso-1', { maxStudents: 5 }, ADMIN)).rejects.toThrow(
+      'El curso ya tiene 12 estudiantes matriculados: el cupo no puede ser menor.',
+    );
+    expect(update).not.toHaveBeenCalled();
+  });
+});
+
+/** La nota mínima decide quién aprobó: una vez aplicada a algo calificado, ya no se cambia. */
+describe('CoursesService · nota mínima', () => {
+  function draftWith(graded: boolean) {
+    const update = jest.fn(async () => ({ ...DRAFT, passingScore: 70 }));
+    const { service } = serviceWith(
+      {
+        submission: { findFirst: async () => (graded ? { guid: 'entrega-1' } : null) },
+        course: { update },
+      },
+      { ...DRAFT, passingScore: 80 },
+    );
+    return { service, update };
+  }
+
+  it('con algo ya calificado no se cambia', async () => {
+    const { service, update } = draftWith(true);
+
+    await expect(service.updateCourse('curso-1', { passingScore: 70 }, ADMIN)).rejects.toThrow(/ya no puede cambiarse/);
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('sin nada calificado se cambia, y guardar la misma no pregunta', async () => {
+    const { service, update } = draftWith(false);
+    await service.updateCourse('curso-1', { passingScore: 70 }, ADMIN);
+    expect(update).toHaveBeenCalled();
+
+    const unchanged = draftWith(true);
+    await unchanged.service.updateCourse('curso-1', { passingScore: 80 }, ADMIN);
+    expect(unchanged.update).toHaveBeenCalled();
+  });
+});
+
 /** Los eventos de un curso llegan a quien lo tiene delante, no a toda la sede. */
 describe('CoursesService · avisos en tiempo real', () => {
   const enrolled = { findMany: async () => [{ userGuid: 'alumna' }] };
@@ -332,15 +430,15 @@ describe('CoursesService · avisos en tiempo real', () => {
   });
 
   it('un cambio llega al personal y a los matriculados', async () => {
-    const { service, emitted } = serviceWith(
-      { enrollment: enrolled, course: { update: async () => ({ ...PUBLISHED, title: 'Otro título' }) } },
-      PUBLISHED,
-    );
+    const { service, emitted } = serviceWith({
+      enrollment: enrolled,
+      course: { update: async () => ({ ...DRAFT, title: 'Otro título' }) },
+    });
 
     await service.updateCourse('curso-1', { title: 'Otro título' }, ADMIN);
 
     expect(emitted).toEqual([
-      { event: 'course:updated', to: 'administradores y profe' },
+      { event: 'course:updated', to: 'administradores y admin' },
       { event: 'course:updated', to: 'alumna' },
     ]);
   });

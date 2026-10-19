@@ -146,7 +146,6 @@ describe('EventsListener · correo de tarea aprobada', () => {
       'Ana',
       'Informe final',
       95,
-      80,
       'COLOMBIA',
       'Excelente análisis.',
     );
@@ -205,5 +204,7 @@ describe('EventsListener · enlaces de los avisos de cuestionario', () => {
       ['alumna', '/courses/curso-1'],
       ['profesor-1', '/dashboard/examiner/quizzes'],
     ]);
+    // Al alumno, con el tipo que dice que vuelve al principio del módulo.
+    expect(notifications.create.mock.calls[0][0]).toMatchObject({ type: 'MODULE_RESET' });
   });
 });

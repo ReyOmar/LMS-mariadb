@@ -79,7 +79,7 @@ export class EventsListener {
         this.notifications.create({
           userGuid: event.userGuid,
           country: event.country,
-          type: 'SUBMISSION_REJECTED',
+          type: 'MODULE_RESET',
           title: 'Cuestionario no superado',
           message:
             `Obtuviste ${formatScore(event.score)} en "${event.quizTitle}" y se requieren ` +
@@ -217,7 +217,6 @@ export class EventsListener {
               student.firstName,
               event.assignmentTitle,
               event.score,
-              event.passingScore,
               event.country,
               event.feedback,
             )

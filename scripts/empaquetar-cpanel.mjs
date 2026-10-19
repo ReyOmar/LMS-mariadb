@@ -26,6 +26,9 @@ const OUT = path.join(ROOT, 'despliegue');
 const API = path.join(ROOT, 'apps', 'api');
 const CLIENT_PROD = path.join(ROOT, 'apps', 'client', 'prod');
 
+/** Lo que nunca sube al servidor: el historial de git y la configuración, que va en cPanel. */
+const SECRET_ENTRIES = /^(\.git|\.env(?!\.example$).*)$/;
+
 /** Con este valor el cliente deduce la API de su propio dominio (apps/client/src/lib/env.ts). */
 const INFER_FROM_DOMAIN = 'http://localhost:3200/api';
 
@@ -104,6 +107,15 @@ if (!fs.existsSync(path.join(CLIENT_PROD, 'apps', 'client', 'server.js'))) {
   process.exit(1);
 }
 fs.cpSync(CLIENT_PROD, path.join(stage, 'apps', 'client', 'prod'), { recursive: true });
+
+const secrets = fs
+  .readdirSync(stage, { recursive: true, withFileTypes: true })
+  .filter((entry) => SECRET_ENTRIES.test(entry.name))
+  .map((entry) => path.relative(stage, path.join(entry.parentPath, entry.name)));
+if (secrets.length > 0) {
+  console.error(`El paquete no puede llevar historial de git ni archivos .env:\n  ${secrets.join('\n  ')}`);
+  process.exit(1);
+}
 
 const zip = path.join(OUT, 'lms-cpanel.zip');
 zipFolder(stage, zip);

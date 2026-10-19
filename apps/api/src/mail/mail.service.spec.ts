@@ -141,10 +141,9 @@ describe('MailService · cuentas', () => {
     const service = new MailService(config as never, {} as never, {} as never, {} as never);
     const sent: { key: string; variables: Record<string, string | number> }[] = [];
     jest
-      .spyOn(service as never as { sendTemplate: (...args: unknown[]) => Promise<boolean> }, 'sendTemplate')
+      .spyOn(service as never as { sendTemplate: (...args: unknown[]) => Promise<void> }, 'sendTemplate')
       .mockImplementation(async (key: unknown, _recipient: unknown, variables: unknown) => {
         sent.push({ key: key as string, variables: variables as Record<string, string | number> });
-        return true;
       });
     return { service, sent };
   }
@@ -192,10 +191,10 @@ describe('MailService · bienvenida', () => {
 
     const deliveries: { subject: string; html: string }[] = [];
     jest
-      .spyOn(service as never as { deliverToProvider: (...args: string[]) => Promise<boolean> }, 'deliverToProvider')
+      .spyOn(service as never as { deliverToProvider: (...args: string[]) => Promise<void> }, 'deliverToProvider')
       .mockImplementation(async (_recipient: string, subject: string, html: string) => {
         deliveries.push({ subject, html });
-        return delivered;
+        if (!delivered) throw new Error('El proveedor no responde');
       });
     return { service, deliveries };
   }
@@ -221,7 +220,9 @@ describe('MailService · bienvenida', () => {
   it('si falla el envío, no lo repite con el texto de respaldo', async () => {
     const { service, deliveries } = welcomeService({ delivered: false });
 
-    await expect(service.sendWelcome('eva@pesv.test', 'Eva', 'Temporal2026', 'MEXICO')).resolves.toBe(false);
+    await expect(service.sendWelcome('eva@pesv.test', 'Eva', 'Temporal2026', 'MEXICO')).rejects.toThrow(
+      'El proveedor no responde',
+    );
     expect(deliveries).toHaveLength(1);
   });
 });
@@ -234,8 +235,23 @@ describe('MailService · bienvenida', () => {
  */
 describe('MailService · plantillas por sede', () => {
   const TEMPLATES = [
-    { id: 1, country: 'COLOMBIA', active: true, subject: 'Hola desde Colombia', bodyHtml: '<p>CO</p>' },
-    { id: 2, country: 'MEXICO', active: true, subject: 'Hola desde México', bodyHtml: '<p>MX</p>' },
+    {
+      id: 1,
+      key: 'MATRICULA_NUEVA',
+      country: 'COLOMBIA',
+      active: true,
+      subject: 'Hola desde Colombia',
+      bodyHtml: '<p>CO</p>',
+    },
+    {
+      id: 2,
+      key: 'MATRICULA_NUEVA',
+      country: 'MEXICO',
+      active: true,
+      subject: 'Hola desde México',
+      bodyHtml: '<p>MX</p>',
+    },
+    { id: 3, key: 'RECUPERAR_PASSWORD', country: 'COLOMBIA', active: true, subject: 'Recupera', bodyHtml: '<p>R</p>' },
   ];
 
   function serviceForSedes() {
@@ -250,12 +266,17 @@ describe('MailService · plantillas por sede', () => {
         },
         findMany: async (query: unknown) => {
           reads.push(query);
-          return [];
+          return [
+            { key: 'MATRICULA_NUEVA', templates: [] },
+            { key: 'RECUPERAR_PASSWORD', templates: [] },
+          ];
         },
       },
       emailTemplate: {
-        findFirst: async ({ where }: { where: { id: number; country: string } }) =>
-          TEMPLATES.find((t) => t.id === where.id && t.country === where.country) ?? null,
+        findFirst: async ({ where }: { where: { id: number; country: string } }) => {
+          const template = TEMPLATES.find((t) => t.id === where.id && t.country === where.country);
+          return template ? { event: { key: template.key } } : null;
+        },
         update: async ({ where }: { where: { id: number } }) => {
           updates.push(where.id);
           return { id: where.id };
@@ -295,6 +316,27 @@ describe('MailService · plantillas por sede', () => {
     expect(JSON.stringify(reads[0])).toContain('"where":{"country":"MEXICO"}');
   });
 
+  it('un correo imprescindible se edita, pero no se desactiva', async () => {
+    const { service, updates } = serviceForSedes();
+
+    await expect(service.updateTemplate(3, 'COLOMBIA', { active: false })).rejects.toThrow(/no desactivarlo/);
+    await service.updateTemplate(3, 'COLOMBIA', { subject: 'Recupera tu acceso' });
+    await service.updateTemplate(1, 'COLOMBIA', { active: false });
+
+    expect(updates).toEqual([3, 1]);
+  });
+
+  it('el listado dice qué correos son imprescindibles', async () => {
+    const { service } = serviceForSedes();
+
+    const events = await service.getEvents('COLOMBIA');
+
+    expect(events.map(({ key, essential }) => [key, essential])).toEqual([
+      ['MATRICULA_NUEVA', false],
+      ['RECUPERAR_PASSWORD', true],
+    ]);
+  });
+
   it('una plantilla de la otra sede no se puede editar', async () => {
     const { service, updates } = serviceForSedes();
 
@@ -328,7 +370,6 @@ describe('MailService · comentario del examinador', () => {
       html: string,
     ) => {
       sent.push(html);
-      return true;
     }) as never);
     return { service, sent };
   }
@@ -336,7 +377,7 @@ describe('MailService · comentario del examinador', () => {
   it('el aviso de aprobado incluye el comentario, escapado', async () => {
     const { service, sent } = gradeService();
 
-    await service.sendGrade('ana@pesv.test', 'Ana', 'Informe', 95, 80, 'COLOMBIA', 'Muy bien <b>Ana</b> & equipo');
+    await service.sendGrade('ana@pesv.test', 'Ana', 'Informe', 95, 'COLOMBIA', 'Muy bien <b>Ana</b> & equipo');
 
     expect(sent[0]).toContain('Comentario del examinador:');
     expect(sent[0]).toContain('Muy bien &lt;b&gt;Ana&lt;/b&gt; &amp; equipo');
@@ -345,8 +386,75 @@ describe('MailService · comentario del examinador', () => {
   it('sin comentario no añade el recuadro', async () => {
     const { service, sent } = gradeService();
 
-    await service.sendGrade('ana@pesv.test', 'Ana', 'Informe', 95, 80, 'COLOMBIA', '   ');
+    await service.sendGrade('ana@pesv.test', 'Ana', 'Informe', 95, 'COLOMBIA', '   ');
 
     expect(sent[0]).toContain('<section></section>');
+  });
+});
+
+/**
+ * Lo que pasa cuando el proveedor de correo falla: tras los reintentos se avisa a quien
+ * envía, que decide si contarlo, registrarlo o volver a intentarlo otro día.
+ */
+describe('MailService · fallos del proveedor', () => {
+  function serviceWithTransport(transport: { sendMail: jest.Mock } | null) {
+    const service = new MailService({ get: () => undefined } as never, {} as never, {} as never, {} as never);
+    service['transport'] = transport as never;
+    jest.spyOn(service as never as { wait: () => Promise<void> }, 'wait').mockResolvedValue(undefined);
+    return service;
+  }
+  const deliver = (service: MailService) => service['deliverToProvider']('ana@pesv.test', 'Asunto', '<p>Hola</p>');
+
+  it('si el proveedor sigue fallando tras los reintentos, lo dice', async () => {
+    const sendMail = jest.fn().mockRejectedValue(new Error('SMTP caído'));
+    const service = serviceWithTransport({ sendMail });
+
+    await expect(deliver(service)).rejects.toThrow(/fallido tras \d+ intentos: SMTP caído/);
+    expect(sendMail.mock.calls.length).toBeGreaterThan(1);
+  });
+
+  it('un fallo pasajero se resuelve con el reintento', async () => {
+    const sendMail = jest.fn().mockRejectedValueOnce(new Error('SMTP caído')).mockResolvedValue(undefined);
+    const service = serviceWithTransport({ sendMail });
+
+    await expect(deliver(service)).resolves.toBeUndefined();
+    expect(sendMail).toHaveBeenCalledTimes(2);
+  });
+
+  it('sin proveedor configurado no envía nada, y no es un fallo', async () => {
+    await expect(deliver(serviceWithTransport(null))).resolves.toBeUndefined();
+  });
+});
+
+/** Brevo rechaza un remitente sin verificar: sin `MAIL_FROM` no se intenta enviar nada. */
+describe('MailService · remitente', () => {
+  function configuredWith(values: Record<string, string>) {
+    const service = new MailService(
+      { get: (key: string) => values[key] } as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+    jest.spyOn(service['logger'], 'error').mockImplementation(() => undefined);
+    jest.spyOn(service['logger'], 'log').mockImplementation(() => undefined);
+    return service;
+  }
+
+  it('con la clave de Brevo y el remitente, envía por Brevo', async () => {
+    const service = configuredWith({ BREVO_API_KEY: 'xkeysib-prueba', MAIL_FROM: 'campus@pesv.test' });
+
+    await service.onModuleInit();
+
+    expect(service['brevoApiKey']).toBe('xkeysib-prueba');
+  });
+
+  it('sin remitente no activa ningún proveedor, y lo dice', async () => {
+    const service = configuredWith({ BREVO_API_KEY: 'xkeysib-prueba', SMTP_HOST: '127.0.0.1' });
+
+    await service.onModuleInit();
+
+    expect(service['brevoApiKey']).toBeNull();
+    expect(service['transport']).toBeNull();
+    expect(service['logger'].error).toHaveBeenCalledWith(expect.stringContaining('MAIL_FROM'));
   });
 });

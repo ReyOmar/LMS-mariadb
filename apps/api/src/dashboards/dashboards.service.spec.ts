@@ -6,8 +6,10 @@ import { DashboardsService } from './dashboards.service';
  * Las cifras tienen que salir de la base sobre la sede entera: ni de una muestra de filas
  * ni mezclando matrículas dadas de baja con las vigentes.
  */
-function serviceWith(answers: { accountsByRole?: unknown[]; average?: number | null } = {}) {
-  const calls: { usersWhere?: unknown; averageWhere?: unknown; rawSql: string[] } = { rawSql: [] };
+function serviceWith(
+  answers: { accountsByRole?: unknown[]; coursesByStatus?: unknown[]; average?: number | string | null } = {},
+) {
+  const calls: { usersWhere?: unknown; coursesWhere?: unknown; rawSql: string[] } = { rawSql: [] };
 
   const prisma = {
     user: {
@@ -16,18 +18,18 @@ function serviceWith(answers: { accountsByRole?: unknown[]; average?: number | n
         return answers.accountsByRole ?? [];
       },
     },
-    course: { count: async () => 0 },
-    accessRequest: { count: async () => 2 },
-    enrollment: { count: async () => 0 },
-    submission: {
-      aggregate: async ({ where }: { where: unknown }) => {
-        calls.averageWhere = where;
-        return { _avg: { score: answers.average ?? null } };
+    course: {
+      groupBy: async ({ where }: { where: unknown }) => {
+        calls.coursesWhere = where;
+        return answers.coursesByStatus ?? [];
       },
     },
+    accessRequest: { count: async () => 2 },
+    enrollment: { count: async () => 0 },
     $queryRaw: async (parts: TemplateStringsArray) => {
-      calls.rawSql.push(parts.join('?'));
-      return [];
+      const sql = parts.join('?');
+      calls.rawSql.push(sql);
+      return sql.includes('AVG(best)') ? [{ average: answers.average ?? null }] : [];
     },
   };
   const settings = { getSettings: async () => ({ timeZone: 'America/Bogota' }) };
@@ -65,13 +67,32 @@ describe('DashboardsService · resumen de la sede', () => {
     expect(users).toEqual({ total: 1, students: 0, teachers: 0, admins: 1 });
   });
 
-  it('el promedio lo calcula la base sobre todas las notas de la sede', async () => {
-    const { service, calls } = serviceWith({ average: 83.456 });
+  it('el promedio lo calcula la base con la mejor nota de cada alumno en cada evaluación', async () => {
+    // MariaDB devuelve AVG como texto decimal.
+    const { service, calls } = serviceWith({ average: '83.4560' });
 
     const { overallAverage } = await service.getCountrySummary('COLOMBIA');
 
     expect(overallAverage).toBe(83.46);
-    expect(calls.averageWhere).toMatchObject({ status: 'GRADED', user: { country: 'COLOMBIA' } });
+    const average = calls.rawSql.find((sql) => sql.includes('AVG(best)'));
+    expect(average).toContain('MAX(e.calificacion)');
+    expect(average).toContain('GROUP BY e.usuario_guid, e.tarea_guid');
+    expect(average).toContain('u.pais = ?');
+  });
+
+  it('cuenta los cursos de cualquier estado de la sede, también los archivados de julio', async () => {
+    const { service, calls } = serviceWith({
+      coursesByStatus: [
+        { status: 'PUBLISHED', _count: { _all: 4 } },
+        { status: 'DRAFT', _count: { _all: 2 } },
+        { status: 'ARCHIVED', _count: { _all: 1 } },
+      ],
+    });
+
+    const { courses } = await service.getCountrySummary('COLOMBIA');
+
+    expect(calls.coursesWhere).toEqual({ country: 'COLOMBIA' });
+    expect(courses).toEqual({ published: 4, draft: 2, total: 7 });
   });
 
   it('sin notas no hay promedio', async () => {

@@ -6,7 +6,6 @@ import {
   formatScoreValue,
   formatPoints,
   DEFAULT_PASSING_SCORE,
-  percent,
   averageScore,
 } from './grading';
 
@@ -95,19 +94,6 @@ describe('formateo', () => {
     expect(formatScoreValue(83.2, 'MEXICO')).toBe('83.2');
     expect(formatScoreValue(0, 'COLOMBIA')).toBe('0');
     expect(formatScoreValue(null, 'COLOMBIA')).toBe('—');
-  });
-});
-
-describe('percent', () => {
-  it('redondea a entero', () => {
-    expect(percent(87.4)).toBe(87);
-    expect(percent(87.6)).toBe(88);
-  });
-
-  it('nunca sale de 0–100, pase lo que pase con el dato', () => {
-    expect(percent(-10)).toBe(0);
-    expect(percent(140)).toBe(100);
-    expect(percent(null)).toBe(0);
   });
 });
 

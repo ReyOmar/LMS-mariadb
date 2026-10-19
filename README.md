@@ -12,9 +12,7 @@ apps/
 ├── api/      NestJS 11 + Fastify + Prisma 7 + MariaDB
 └── client/   Next.js 15 (React 19, Tailwind 4)
 docs/
-├── AUDITORIA.md           Estado del proyecto antes de la refactorización
-├── DESPLIEGUE-CPANEL.md   Puesta en producción
-└── DECISIONES.md          Por qué el sistema es como es
+└── DESPLIEGUE-CPANEL.md   Puesta en producción
 ```
 
 ---
@@ -29,9 +27,10 @@ Colombia y México son operaciones separadas. Un usuario pertenece a **una sola 
 cursos, alumnos, entregas, certificados, mensajes y textos legales sólo existen dentro de
 ella.
 
-El país viaja dentro del token de sesión y lo inyecta el guard en cada petición. **Ningún
-controlador lo acepta del cliente**, salvo en las dos rutas públicas de la portada, donde
-todavía no hay sesión. La única frontera por la que podrían cruzarse los datos es la
+La sede de cada petición es la de la cuenta: el guard la lee de la base en cada petición, a
+partir del token. **Ningún controlador la acepta del cliente**, salvo las rutas públicas en
+las que todavía no hay sesión (la configuración de la portada, el acceso, la verificación del
+correo y la solicitud de acceso). La única frontera por la que podrían cruzarse los datos es la
 matrícula, y ahí se comprueba explícitamente que alumno y curso compartan sede.
 
 Ver `apps/api/src/common/domain/country.ts`.
@@ -47,7 +46,7 @@ Ninguna pantalla ni ningún servicio debe escribir la escala a mano.
 ### 3. La identidad la decide el servidor
 
 Ningún endpoint acepta un identificador de usuario para decidir de quién son los datos: sale
-del token. La propiedad de cursos, recursos y entregas se comprueba en un solo sitio:
+del token, que sólo lleva quién es y qué sesión; el rol y la sede se leen de la base. La propiedad de cursos, recursos y entregas se comprueba en un solo sitio:
 `CourseAccessService` (`apps/api/src/courses/course-access.service.ts`).
 
 ---
@@ -75,7 +74,7 @@ del token. La propiedad de cursos, recursos y entregas se comprueba en un solo s
 ### Requisitos
 
 - Node.js 20.19+, 22.12+ o 24+ (lo exige Prisma 7)
-- MariaDB 10.6+ (o MySQL 8)
+- MariaDB 10.6+ (MySQL no sirve: la API usa `max_statement_time`)
 
 ### Puesta en marcha
 
@@ -187,16 +186,17 @@ Dos vías, por orden de preferencia:
    alojamiento compartido, donde los puertos SMTP suelen estar cerrados.
 2. **SMTP** (`SMTP_HOST`, `SMTP_USER`, `SMTP_PASS`).
 
-Sin ninguna de las dos, el sistema funciona igual pero no sale ningún correo: los envíos se
-registran y se descartan.
+Las dos usan el remitente `MAIL_FROM` (y `MAIL_FROM_NAME`); con Brevo, una dirección del
+dominio verificado allí. Sin remitente o sin ninguna de las dos vías, el sistema funciona igual
+pero no sale ningún correo: los envíos se registran y se descartan.
 
 Las plantillas se editan desde el panel de administración. La marca de cada correo (color,
 logotipo, nombre) se toma de la configuración de la sede del destinatario.
 
 ### En producción se envía con Brevo. En desarrollo, a un buzón local
 
-**En cPanel**: se define `BREVO_API_KEY` y el correo sale por ahí. Es lo único que hay que
-configurar, y es lo que dice la guía de despliegue.
+**En cPanel**: se definen `BREVO_API_KEY` y `MAIL_FROM`, y el correo sale por Brevo. Es lo que
+dice la guía de despliegue.
 
 **En tu máquina**: `docker compose up -d` levanta, junto a la base de datos, un buzón de
 pruebas (Mailpit) que **atrapa** todo lo que la API intenta enviar y lo enseña en
@@ -220,10 +220,6 @@ SMTP_PORT="1025"
 
 ## Documentación
 
-- **[docs/AUDITORIA.md](docs/AUDITORIA.md)** — hallazgos del análisis previo, con el
-  identificador que referencian los commits.
-- **[docs/DECISIONES.md](docs/DECISIONES.md)** — las decisiones de diseño y su porqué.
 - **[docs/DESPLIEGUE-CPANEL.md](docs/DESPLIEGUE-CPANEL.md)** — puesta en producción.
 
-Con `NODE_ENV` distinto de `production`, la API publica su documentación interactiva en
-`/docs`.
+Con `NODE_ENV=development`, la API publica su documentación interactiva en `/docs`.

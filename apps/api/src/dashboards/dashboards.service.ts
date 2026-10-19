@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { CourseStatus } from '@prisma/client';
 import { SettingsService } from '../settings/settings.service';
 import { normalizeScore } from '../common/domain/grading';
 import { Country } from '../common/domain/country';
@@ -23,36 +24,25 @@ export class DashboardsService {
 
   /** Resumen de la sede: personas, cursos, promedio y actividad reciente. */
   async getCountrySummary(country: Country) {
-    const [
-      accountsByRole,
-      pendingRequests,
-      publishedCourses,
-      draftCourses,
-      totalEnrollments,
-      scores,
-      activity,
-      breakdown,
-    ] = await Promise.all([
-      // Todas las cuentas de la sede, de cualquier rol.
-      this.prisma.user.groupBy({ by: ['role'], where: { country }, _count: { _all: true } }),
-      this.prisma.accessRequest.count({ where: { country, status: 'PENDING' } }),
-      this.prisma.course.count({ where: { country, status: 'PUBLISHED' } }),
-      this.prisma.course.count({ where: { country, status: 'DRAFT' } }),
-      this.prisma.enrollment.count({ where: { active: true, course: { country } } }),
-      this.prisma.submission.aggregate({
-        where: { status: 'GRADED', score: { not: null }, user: { country } },
-        _avg: { score: true },
-      }),
-      this.recentActivity(country),
-      this.enrollmentBreakdown(country),
-    ]);
+    const [accountsByRole, pendingRequests, coursesByStatus, totalEnrollments, average, activity, breakdown] =
+      await Promise.all([
+        // Todas las cuentas de la sede, de cualquier rol.
+        this.prisma.user.groupBy({ by: ['role'], where: { country }, _count: { _all: true } }),
+        this.prisma.accessRequest.count({ where: { country, status: 'PENDING' } }),
+        // De cualquier estado: también los archivados que vienen de la versión de julio.
+        this.prisma.course.groupBy({ by: ['status'], where: { country }, _count: { _all: true } }),
+        this.prisma.enrollment.count({ where: { active: true, course: { country } } }),
+        this.overallAverage(country),
+        this.recentActivity(country),
+        this.enrollmentBreakdown(country),
+      ]);
 
     const accounts = (role: 'STUDENT' | 'TEACHER' | 'ADMIN') =>
       accountsByRole.find((row) => row.role === role)?._count._all ?? 0;
     const students = accounts('STUDENT');
     const teachers = accounts('TEACHER');
     const admins = accounts('ADMIN');
-    const average = scores._avg.score;
+    const courses = (status: CourseStatus) => coursesByStatus.find((row) => row.status === status)?._count._all ?? 0;
 
     return {
       users: {
@@ -62,16 +52,33 @@ export class DashboardsService {
         admins,
       },
       courses: {
-        published: publishedCourses,
-        draft: draftCourses,
-        total: publishedCourses + draftCourses,
+        published: courses('PUBLISHED'),
+        draft: courses('DRAFT'),
+        total: coursesByStatus.reduce((total, row) => total + row._count._all, 0),
       },
       pendingRequests,
       totalEnrollments,
-      overallAverage: average === null ? null : normalizeScore(Number(average)),
+      overallAverage: average,
       weeklyActivity: activity,
       courseBreakdown: breakdown,
     };
+  }
+
+  /**
+   * Nota media de la sede: la mejor de cada alumno en cada evaluación, como en sus métricas y
+   * en el certificado. Contar cada intento hundiría el promedio de quien tuvo que repetir.
+   */
+  private async overallAverage(country: Country): Promise<number | null> {
+    const [row] = await this.prisma.$queryRaw<{ average: unknown }[]>`
+      SELECT AVG(best) AS average FROM (
+        SELECT MAX(e.calificacion) AS best
+        FROM lms_entregas e
+        JOIN usuarios u ON u.guid = e.usuario_guid
+        WHERE e.estado = 'CALIFICADA' AND e.calificacion IS NOT NULL AND e.tarea_guid IS NOT NULL
+          AND u.pais = ${country}
+        GROUP BY e.usuario_guid, e.tarea_guid
+      ) evaluations`;
+    return row?.average == null ? null : normalizeScore(Number(row.average));
   }
 
   /** Entregas y recursos completados por día durante la última semana, en la hora de la sede. */

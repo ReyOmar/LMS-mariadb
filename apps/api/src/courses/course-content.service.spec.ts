@@ -158,8 +158,8 @@ describe('CourseContentService', () => {
   it('reordenar ignora identificadores ajenos y repetidos', async () => {
     const updates: { guid: string; position: number }[] = [];
     const { service } = serviceWith({
-      courseModule: {
-        findMany: async () => [{ guid: 'm1' }, { guid: 'm2' }],
+      resource: {
+        findMany: async () => [{ guid: 'r1' }, { guid: 'r2' }],
         update: ({ where, data }: { where: { guid: string }; data: { position: number } }) => {
           updates.push({ guid: where.guid, position: data.position });
           return Promise.resolve();
@@ -168,11 +168,11 @@ describe('CourseContentService', () => {
       $transaction: async (operations: Promise<unknown>[]) => Promise.all(operations),
     });
 
-    await service.reorderModules('curso-1', ['m2', 'modulo-de-otro-curso', 'm2', 'm1'], ADMIN);
+    await service.reorderResources('modulo-1', ['r2', 'recurso-de-otro-modulo', 'r2', 'r1'], ADMIN);
 
     expect(updates).toEqual([
-      { guid: 'm2', position: 0 },
-      { guid: 'm1', position: 1 },
+      { guid: 'r2', position: 0 },
+      { guid: 'r1', position: 1 },
     ]);
   });
 });

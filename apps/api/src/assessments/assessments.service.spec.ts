@@ -1,4 +1,4 @@
-import { ForbiddenException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
 import { AssessmentsService } from './assessments.service';
 import { encodeCursor, MAX_PER_PAGE } from '../common/domain/pagination';
 import { sessionFor } from '../common/testing/test-campus';
@@ -578,7 +578,15 @@ describe('historial de intentos de cuestionario', () => {
  * podría certificarse sin aprobarla.
  */
 describe('calificación de una tarea', () => {
-  function gradingService({ enrolled = true, certifiedAt = null as Date | null } = {}) {
+  /** La versión de la entrega que tiene delante el examinador. */
+  const REVIEWED = '2026-03-02T10:15:00.000Z';
+
+  function gradingService({
+    enrolled = true,
+    certifiedAt = null as Date | null,
+    quizConfig = null as string | null,
+    storedVersion = REVIEWED,
+  } = {}) {
     const progress = new Set<string>(['alumno-1|tarea-1']);
     const recounts: unknown[][] = [];
     const steps: string[] = [];
@@ -594,8 +602,9 @@ describe('calificación de una tarea', () => {
         return work(prisma as never);
       },
       submission: {
-        update: jest.fn(async () => {
+        updateMany: jest.fn(async ({ where }: { where: { submittedAt: Date } }) => {
           steps.push('nota');
+          return { count: where.submittedAt.toISOString() === storedVersion ? 1 : 0 };
         }),
       },
       $executeRaw: async (_sql: TemplateStringsArray, ...values: unknown[]) => {
@@ -620,9 +629,7 @@ describe('calificación de una tarea', () => {
           guid: 'entrega-1',
           userGuid: 'alumno-1',
           assignmentGuid: 'tarea-1',
-          status: 'SUBMITTED',
-          score: null,
-          assignment: { title: 'Informe de ruta', module: { courseGuid: COURSE } },
+          assignment: { title: 'Informe de ruta', quizConfig, module: { courseGuid: COURSE } },
         },
         course: { guid: COURSE, title: 'Manejo defensivo', passingScore: 80 },
       }),
@@ -642,10 +649,31 @@ describe('calificación de una tarea', () => {
     return { service, progress, recounts, prisma, steps, transactionOptions };
   }
 
+  it('un intento de cuestionario no se califica a mano: ni la nota ni el avance cambian', async () => {
+    const { service, progress, steps } = gradingService({ quizConfig: '{"questions":[]}' });
+
+    await expect(service.gradeSubmission('entrega-1', { score: 10, submittedAt: REVIEWED }, ADMIN)).rejects.toThrow(
+      BadRequestException,
+    );
+
+    expect(steps).toEqual([]);
+    expect(progress.has('alumno-1|tarea-1')).toBe(true);
+  });
+
+  it('si el alumno envió otra versión mientras se revisaba, no guarda la nota ni toca el avance', async () => {
+    const { service, progress, steps } = gradingService({ storedVersion: '2026-03-02T10:40:00.000Z' });
+
+    await expect(service.gradeSubmission('entrega-1', { score: 40, submittedAt: REVIEWED }, ADMIN)).rejects.toThrow(
+      ConflictException,
+    );
+    expect(steps).toEqual(['bloqueo', 'nota']);
+    expect(progress.has('alumno-1|tarea-1')).toBe(true);
+  });
+
   it('aprobar deja la tarea completada', async () => {
     const { service, progress } = gradingService();
 
-    const result = await service.gradeSubmission('entrega-1', { score: 90 }, ADMIN);
+    const result = await service.gradeSubmission('entrega-1', { score: 90, submittedAt: REVIEWED }, ADMIN);
 
     expect(result.passed).toBe(true);
     expect(progress.has('alumno-1|tarea-1')).toBe(true);
@@ -654,7 +682,7 @@ describe('calificación de una tarea', () => {
   it('suspender retira el avance que tuviera la tarea, aunque viniera del desbloqueo por espera', async () => {
     const { service, progress } = gradingService();
 
-    const result = await service.gradeSubmission('entrega-1', { score: 40 }, ADMIN);
+    const result = await service.gradeSubmission('entrega-1', { score: 40, submittedAt: REVIEWED }, ADMIN);
 
     expect(result.passed).toBe(false);
     expect(progress.has('alumno-1|tarea-1')).toBe(false);
@@ -664,7 +692,7 @@ describe('calificación de una tarea', () => {
     for (const score of [90, 40]) {
       const { service, recounts } = gradingService();
 
-      await service.gradeSubmission('entrega-1', { score }, ADMIN);
+      await service.gradeSubmission('entrega-1', { score, submittedAt: REVIEWED }, ADMIN);
 
       expect(recounts).toEqual([['alumno-1', COURSE]]);
     }
@@ -674,7 +702,7 @@ describe('calificación de una tarea', () => {
     for (const score of [90, 40]) {
       const { service, steps, transactionOptions } = gradingService();
 
-      await service.gradeSubmission('entrega-1', { score }, ADMIN);
+      await service.gradeSubmission('entrega-1', { score, submittedAt: REVIEWED }, ADMIN);
 
       // Si la nota y el avance se escribieran fuera, un suspenso podía quedar con el avance
       // de un aprobado que se calificó a la vez.
@@ -686,20 +714,26 @@ describe('calificación de una tarea', () => {
   it('no califica la entrega de quien se dio de baja del curso', async () => {
     const { service, prisma, progress } = gradingService({ enrolled: false });
 
-    await expect(service.gradeSubmission('entrega-1', { score: 40 }, ADMIN)).rejects.toThrow(ForbiddenException);
-    await expect(service.gradeSubmission('entrega-1', { score: 40 }, ADMIN)).rejects.toThrow(/ya no está matriculado/);
-    expect(prisma.submission.update).not.toHaveBeenCalled();
+    await expect(service.gradeSubmission('entrega-1', { score: 40, submittedAt: REVIEWED }, ADMIN)).rejects.toThrow(
+      ForbiddenException,
+    );
+    await expect(service.gradeSubmission('entrega-1', { score: 40, submittedAt: REVIEWED }, ADMIN)).rejects.toThrow(
+      /ya no está matriculado/,
+    );
+    expect(prisma.submission.updateMany).not.toHaveBeenCalled();
     expect(progress.has('alumno-1|tarea-1')).toBe(true);
   });
 
   it('no recalifica una entrega de una vuelta ya certificada: su nota respalda el certificado', async () => {
     const { service, prisma, progress, recounts } = gradingService({ certifiedAt: new Date('2026-02-20') });
 
-    await expect(service.gradeSubmission('entrega-1', { score: 40 }, ADMIN)).rejects.toThrow(ForbiddenException);
-    await expect(service.gradeSubmission('entrega-1', { score: 40 }, ADMIN)).rejects.toThrow(
+    await expect(service.gradeSubmission('entrega-1', { score: 40, submittedAt: REVIEWED }, ADMIN)).rejects.toThrow(
+      ForbiddenException,
+    );
+    await expect(service.gradeSubmission('entrega-1', { score: 40, submittedAt: REVIEWED }, ADMIN)).rejects.toThrow(
       'La vuelta de este alumno ya está certificada: su calificación no puede cambiarse.',
     );
-    expect(prisma.submission.update).not.toHaveBeenCalled();
+    expect(prisma.submission.updateMany).not.toHaveBeenCalled();
     expect(progress.has('alumno-1|tarea-1')).toBe(true);
     expect(recounts).toEqual([]);
   });
@@ -735,6 +769,7 @@ describe('entrega de una tarea: límite de subida', () => {
     failOnSave = false,
     round = { active: true, completedAt: null },
     roundAtLock = round,
+    lockedAtLock = false,
   }: {
     ownLimitMb?: number | null;
     previous?: Previous | null;
@@ -743,6 +778,8 @@ describe('entrega de una tarea: límite de subida', () => {
     round?: Round;
     /** La matrícula cuando el archivo ya llegó y se bloquea para guardarlo. */
     roundAtLock?: Round;
+    /** Con la matrícula ya bloqueada, la tarea volvió a quedar bloqueada por el orden del curso. */
+    lockedAtLock?: boolean;
   } = {}) {
     // La entrega guardada del alumno: lo que confirma un envío lo ve el siguiente.
     let stored: Record<string, unknown> | null = previous && { ...previous };
@@ -790,7 +827,13 @@ describe('entrega de una tarea: límite de subida', () => {
     };
     const files = fileOwnershipDouble();
     const course = { guid: COURSE, title: 'Manejo defensivo', passingScore: 80, teacherGuid: 'profe-1' };
-    const access = { unlockedResourceAccess: async () => course, ensureResourceAccess: async () => course };
+    const access = {
+      unlockedResourceAccess: async () => course,
+      ensureResourceAccess: async () => course,
+      ensureUnlocked: async () => {
+        if (lockedAtLock) throw new BadRequestException('Este recurso aún está bloqueado.');
+      },
+    };
     const settings = { getMaxUploadMb: async () => 10 };
     const received: { isResubmission: boolean }[] = [];
     const events = {
@@ -924,6 +967,14 @@ describe('entrega de una tarea: límite de subida', () => {
     });
 
     await expect(service.recordSubmission('tarea-1', receive, STUDENT)).rejects.toThrow(/entregas quedaron cerradas/);
+    expect(writes).toEqual([]);
+    expect(files.discarded).toHaveBeenCalledWith(['entregas/nueva.pdf']);
+  });
+
+  it('si un suspenso vuelve a bloquear la tarea mientras sube el archivo, no guarda la entrega y retira lo subido', async () => {
+    const { service, receive, files, writes } = submissionService({ lockedAtLock: true });
+
+    await expect(service.recordSubmission('tarea-1', receive, STUDENT)).rejects.toThrow(/bloqueado/);
     expect(writes).toEqual([]);
     expect(files.discarded).toHaveBeenCalledWith(['entregas/nueva.pdf']);
   });

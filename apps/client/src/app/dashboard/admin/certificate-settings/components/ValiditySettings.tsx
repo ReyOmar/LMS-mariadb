@@ -1,6 +1,7 @@
 import { CalendarClock } from 'lucide-react';
 import type { CertificateSettings } from '../certificate';
-import { INPUT_CLASS, SettingsCard } from './SettingsCard';
+import { SectionCard } from '@/components/ui/SectionCard';
+import { INPUT_CLASS } from './input';
 
 /** El tope que admite la API: cincuenta años. */
 const MAX_VALIDITY_MONTHS = 600;
@@ -12,7 +13,7 @@ interface Props {
 
 export function ValiditySettings({ months, onChange }: Props) {
   return (
-    <SettingsCard icon={CalendarClock} title="Vigencia del certificado">
+    <SectionCard icon={CalendarClock} title="Vigencia del certificado">
       <label htmlFor="cert-validity" className="block text-sm font-bold text-foreground mb-1.5">
         Meses que acredita
       </label>
@@ -45,6 +46,6 @@ export function ValiditySettings({ months, onChange }: Props) {
           verificándose.
         </p>
       </div>
-    </SettingsCard>
+    </SectionCard>
   );
 }

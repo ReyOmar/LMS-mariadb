@@ -7,7 +7,7 @@ import { randomInt } from 'crypto';
  * entre por el alta, el primer acceso, la recuperación o el perfil.
  */
 
-const MIN_PASSWORD_LENGTH = 8;
+export const MIN_PASSWORD_LENGTH = 8;
 export const MAX_PASSWORD_LENGTH = 128;
 
 /** Coste de bcrypt. 10 rondas es el equilibrio habitual entre seguridad y latencia. */

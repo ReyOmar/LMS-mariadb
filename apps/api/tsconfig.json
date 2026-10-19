@@ -15,9 +15,5 @@
     "strict": true,
     "strictPropertyInitialization": false
   },
-  "include": [
-    "src/**/*",
-    "prisma/**/*",
-    "prisma.config.ts"
-  ]
+  "include": ["src/**/*", "prisma/**/*", "prisma.config.ts"]
 }

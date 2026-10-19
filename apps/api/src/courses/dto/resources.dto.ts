@@ -1,4 +1,4 @@
-import { IsIn, IsInt, IsNotEmpty, IsOptional, IsString, IsUrl, Max, MaxLength, Min } from 'class-validator';
+import { IsIn, IsNotEmpty, IsOptional, IsString, IsUrl, MaxLength } from 'class-validator';
 import { Transform } from 'class-transformer';
 import { IsStorageKey } from '../../storage/storage-key.validator';
 import { IsUploadLimitMb } from '../../storage/upload-limit.validator';
@@ -68,6 +68,4 @@ export class UpdateResourceDto {
   @IsOptional()
   @IsUploadLimitMb('El límite de subida')
   maxUploadMb?: number | null;
-
-  @IsOptional() @IsInt() @Min(0) @Max(600) readingMinutes?: number | null;
 }

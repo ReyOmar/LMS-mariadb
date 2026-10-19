@@ -19,7 +19,6 @@ export interface SeedTemplate {
     internalName: string;
     subject: string;
     bodyHtml: string;
-    isSystem: boolean;
   };
 }
 
@@ -40,7 +39,6 @@ export const EMAIL_TEMPLATES: SeedTemplate[] = [
 </div>
 <p style="color:#94a3b8;font-size:13px;line-height:1.6">Si no solicitaste este cambio, ignora este correo. El enlace expira en 1 hora.</p>
 <p style="color:#94a3b8;font-size:12px;margin-top:24px;word-break:break-all">Link directo: <a href="{{resetUrl}}" style="color:#4f46e5">{{resetUrl}}</a></p>`,
-      isSystem: true,
     },
   },
   {
@@ -70,7 +68,6 @@ export const EMAIL_TEMPLATES: SeedTemplate[] = [
 <div style="text-align:center;margin:24px 0">
 <a href="{{url_campus}}" style="display:inline-block;background:#4f46e5;color:#fff;font-weight:700;padding:12px 32px;border-radius:12px;text-decoration:none;font-size:14px">Ir al Campus</a>
 </div>`,
-      isSystem: true,
     },
   },
   {
@@ -87,7 +84,6 @@ export const EMAIL_TEMPLATES: SeedTemplate[] = [
 <div style="text-align:center;margin:32px 0">
 <a href="{{url_campus}}" style="display:inline-block;background:#4f46e5;color:#fff;font-weight:700;padding:14px 36px;border-radius:12px;text-decoration:none;font-size:15px">Retomar Capacitación</a>
 </div>`,
-      isSystem: true,
     },
   },
   {
@@ -103,7 +99,6 @@ export const EMAIL_TEMPLATES: SeedTemplate[] = [
 <div style="text-align:center;margin:32px 0">
 <a href="{{url_campus}}" style="display:inline-block;background:#10b981;color:#fff;font-weight:700;padding:14px 36px;border-radius:12px;text-decoration:none;font-size:15px">Continuar Curso</a>
 </div>`,
-      isSystem: true,
     },
   },
   {
@@ -132,7 +127,6 @@ export const EMAIL_TEMPLATES: SeedTemplate[] = [
 <div style="text-align:center;margin:24px 0">
 <a href="{{url_solicitudes}}" style="display:inline-block;background:#4f46e5;color:#fff;font-weight:700;padding:14px 36px;border-radius:12px;text-decoration:none;font-size:15px">Revisar Solicitud</a>
 </div>`,
-      isSystem: true,
     },
   },
   {
@@ -147,7 +141,6 @@ export const EMAIL_TEMPLATES: SeedTemplate[] = [
 <p style="color:#64748b;font-size:15px;line-height:1.6">Hola <strong>{{nombre}}</strong>, la administración del campus de <strong>{{sede}}</strong> revisó tu solicitud de acceso y no la aprobó.</p>
 {{motivo}}
 <p style="color:#64748b;font-size:14px;line-height:1.6">Si crees que es un error, ponte en contacto con la administración de tu sede.</p>`,
-      isSystem: true,
     },
   },
   {
@@ -170,7 +163,6 @@ export const EMAIL_TEMPLATES: SeedTemplate[] = [
 <div style="text-align:center;margin:24px 0">
 <a href="{{url_calificaciones}}" style="display:inline-block;background:#4f46e5;color:#fff;font-weight:700;padding:14px 36px;border-radius:12px;text-decoration:none;font-size:15px">Ir a Calificaciones</a>
 </div>`,
-      isSystem: true,
     },
   },
   {
@@ -192,7 +184,6 @@ export const EMAIL_TEMPLATES: SeedTemplate[] = [
 <div style="text-align:center;margin:32px 0">
 <a href="{{url_campus}}" style="display:inline-block;background:#4f46e5;color:#fff;font-weight:700;padding:14px 36px;border-radius:12px;text-decoration:none;font-size:15px">Repasar Módulo</a>
 </div>`,
-      isSystem: true,
     },
   },
   {
@@ -217,7 +208,6 @@ export const EMAIL_TEMPLATES: SeedTemplate[] = [
 <div style="text-align:center;margin:32px 0">
 <a href="{{url_campus}}" style="display:inline-block;background:#4f46e5;color:#fff;font-weight:700;padding:14px 36px;border-radius:12px;text-decoration:none;font-size:15px">Ir al Campus Virtual</a>
 </div>`,
-      isSystem: true,
     },
   },
   {
@@ -237,7 +227,6 @@ export const EMAIL_TEMPLATES: SeedTemplate[] = [
 <div style="text-align:center;margin:32px 0">
 <a href="{{url_campus}}" style="display:inline-block;background:#4f46e5;color:#fff;font-weight:700;padding:14px 36px;border-radius:12px;text-decoration:none;font-size:15px">Ir al Campus</a>
 </div>`,
-      isSystem: true,
     },
   },
   {
@@ -257,7 +246,6 @@ export const EMAIL_TEMPLATES: SeedTemplate[] = [
 <div style="text-align:center;margin:32px 0">
 <a href="{{url_curso}}" style="display:inline-block;background:#10b981;color:#fff;font-weight:700;padding:14px 36px;border-radius:12px;text-decoration:none;font-size:15px">Comenzar Curso</a>
 </div>`,
-      isSystem: true,
     },
   },
   {
@@ -278,7 +266,6 @@ export const EMAIL_TEMPLATES: SeedTemplate[] = [
 <div style="text-align:center;margin:32px 0">
 <a href="{{url_certificado}}" style="display:inline-block;background:#4f46e5;color:#fff;font-weight:700;padding:14px 36px;border-radius:12px;text-decoration:none;font-size:15px">Ver Certificado</a>
 </div>`,
-      isSystem: true,
     },
   },
   {
@@ -301,7 +288,6 @@ export const EMAIL_TEMPLATES: SeedTemplate[] = [
 <div style="text-align:center;margin:32px 0">
 <a href="{{url_campus}}" style="display:inline-block;background:#4f46e5;color:#fff;font-weight:700;padding:14px 36px;border-radius:12px;text-decoration:none;font-size:15px">Ir al Campus</a>
 </div>`,
-      isSystem: true,
     },
   },
   {
@@ -321,7 +307,6 @@ export const EMAIL_TEMPLATES: SeedTemplate[] = [
 <div style="text-align:center;margin:32px 0">
 <a href="{{url_monitoreo}}" style="display:inline-block;background:#4f46e5;color:#fff;font-weight:700;padding:14px 36px;border-radius:12px;text-decoration:none;font-size:15px">Ver Monitoreo</a>
 </div>`,
-      isSystem: true,
     },
   },
 ];

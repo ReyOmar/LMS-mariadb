@@ -102,6 +102,11 @@ describe('buildResourcePatch', () => {
     expect(patch.quizConfig).toBeNull();
   });
 
+  it('un editor vacío no guarda párrafos vacíos', () => {
+    expect(buildResourcePatch('PARAGRAPH', form({ content: '<p><br></p>' }), null).contentHtml).toBe('');
+    expect(buildResourcePatch('QUIZ', form({ content: '<p></p>', quiz: completeQuiz() }), null).contentHtml).toBe('');
+  });
+
   it('sólo una tarea lleva límite de entrega; vacío es el de la sede', () => {
     expect(buildResourcePatch('ASSIGNMENT', form({ maxUploadText: '25' }), null, 100).maxUploadMb).toBe(25);
     expect(buildResourcePatch('ASSIGNMENT', form({ maxUploadText: '' }), null, 100).maxUploadMb).toBeNull();

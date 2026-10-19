@@ -5,11 +5,11 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { ChevronUp, GraduationCap, LogOut, Menu, Settings, X } from 'lucide-react';
 import api, { fileUrlFor } from '@/lib/api';
-import { initials } from '@/lib/text';
 import { useSession } from '@/contexts/SessionContext';
 import { useConfig } from '@/contexts/ConfigContext';
 import { useRealtimeEvent } from '@/contexts/RealtimeContext';
 import { ThemeToggle } from '@/components/ui/ThemeToggle';
+import { PhotoOrInitials } from '@/components/ui/UserAvatar';
 import { NotificationCenter } from '@/components/features/NotificationCenter';
 import { AccountSettings } from '@/components/features/AccountSettings';
 import { CountryIndicator } from '@/components/features/CountryIndicator';
@@ -92,8 +92,6 @@ export function Sidebar() {
 
   const counters = { requests: pendingRequests, messages: unreadMessages };
   const name = user ? `${user.firstName} ${user.lastName}`.trim() : 'Usuario';
-  const avatarInitials = initials(user?.firstName, user?.lastName);
-  const photo = fileUrlFor(user?.photoUrl);
   const logo = fileUrlFor(config?.logoUrl);
 
   return (
@@ -206,7 +204,7 @@ export function Sidebar() {
               aria-expanded={menuOpen}
             >
               <span className="h-9 w-9 shrink-0 rounded-xl overflow-hidden shadow-sm bg-primary text-primary-foreground flex items-center justify-center font-bold text-sm">
-                {photo ? <img src={photo} alt="" className="h-full w-full object-cover" /> : avatarInitials}
+                <PhotoOrInitials person={user ?? {}} />
               </span>
               <span className="truncate flex-1 text-left">
                 <span className="block text-sm font-semibold leading-none truncate">{name}</span>

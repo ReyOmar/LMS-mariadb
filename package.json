@@ -23,6 +23,8 @@
     "test:api": "cd apps/api && npm test",
     "test:client": "cd apps/client && npm test",
     "test": "concurrently --success all -n api,client -c green,cyan \"npm run test:api\" \"npm run test:client\"",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
     "prepare": "husky"
   },
   "engines": {

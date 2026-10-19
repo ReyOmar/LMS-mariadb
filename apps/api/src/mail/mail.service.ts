@@ -1,11 +1,11 @@
-import { Injectable, Logger, NotFoundException, OnModuleInit } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as nodemailer from 'nodemailer';
 import { PrismaService } from '../prisma/prisma.service';
 import { SettingsService } from '../settings/settings.service';
 import { StorageService } from '../storage/storage.service';
 import { Country, countryName } from '../common/domain/country';
-import { formatScore, formatPoints } from '../common/domain/grading';
+import { formatScore } from '../common/domain/grading';
 import { UserRole } from '../common/interfaces/jwt-payload.interface';
 import { UpdateTemplateDto } from './dto/update-template.dto';
 
@@ -21,6 +21,12 @@ const TIMEOUT_MS = 15_000;
  * simultáneas acaban rechazadas por el proveedor.
  */
 export const MAIL_CONCURRENCY = 5;
+
+/**
+ * Correos sin los que una cuenta no se puede usar: el enlace para recuperar la contraseña y la
+ * contraseña temporal de bienvenida. Sus plantillas se editan, pero no se desactivan.
+ */
+const ESSENTIAL_EVENTS: ReadonlySet<string> = new Set(['RECUPERAR_PASSWORD', 'USUARIO_APROBADO']);
 
 /**
  * Cuánto se reutiliza una plantilla leída de la base. En un envío en bloque todos los
@@ -102,7 +108,7 @@ export class MailService implements OnModuleInit {
    */
   private readonly templates = new Map<string, { value: Promise<ActiveTemplate | null>; expiresAt: number }>();
 
-  private readonly sender: string;
+  private readonly sender: string | undefined;
   private readonly senderName: string;
   private readonly appUrl: string;
   private readonly apiUrl: string;
@@ -113,8 +119,8 @@ export class MailService implements OnModuleInit {
     private readonly settings: SettingsService,
     private readonly storage: StorageService,
   ) {
-    this.sender = this.setting('SMTP_FROM') ?? 'noreply@lms.local';
-    this.senderName = this.setting('SMTP_FROM_NAME') ?? 'Campus Virtual';
+    this.sender = this.setting('MAIL_FROM');
+    this.senderName = this.setting('MAIL_FROM_NAME') ?? 'Campus Virtual';
     this.appUrl = (this.setting('APP_URL') ?? 'http://localhost:3100').replace(/\/+$/, '');
     // Los correos necesitan URLs absolutas: una clave de almacenamiento relativa se ve
     // como una imagen rota en el cliente de correo.
@@ -130,6 +136,14 @@ export class MailService implements OnModuleInit {
   }
 
   async onModuleInit(): Promise<void> {
+    // Brevo rechaza un remitente que no esté verificado: sin él no se intenta enviar nada.
+    if (!this.sender) {
+      this.logger.error(
+        'Correo DESACTIVADO: falta MAIL_FROM, la dirección remitente (en Brevo, una del dominio verificado).',
+      );
+      return;
+    }
+
     const brevoApiKey = this.setting('BREVO_API_KEY');
     if (brevoApiKey) {
       this.brevoApiKey = brevoApiKey;
@@ -163,13 +177,17 @@ export class MailService implements OnModuleInit {
   // ── Envío ────────────────────────────────────────────────────────────────
 
   /**
-   * Envía un correo con reintentos y espera creciente.
-   * Nunca lanza: un fallo de correo no debe deshacer la operación que lo originó.
+   * Envía un correo con reintentos y espera creciente. Sin proveedor configurado no envía
+   * nada, y eso no es un fallo.
+   *
+   * @throws si el proveedor sigue fallando tras los reintentos. Quien llama decide qué hacer
+   *         con ello —registrarlo, contarlo o volver a intentarlo otro día—; ninguna operación
+   *         espera al correo para confirmarse, así que nunca deshace lo que lo originó.
    */
-  private async deliverToProvider(recipient: string, subject: string, html: string): Promise<boolean> {
+  private async deliverToProvider(recipient: string, subject: string, html: string): Promise<void> {
     if (!this.brevoApiKey && !this.transport) {
       this.logger.debug(`Correo no enviado (servicio desactivado) → ${recipient}: ${subject}`);
-      return false;
+      return;
     }
 
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
@@ -185,17 +203,16 @@ export class MailService implements OnModuleInit {
           });
         }
         this.logger.log(`Correo enviado a ${recipient}: ${subject}`);
-        return true;
+        return;
       } catch (error) {
-        const last = attempt === MAX_RETRIES;
-        if (last) {
-          this.logger.error(`Correo a ${recipient} fallido tras ${MAX_RETRIES} intentos: ${(error as Error)?.message}`);
-          return false;
+        if (attempt === MAX_RETRIES) {
+          throw new Error(`Correo a ${recipient} fallido tras ${MAX_RETRIES} intentos: ${(error as Error)?.message}`, {
+            cause: error,
+          });
         }
         await this.wait(2 ** (attempt - 1) * 1000);
       }
     }
-    return false;
   }
 
   private async sendViaBrevo(apiKey: string, recipient: string, subject: string, html: string): Promise<void> {
@@ -228,18 +245,30 @@ export class MailService implements OnModuleInit {
 
   // ── Plantillas ───────────────────────────────────────────────────────────
 
-  /** Eventos de correo con las plantillas de la sede, para editarlas desde el panel. */
-  getEvents(country: Country) {
-    return this.prisma.emailEvent.findMany({
+  /**
+   * Eventos de correo con las plantillas de la sede, para editarlas desde el panel. Cada uno
+   * dice si es imprescindible: el panel no ofrece desactivarlo.
+   */
+  async getEvents(country: Country) {
+    const events = await this.prisma.emailEvent.findMany({
       include: { templates: { where: { country }, orderBy: { id: 'asc' } } },
       orderBy: { key: 'asc' },
     });
+    return events.map((event) => ({ ...event, essential: ESSENTIAL_EVENTS.has(event.key) }));
   }
 
   /** Edita una plantilla de la sede. La de la otra sede no existe para quien edita. */
   async updateTemplate(id: number, country: Country, dto: UpdateTemplateDto) {
-    const template = await this.prisma.emailTemplate.findFirst({ where: { id, country }, select: { id: true } });
+    const template = await this.prisma.emailTemplate.findFirst({
+      where: { id, country },
+      select: { event: { select: { key: true } } },
+    });
     if (!template) throw new NotFoundException('Plantilla no encontrada.');
+    if (dto.active === false && ESSENTIAL_EVENTS.has(template.event.key)) {
+      throw new BadRequestException(
+        'Este correo es imprescindible para entrar al campus: puedes cambiar su texto, pero no desactivarlo.',
+      );
+    }
 
     const updated = await this.prisma.emailTemplate.update({ where: { id }, data: dto });
     // Activar o desactivar una puede cambiar cuál usa su evento: se vacía todo.
@@ -333,15 +362,15 @@ export class MailService implements OnModuleInit {
 </html>`;
   }
 
+  /** Envía el correo de un evento con su plantilla; sin plantilla activa, el aviso no se envía. */
   private async sendTemplate(
     key: string,
     recipient: string,
     variables: Record<string, string | number>,
     country: Country,
-  ): Promise<boolean> {
+  ): Promise<void> {
     const template = await this.render(key, variables, country);
-    if (!template) return false;
-    return this.deliverToProvider(recipient, template.subject, template.html);
+    if (template) await this.deliverToProvider(recipient, template.subject, template.html);
   }
 
   // ── Correos del sistema ──────────────────────────────────────────────────
@@ -379,7 +408,7 @@ export class MailService implements OnModuleInit {
    * alta una cuenta desde el panel. El enlace abre el acceso con la sede ya elegida: la
    * cuenta sólo puede entrar por la suya.
    */
-  async sendWelcome(email: string, name: string, temporaryPassword: string, country: Country) {
+  async sendWelcome(email: string, name: string, temporaryPassword: string, country: Country): Promise<void> {
     const loginUrl = `${this.appUrl}/login?sede=${country}`;
     const site = countryName(country);
     const template = await this.render(
@@ -387,7 +416,10 @@ export class MailService implements OnModuleInit {
       { nombre: name, email, tempPassword: temporaryPassword, sede: site, url_campus: loginUrl },
       country,
     );
-    if (template) return this.deliverToProvider(email, template.subject, template.html);
+    if (template) {
+      await this.deliverToProvider(email, template.subject, template.html);
+      return;
+    }
 
     // Sin plantilla configurada la cuenta quedaría creada y el usuario sin conocer su
     // clave temporal, así que este correo tiene respaldo propio. Sólo para eso: si lo que
@@ -406,7 +438,7 @@ export class MailService implements OnModuleInit {
        </div>`,
       country,
     );
-    return this.deliverToProvider(email, 'Tu acceso al campus virtual está listo', html);
+    await this.deliverToProvider(email, 'Tu acceso al campus virtual está listo', html);
   }
 
   /** Aviso a quien pidió acceso de que su solicitud no se aprobó, con el motivo si lo hay. */
@@ -424,19 +456,17 @@ export class MailService implements OnModuleInit {
   }
 
   /**
-   * Aviso de calificación con el comentario del examinador, si lo dejó. La nota se formatea
-   * siempre con la escala del sistema.
+   * Aviso de una tarea aprobada, con el comentario del examinador si lo dejó; la suspendida
+   * tiene el suyo (`sendSubmissionRejected`). La nota se formatea con la escala del sistema.
    */
   sendGrade(
     email: string,
     name: string,
     assignment: string,
     score: number,
-    passingScore: number,
     country: Country,
     feedback?: string | null,
   ) {
-    const passed = score >= passingScore;
     return this.sendTemplate(
       'CALIFICACION_RECIBIDA',
       email,
@@ -444,10 +474,8 @@ export class MailService implements OnModuleInit {
         nombre: name,
         tarea: assignment,
         calificacion: formatScore(score),
-        emoji: passed ? '🎉' : '⚠️',
-        mensaje_aprobacion: passed
-          ? '<p style="color:#10b981;font-size:14px;font-weight:600">¡Buen trabajo! Sigue así.</p>'
-          : `<p style="color:#ef4444;font-size:14px;font-weight:600">Necesitas al menos ${formatPoints(passingScore)} puntos. Puedes subir una nueva versión de tu entrega.</p>`,
+        emoji: '🎉',
+        mensaje_aprobacion: '<p style="color:#10b981;font-size:14px;font-weight:600">¡Buen trabajo! Sigue así.</p>',
         comentario: feedbackBlock(feedback),
         url_campus: `${this.appUrl}/dashboard`,
       },
@@ -579,11 +607,52 @@ export class MailService implements OnModuleInit {
   }
 
   /**
+   * Aviso a quien pidió un código para solicitar acceso con un correo que ya tiene cuenta: en
+   * lugar del código, cómo entrar. Lo recibe sólo el dueño del buzón.
+   */
+  async sendAccountExists(email: string, name: string, country: Country): Promise<void> {
+    const html = await this.wrap(
+      `<h2 style="color:#1e293b;font-size:20px;margin:0 0 12px">¡Hola ${escapeHtml(name)}!</h2>
+       <p style="color:#475569;font-size:14px;line-height:1.6;margin:0 0 20px">
+         Alguien —quizá tú— pidió acceso al campus con este correo, pero ya tienes una cuenta en
+         el de <strong>${escapeHtml(countryName(country))}</strong>. No hace falta solicitarla de nuevo.
+       </p>
+       <div style="text-align:center;margin:28px 0">
+         <a href="${this.appUrl}/login?sede=${country}" style="display:inline-block;background:#4f46e5;color:#fff;font-weight:700;padding:14px 36px;border-radius:12px;text-decoration:none;font-size:15px">Entrar al campus</a>
+       </div>
+       <p style="color:#475569;font-size:14px;line-height:1.6;margin:0 0 12px">
+         ¿No recuerdas tu contraseña? <a href="${this.appUrl}/forgot-password">Recupérala aquí</a>.
+       </p>
+       <p style="color:#94a3b8;font-size:12px;margin:0">Si no fuiste tú, puedes ignorar este correo.</p>`,
+      country,
+    );
+    await this.deliverToProvider(email, 'Ya tienes una cuenta en el campus', html);
+  }
+
+  /**
+   * Aviso a quien pidió un código para solicitar acceso con un correo cuya solicitud sigue en
+   * revisión: en lugar del código, que ya está en marcha. Lo recibe sólo el dueño del buzón.
+   */
+  async sendAccessRequestPending(email: string, country: Country): Promise<void> {
+    const html = await this.wrap(
+      `<h2 style="color:#1e293b;font-size:20px;margin:0 0 12px">Tu solicitud sigue en revisión</h2>
+       <p style="color:#475569;font-size:14px;line-height:1.6;margin:0 0 20px">
+         Alguien —quizá tú— pidió un código para solicitar acceso con este correo, pero ya hay una
+         solicitud suya pendiente en el campus de <strong>${escapeHtml(countryName(country))}</strong>.
+         Te escribiremos en cuanto los administradores la revisen.
+       </p>
+       <p style="color:#94a3b8;font-size:12px;margin:0">Si no fuiste tú, puedes ignorar este correo.</p>`,
+      country,
+    );
+    await this.deliverToProvider(email, 'Tu solicitud de acceso sigue en revisión', html);
+  }
+
+  /**
    * Código de verificación de correo.
    * Se envía antes de que exista cuenta, así que no hay sede de la que tomar la marca: se
    * usa la de la sede indicada o, en su defecto, la principal.
    */
-  async sendVerificationCode(email: string, code: string, country: Country): Promise<boolean> {
+  async sendVerificationCode(email: string, code: string, country: Country): Promise<void> {
     const html = await this.wrap(
       `<h2 style="color:#1e293b;font-size:20px;margin:0 0 12px">Verificación de correo electrónico</h2>
        <p style="color:#475569;font-size:14px;line-height:1.6;margin:0 0 20px">
@@ -597,6 +666,6 @@ export class MailService implements OnModuleInit {
        </p>`,
       country,
     );
-    return this.deliverToProvider(email, 'Tu código de verificación', html);
+    await this.deliverToProvider(email, 'Tu código de verificación', html);
   }
 }

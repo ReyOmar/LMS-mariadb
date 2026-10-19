@@ -1,4 +1,4 @@
-import { breakableSpaces } from './editor-html';
+import { breakableSpaces, hasContent } from './editor-html';
 
 describe('breakableSpaces', () => {
   it('devuelve a espacios normales los que el editor exporta como rígidos', () => {
@@ -21,5 +21,18 @@ describe('breakableSpaces', () => {
   it('deja intacto el contenido sin espacios rígidos', () => {
     const html = '<ul><li>Primero</li><li>Segundo punto</li></ul>';
     expect(breakableSpaces(html)).toBe(html);
+  });
+});
+
+describe('hasContent', () => {
+  it.each([undefined, null, '', '<p></p>', '<p><br></p>', '<p>&nbsp; </p><p>\u00a0</p>'])(
+    '%p no tiene nada que enseñar',
+    (html) => {
+      expect(hasContent(html)).toBe(false);
+    },
+  );
+
+  it.each(['<p>Lee el capítulo 2</p>', '<p><img src="mapa.png"></p>', 'Texto sin etiquetas'])('%p sí', (html) => {
+    expect(hasContent(html)).toBe(true);
   });
 });

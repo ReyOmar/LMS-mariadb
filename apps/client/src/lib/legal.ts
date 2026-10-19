@@ -527,7 +527,9 @@ export function collectionNotice(country: Country, controller: DataController): 
 }
 
 export type LegalBlock =
-  { kind: 'heading'; text: string } | { kind: 'paragraph'; text: string } | { kind: 'list'; items: string[] };
+  | { kind: 'heading'; text: string }
+  | { kind: 'paragraph'; text: string }
+  | { kind: 'list'; items: string[] };
 
 /** Convierte un texto legal en bloques según el formato descrito al principio del módulo. */
 export function parseLegalText(text: string): LegalBlock[] {

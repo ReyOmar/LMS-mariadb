@@ -1,5 +1,5 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
-import { CourseStatus } from '@prisma/client';
+import { CourseStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { Country } from '../common/domain/country';
 import { JwtPayload } from '../common/interfaces/jwt-payload.interface';
@@ -145,8 +145,18 @@ export class CourseAccessService {
     return course;
   }
 
-  private async ensureUnlocked(courseGuid: string, resourceGuid: string, userGuid: string): Promise<void> {
-    const course = await this.prisma.course.findUnique({
+  /**
+   * Si el curso tiene orden estricto, comprueba que al alumno ya le toca el recurso. Quien va a
+   * escribir su avance la repite con `db`, la transacción que tiene bloqueada su matrícula: un
+   * suspenso que se confirme entre medias pudo volver a bloquearlo.
+   */
+  async ensureUnlocked(
+    courseGuid: string,
+    resourceGuid: string,
+    userGuid: string,
+    db: Prisma.TransactionClient = this.prisma,
+  ): Promise<void> {
+    const course = await db.course.findUnique({
       where: { guid: courseGuid },
       select: {
         strictOrder: true,
@@ -160,11 +170,11 @@ export class CourseAccessService {
 
     const guids = course.modules.flatMap((module) => module.resources.map((resource) => resource.guid));
     const [progress, pending] = await Promise.all([
-      this.prisma.resourceProgress.findMany({
+      db.resourceProgress.findMany({
         where: { userGuid, resourceGuid: { in: guids } },
         select: { resourceGuid: true },
       }),
-      this.prisma.submission.findMany({
+      db.submission.findMany({
         where: { userGuid, assignmentGuid: { in: guids }, status: { in: AWAITING_GRADE } },
         select: { assignmentGuid: true, submittedAt: true },
       }),
@@ -190,9 +200,7 @@ export class CourseAccessService {
         guid: true,
         userGuid: true,
         assignmentGuid: true,
-        status: true,
-        score: true,
-        assignment: { select: { title: true, module: { select: { courseGuid: true } } } },
+        assignment: { select: { title: true, quizConfig: true, module: { select: { courseGuid: true } } } },
       },
     });
     if (!submission?.assignment) throw new NotFoundException('Entrega no encontrada.');
@@ -202,8 +210,11 @@ export class CourseAccessService {
   }
 
   /** Recursos de un curso, en orden de recorrido. */
-  async getCourseResources(courseGuid: string): Promise<{ guid: string; type: string; title: string }[]> {
-    return this.prisma.resource.findMany({
+  async getCourseResources(
+    courseGuid: string,
+    db: Prisma.TransactionClient = this.prisma,
+  ): Promise<{ guid: string; type: string; title: string }[]> {
+    return db.resource.findMany({
       where: { module: { courseGuid } },
       select: { guid: true, type: true, title: true },
       orderBy: [{ module: { position: 'asc' } }, { position: 'asc' }],

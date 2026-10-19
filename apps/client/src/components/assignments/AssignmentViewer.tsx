@@ -20,6 +20,7 @@ import { isPassing, formatScoreValue, MAX_SCORE } from '@/lib/grading';
 import { useCountry } from '@/contexts/CountryContext';
 import { useRealtimeEvent } from '@/contexts/RealtimeContext';
 import { sanitizeHTML } from '@/lib/sanitize';
+import { hasContent } from '@/lib/editor-html';
 import { externalUrl } from '@/lib/resources';
 import type { Submission } from '@/types/models';
 import { fullDate } from '@/lib/dates';
@@ -183,7 +184,7 @@ export default function AssignmentViewer({
           <h2 className="font-bold text-lg text-foreground">Instrucciones de la tarea</h2>
         </div>
         <div className="p-8 prose prose-slate dark:prose-invert max-w-none text-foreground/90">
-          {instructionsHtml ? (
+          {hasContent(instructionsHtml) ? (
             <div dangerouslySetInnerHTML={sanitizeHTML(instructionsHtml)} />
           ) : (
             <p className="text-muted-foreground italic m-0">Sin instrucciones adicionales.</p>

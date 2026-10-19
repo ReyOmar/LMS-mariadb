@@ -2,14 +2,14 @@
 
 import { useRef, useState } from 'react';
 import { AlertCircle, Camera, CheckCircle, Eye, EyeOff, Loader2, Lock, Save, Trash2, User, X } from 'lucide-react';
-import api, { errorMessage, uploadFile, fileUrlFor } from '@/lib/api';
+import api, { errorMessage, uploadFile } from '@/lib/api';
 import { useSession, type SessionUser } from '@/contexts/SessionContext';
 import { useAlerts } from '@/contexts/AlertContext';
 import { COUNTRY_INFO } from '@/lib/country';
-import { initials } from '@/lib/text';
 import { PASSWORD_HINT, passwordProblem } from '@/lib/password';
 import { uploadLimit } from '@/lib/upload-limits';
 import { CountryFlag } from '@/components/ui/CountryFlag';
+import { PhotoOrInitials } from '@/components/ui/UserAvatar';
 import { useDialog } from '@/hooks/useDialog';
 
 /** Imágenes admitidas para la foto de perfil. */
@@ -136,9 +136,6 @@ function AccountSettingsDialog({ user, onClose }: { user: SessionUser; onClose: 
     }
   };
 
-  const photo = fileUrlFor(user.photoUrl);
-  const avatarInitials = initials(user.firstName, user.lastName);
-
   return (
     <div
       {...dialogProps}
@@ -182,7 +179,7 @@ function AccountSettingsDialog({ user, onClose }: { user: SessionUser; onClose: 
           <section className="flex items-center gap-4">
             <div className="relative">
               <div className="h-20 w-20 rounded-2xl overflow-hidden bg-primary text-primary-foreground flex items-center justify-center text-2xl font-bold">
-                {photo ? <img src={photo} alt="" className="h-full w-full object-cover" /> : avatarInitials}
+                <PhotoOrInitials person={user} />
               </div>
               {uploadingPhoto && (
                 <div className="absolute inset-0 rounded-2xl bg-black/50 flex items-center justify-center">

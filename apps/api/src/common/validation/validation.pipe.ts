@@ -19,7 +19,6 @@ const DEFAULT_MESSAGES: Record<string, string> = {
   isEmail: 'El campo «{field}» debe ser un correo electrónico válido.',
   isIn: 'El valor de «{field}» no es válido.',
   isHexColor: 'El campo «{field}» debe ser un color hexadecimal.',
-  isDateString: 'El campo «{field}» debe ser una fecha válida.',
   isUrl: 'El campo «{field}» debe ser una dirección web válida.',
   isObject: 'El campo «{field}» debe ser un objeto.',
   whitelistValidation: 'El campo «{field}» no está permitido.',
@@ -67,19 +66,13 @@ const FIELD_LABELS: Record<string, string> = {
   durationHours: 'duración',
   passingScore: 'nota de aprobación',
   strictOrder: 'orden estricto',
-  issuesCertificate: 'emisión de certificado',
-  requiresPrevious: 'requisito del módulo anterior',
   maxStudents: 'cupo',
-  accessCode: 'código de acceso',
-  startDate: 'fecha de inicio',
-  endDate: 'fecha de fin',
   position: 'posición',
   guids: 'identificadores',
   type: 'tipo',
   content: 'contenido',
   contentHtml: 'contenido',
   referenceUrl: 'enlace de referencia',
-  readingMinutes: 'minutos de lectura',
   quizConfig: 'configuración del cuestionario',
   answers: 'respuestas',
   // Personas y referencias
@@ -94,6 +87,7 @@ const FIELD_LABELS: Record<string, string> = {
   // Calificaciones y mensajes
   score: 'calificación',
   feedback: 'comentario',
+  submittedAt: 'fecha de la entrega',
   subject: 'asunto',
   bodyHtml: 'cuerpo del correo',
   active: 'activa',
@@ -149,6 +143,14 @@ const isDefaultMessage = (message: string) => /\b(must|should)\b/.test(message);
 function messagesOf(error: ValidationError, parent?: string): string[] {
   const label = FIELD_LABELS[error.property] ?? error.property;
   const field = parent ? `${parent}.${label}` : label;
+
+  // Un campo obligatorio que no llegó incumple todas sus reglas («debe ser texto», «es
+  // demasiado largo»…); lo único útil es decir que falta.
+  if (error.value === undefined) {
+    const required = error.constraints?.isNotEmpty ?? error.constraints?.isDefined;
+    return [required && !isDefaultMessage(required) ? required : DEFAULT_MESSAGES.isNotEmpty.replace('{field}', field)];
+  }
+
   const own = Object.entries(error.constraints ?? {}).map(([constraint, message]) => {
     if (!isDefaultMessage(message)) return message;
     // Un campo que el DTO no declara se nombra tal como lo envió el cliente.

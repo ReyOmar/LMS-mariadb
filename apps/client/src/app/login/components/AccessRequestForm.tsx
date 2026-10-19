@@ -127,7 +127,8 @@ export function AccessRequestForm({ form, country, onEmailVerified, onCancel, on
       {step === 'code' && (
         <form onSubmit={onSubmitStep(confirmCode)} className="space-y-4">
           <p className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 px-4 py-3 text-xs text-emerald-700 dark:text-emerald-400">
-            Enviamos un código de {CODE_LENGTH} dígitos a <strong>{email}</strong>. Revisa también la carpeta de spam.
+            Revisa <strong>{email}</strong>: te enviamos un código de {CODE_LENGTH} dígitos o, si ese correo ya tiene
+            cuenta o una solicitud en revisión, cómo seguir. Mira también la carpeta de spam.
           </p>
           <Field label="Código de verificación" htmlFor="request-code">
             <input

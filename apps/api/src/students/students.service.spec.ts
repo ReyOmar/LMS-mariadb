@@ -254,3 +254,73 @@ describe('StudentsService · cursos completados', () => {
     expect(metrics.overallAverage).toBe(90);
   });
 });
+
+describe('StudentsService · marcar un recurso como leído', () => {
+  function markingService({
+    resource = { type: 'TEXT', quizConfig: null } as { type: string; quizConfig: string | null } | null,
+    round = { active: true, completedAt: null as Date | null },
+  } = {}) {
+    const steps: string[] = [];
+    const events: string[] = [];
+    const tx = {
+      $queryRaw: async () => {
+        steps.push('bloqueo');
+        return [{ active: round.active ? 1 : 0, completedAt: round.completedAt }];
+      },
+      resourceProgress: {
+        upsert: async () => {
+          steps.push('avance');
+        },
+      },
+      $executeRaw: async () => 1,
+    };
+    const prisma = {
+      resource: { findUnique: async () => resource },
+      $transaction: async (work: (client: typeof tx) => Promise<unknown>) => work(tx),
+    };
+    const access = {
+      studentResourceAccess: async () => ({ guid: COURSE }),
+      ensureUnlocked: async (_course: string, _resource: string, _user: string, db: unknown) => {
+        steps.push(db === tx ? 'desbloqueo con la matrícula bloqueada' : 'desbloqueo sin bloquear');
+      },
+    };
+    const service = new StudentsService(
+      prisma as never,
+      access as never,
+      {} as never,
+      {
+        emit: (name: string) => events.push(name),
+      } as never,
+    );
+    return { service, steps, events };
+  }
+
+  it('comprueba el desbloqueo y guarda el avance con la matrícula bloqueada', async () => {
+    const { service, steps, events } = markingService();
+
+    await service.markResourceCompleted('lectura-1', STUDENT);
+
+    // Un suspenso confirmado entre medias pudo devolver al alumno al principio del módulo.
+    expect(steps).toEqual(['bloqueo', 'desbloqueo con la matrícula bloqueada', 'avance']);
+    expect(events).toEqual(['progress.updated']);
+  });
+
+  it('una tarea o un cuestionario no se completan por leerlos', async () => {
+    for (const resource of [
+      { type: 'ASSIGNMENT', quizConfig: null },
+      { type: 'ASSIGNMENT', quizConfig: '{}' },
+    ]) {
+      const { service, steps } = markingService({ resource });
+
+      await expect(service.markResourceCompleted('tarea-1', STUDENT)).rejects.toThrow(/se completa/);
+      expect(steps).toEqual([]);
+    }
+  });
+
+  it('con la vuelta certificada no cambia el avance', async () => {
+    const { service, steps } = markingService({ round: { active: true, completedAt: new Date() } });
+
+    await expect(service.markResourceCompleted('lectura-1', STUDENT)).rejects.toThrow(/avance quedó cerrado/);
+    expect(steps).toEqual(['bloqueo']);
+  });
+});

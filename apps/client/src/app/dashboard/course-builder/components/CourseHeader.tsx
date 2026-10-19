@@ -1,6 +1,7 @@
 'use client';
 
 import { ArrowLeft, ChevronDown, Eye, EyeOff, Lock, Trash2 } from 'lucide-react';
+import { COURSE_STATUS_LABEL } from '@/lib/labels';
 import type { Course, CourseStatus } from '@/types/models';
 
 interface Props {
@@ -52,8 +53,14 @@ export function CourseHeader({ course, canDelete, readOnly, onBack, onChangeStat
                   : 'bg-amber-500/10 border-amber-500/30 text-amber-700 dark:text-amber-400 focus:ring-amber-500/20'
               }`}
             >
-              <option value="DRAFT">Borrador</option>
-              <option value="PUBLISHED">Publicado</option>
+              {/* Los archivados vienen de la versión de julio: se ven como tales y se sacan de ahí eligiendo otro. */}
+              {course.status === 'ARCHIVED' && (
+                <option value="ARCHIVED" disabled>
+                  {COURSE_STATUS_LABEL.ARCHIVED}
+                </option>
+              )}
+              <option value="DRAFT">{COURSE_STATUS_LABEL.DRAFT}</option>
+              <option value="PUBLISHED">{COURSE_STATUS_LABEL.PUBLISHED}</option>
             </select>
             <div
               className={`absolute left-2.5 sm:left-3.5 top-1/2 -translate-y-1/2 pointer-events-none transition-colors ${accent}`}

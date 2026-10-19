@@ -2,7 +2,6 @@ import {
   ArrayMaxSize,
   IsArray,
   IsBoolean,
-  IsDateString,
   IsIn,
   IsInt,
   IsNotEmpty,
@@ -18,7 +17,11 @@ import { StrictBoolean } from '../../common/validation/transforms';
 import { MAX_SCORE, MIN_SCORE } from '../../common/domain/grading';
 import { IsStorageKey } from '../../storage/storage-key.validator';
 
-const STATUSES = ['DRAFT', 'PUBLISHED', 'ARCHIVED'] as const;
+/**
+ * Los estados que se le pueden dar a un curso. La base admite además ARCHIVED, sólo para leer
+ * los cursos que la versión de julio dejó archivados: se sacan de ahí pasándolos a uno de estos.
+ */
+const STATUSES = ['DRAFT', 'PUBLISHED'] as const;
 const LEVELS = ['BEGINNER', 'INTERMEDIATE', 'ADVANCED', 'EXPERT'] as const;
 
 export type CourseStatus = (typeof STATUSES)[number];
@@ -93,11 +96,6 @@ export class UpdateCourseDto {
   @IsInt({ message: 'El cupo debe ser un número entero de estudiantes.' })
   @Min(1, { message: 'El cupo debe ser al menos 1.' })
   maxStudents?: number | null;
-
-  @IsOptional() @IsString() @MaxLength(40) accessCode?: string | null;
-
-  @IsOptional() @IsDateString({}, { message: 'La fecha de inicio no es válida.' }) startDate?: string | null;
-  @IsOptional() @IsDateString({}, { message: 'La fecha de fin no es válida.' }) endDate?: string | null;
 }
 
 export class CreateModuleDto {
@@ -119,7 +117,6 @@ export class UpdateModuleDto {
   title?: string;
 
   @IsOptional() @IsString() @MaxLength(1000) description?: string;
-  @IsOptional() @StrictBoolean() @IsBoolean() requiresPrevious?: boolean;
 }
 
 export class ReorderDto {

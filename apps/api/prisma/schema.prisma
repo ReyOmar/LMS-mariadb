@@ -92,6 +92,10 @@ model User {
   // 31 ms por página frente a 1 ms con el índice. Reemplaza a `(pais, rol)`, del que es
   // prefijo, así que los recuentos por rol siguen resueltos con el mismo índice.
   @@index([country, role, createdAt])
+  // Antes de borrar una foto o una firma sustituidas se comprueba que ninguna fila las use
+  // (`FileOwnershipService`): sin ellos, cada comprobación recorría la tabla entera.
+  @@index([photoUrl])
+  @@index([signatureUrl])
   @@map("usuarios")
 }
 
@@ -157,6 +161,8 @@ model AccessRequest {
 enum CourseStatus {
   DRAFT     @map("BORRADOR")
   PUBLISHED @map("PUBLICADO")
+  /// Sólo de la versión de julio: se conserva para leer esos cursos, que se sacan de aquí
+  /// pasándolos a borrador o publicándolos. La aplicación ya no archiva.
   ARCHIVED  @map("ARCHIVADO")
 }
 
@@ -185,9 +191,6 @@ model Course {
   level            DifficultyLevel @default(BEGINNER) @map("nivel")
   status           CourseStatus    @default(DRAFT) @map("estado")
   durationHours    Int?            @map("duracion_horas")
-  startDate        DateTime?       @map("fecha_inicio")
-  endDate          DateTime?       @map("fecha_fin")
-  accessCode       String?         @unique @map("codigo_acceso")
   maxStudents      Int?            @map("max_estudiantes")
 
   // Reglas de negocio
@@ -204,24 +207,26 @@ model Course {
   enrollments   Enrollment[]
   certificates  Certificate[]
   studySessions StudySession[]
+  chatContacts  ChatContact[]
 
   archivedSubmissions ArchivedSubmission[]
 
   @@index([teacherGuid])
   @@index([country, status])
+  // Comprobar si una portada sustituida sigue en uso (`FileOwnershipService`).
+  @@index([coverImage])
   @@map("lms_cursos")
 }
 
 model CourseModule {
-  guid             String   @id @default(uuid())
-  courseGuid       String   @map("curso_guid")
-  course           Course   @relation(fields: [courseGuid], references: [guid], onDelete: Cascade)
-  title            String   @map("titulo")
-  description      String?  @map("descripcion")
-  position         Int      @default(0) @map("orden")
-  requiresPrevious Boolean  @default(false) @map("requiere_anterior")
-  createdAt        DateTime @default(now()) @map("created_at")
-  updatedAt        DateTime @updatedAt @map("updated_at")
+  guid        String   @id @default(uuid())
+  courseGuid  String   @map("curso_guid")
+  course      Course   @relation(fields: [courseGuid], references: [guid], onDelete: Cascade)
+  title       String   @map("titulo")
+  description String?  @map("descripcion")
+  position    Int      @default(0) @map("orden")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
 
   resources Resource[]
 
@@ -250,17 +255,18 @@ model Resource {
   // correctas, por lo que nunca se envía íntegro a un estudiante.
   quizConfig String? @map("quiz_config") @db.MediumText
 
-  position       Int      @default(0) @map("orden")
-  required       Boolean  @default(true) @map("obligatorio")
-  readingMinutes Int?     @map("tiempo_lectura") // Minutos estimados
-  createdAt      DateTime @default(now()) @map("created_at")
-  updatedAt      DateTime @updatedAt @map("updated_at")
+  position  Int      @default(0) @map("orden")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
 
   progress            ResourceProgress[]
   submissions         Submission[]
   archivedSubmissions ArchivedSubmission[]
 
   @@index([moduleGuid, position])
+  // Comprobar si un archivo sustituido sigue en uso (`FileOwnershipService`).
+  @@index([attachmentKey])
+  @@index([fileUrl])
   @@map("lms_recursos")
 }
 
@@ -310,8 +316,9 @@ model Submission {
   // Actividad semanal del panel de administración: sin él recorría todas las entregas de la
   // historia para quedarse con las de 7 días (5 años de datos: 661 ms frente a 25).
   @@index([submittedAt])
-  // Promedio de la sede: la nota y el alumno salen del índice sin leer las filas (1 s → 0,1 s).
-  @@index([status, userGuid, score])
+  // La mejor nota de cada alumno en cada evaluación (promedio de la sede y métricas del
+  // alumno) sale del índice sin leer las filas.
+  @@index([status, userGuid, assignmentGuid, score])
   // Antes de borrar un archivo sustituido se comprueba que ninguna fila lo use: sin él, cada
   // reenvío, foto o portada nuevos recorrían todas las entregas de la historia.
   @@index([attachmentKey])
@@ -337,10 +344,12 @@ model ResourceProgress {
 
 // ── Matrículas ─────────────────────────────────────────────────────────────
 
+/// Toda matrícula la hace el personal (MANUAL). Las otras dos son de la versión de julio y se
+/// conservan para leer sus matrículas.
 enum EnrollmentType {
-  MANUAL // Inscrito por un administrador
-  ACCESS_CODE @map("CODIGO_ACCESO") // El alumno usó un código
-  SYSTEM      @map("SISTEMA") // Inscripción automática por reglas
+  MANUAL
+  ACCESS_CODE @map("CODIGO_ACCESO")
+  SYSTEM      @map("SISTEMA")
 }
 
 model Enrollment {
@@ -380,6 +389,8 @@ model Enrollment {
 
 // ── Comunicación ───────────────────────────────────────────────────────────
 
+/// DEADLINE_SOON, DEADLINE_URGENT y GLOBAL_ANNOUNCEMENT son de la versión de julio: la
+/// aplicación ya no los crea, pero sus avisos se siguen leyendo.
 enum NotificationType {
   NEW_ASSESSMENT      @map("EVALUACION_NUEVA")
   DEADLINE_SOON       @map("DEADLINE_PROXIMO")
@@ -472,7 +483,9 @@ model ChatContact {
   requester     User          @relation("RequestedContacts", fields: [requesterGuid], references: [guid], onDelete: Cascade)
   receiverGuid  String        @map("receptor_guid")
   receiver      User          @relation("ReceivedContacts", fields: [receiverGuid], references: [guid], onDelete: Cascade)
+  // El contacto es dentro de un curso: si el curso se borra, el contacto se va con él.
   courseGuid    String        @map("curso_guid")
+  course        Course        @relation(fields: [courseGuid], references: [guid], onDelete: Cascade)
   status        ContactStatus @default(PENDING) @map("estado")
   createdAt     DateTime      @default(now()) @map("created_at")
   updatedAt     DateTime      @updatedAt @map("updated_at")
@@ -493,7 +506,7 @@ model ChatContact {
  * cuanto algo se borra o se rehace, y estas sumas son baratas.
  * Cada fila es un tramo de trabajo real: se abre cuando el alumno empieza a interactuar
  * dentro del curso y se cierra cuando deja de hacerlo. Tener la pestaña abierta sin tocar
- * nada no suma (lo decide el cliente, en `useTiempoDeEstudio`).
+ * nada no suma (lo decide el cliente, en `useStudyTime`).
  */
 model StudySession {
   id              Int       @id @default(autoincrement())
@@ -572,6 +585,9 @@ model Certificate {
   // La restricción única sirve también de índice por alumno: empieza por `usuario_guid`.
   @@unique([userGuid, courseGuid, attempt])
   @@index([courseGuid])
+  // Comprobar si un archivo sigue en uso antes de borrarlo (`FileOwnershipService`): los
+  // certificados crecen con los años, como las entregas.
+  @@index([pdfKey])
   @@map("lms_certificados")
 }
 
@@ -666,7 +682,6 @@ model EmailTemplate {
   subject      String     @map("asunto")
   bodyHtml     String     @map("cuerpo_html") @db.Text
   active       Boolean    @default(true) @map("activo")
-  isSystem     Boolean    @default(false) @map("es_sistema") // Las de sistema no se borran
   createdAt    DateTime   @default(now()) @map("created_at")
   updatedAt    DateTime   @updatedAt @map("updated_at")
 
@@ -704,8 +719,9 @@ model LegalVersion {
 /**
  * Entrega de una vuelta ya certificada, sin archivo: se borró al emitirse su certificado.
  * Al rematricular a quien ya obtuvo el certificado, sus entregas se trasladan aquí para que
- * empiece de cero conservando el nombre, la nota y el comentario de cada una. Sólo se borran
- * con la cuenta o con el curso.
+ * empiece de cero conservando el nombre, la nota y el comentario de cada una. Es el registro
+ * de lo calificado que respalda los certificados anteriores: la aplicación no lo muestra, y
+ * sólo se borra con la cuenta o con el curso.
  */
 model ArchivedSubmission {
   guid            String    @id // El de la entrega original

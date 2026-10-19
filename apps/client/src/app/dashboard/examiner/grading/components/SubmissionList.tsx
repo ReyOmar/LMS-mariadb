@@ -20,9 +20,9 @@ interface Props {
   /** Entrega abierta para calificar, o `null` si no hay ninguna. */
   grading: string | null;
   saving: boolean;
-  onStart: (guid: string) => void;
+  onStart: (submission: ExaminerSubmission) => void;
   onCancel: () => void;
-  onSave: (guid: string, score: number, feedback: string) => void;
+  onSave: (score: number, feedback: string) => void;
 }
 
 /** Entregas cargadas del curso, plegadas en módulo → tarea → alumnos. */
@@ -72,9 +72,9 @@ export function SubmissionList({ modules, grading, saving, onStart, onCancel, on
                     submission={submission}
                     beingGraded={grading === submission.guid}
                     saving={saving}
-                    onStart={() => onStart(submission.guid)}
+                    onStart={() => onStart(submission)}
                     onCancel={onCancel}
-                    onSave={(score, feedback) => onSave(submission.guid, score, feedback)}
+                    onSave={onSave}
                   />
                 ))}
               </ActivityGroup>

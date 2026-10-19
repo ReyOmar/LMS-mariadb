@@ -53,7 +53,7 @@ export class RealtimeService implements OnModuleDestroy {
    * courseGuid → quién lo está editando. Sólo tiene entradas de editores conectados: se
    * vacía al liberar el aviso o al cerrarse el último flujo de quien lo tenía.
    */
-  private readonly editorsByCourse = new Map<string, CourseEditor>();
+  private readonly editsByCourse = new Map<string, CourseEdit>();
 
   constructor() {
     this.heartbeat = setInterval(() => this.emitHeartbeat(), HEARTBEAT_INTERVAL_MS);
@@ -86,7 +86,7 @@ export class RealtimeService implements OnModuleDestroy {
     };
     this.connections.set(connection.id, connection);
 
-    // Estado inicial: quién está en línea y qué cursos están siendo editados.
+    // Estado inicial: quién está en línea y cuáles de sus cursos están siendo editados.
     this.sendTo(connection, {
       event: 'presence:sync',
       data: { onlineUsers: this.onlineUsers(user.country) },
@@ -94,7 +94,7 @@ export class RealtimeService implements OnModuleDestroy {
     });
     this.sendTo(connection, {
       event: 'course:editing-sync',
-      data: this.editorsIn(user.country),
+      data: this.editorsFor(connection),
       ts: Date.now(),
     });
 
@@ -233,36 +233,44 @@ export class RealtimeService implements OnModuleDestroy {
    * Marca un curso como en edición para que otros administradores no lo abran a la vez.
    * Es un aviso cooperativo de interfaz, no un bloqueo de integridad: la consistencia real
    * la garantiza la regla de que un curso sólo se modifica en estado BORRADOR.
+   *
+   * Sólo le concierne al personal del curso: a los alumnos no se les dice qué se edita ni quién.
    */
-  acquireCourseEdit(courseGuid: string, editor: CourseEditor): CourseEditor {
-    const current = this.editorsByCourse.get(courseGuid);
-    if (current && current.guid !== editor.guid) return current;
+  acquireCourseEdit(courseGuid: string, teacherGuid: string, editor: CourseEditor): CourseEditor {
+    const current = this.editsByCourse.get(courseGuid);
+    if (current && current.editor.guid !== editor.guid) return current.editor;
 
-    this.editorsByCourse.set(courseGuid, editor);
-    this.emitToCountry('course:editing', { courseGuid, editor }, editor.country);
+    this.editsByCourse.set(courseGuid, { editor, teacherGuid });
+    this.emitToCourseStaff('course:editing', { courseGuid, editor }, editor.country, teacherGuid);
     return editor;
   }
 
   /** Libera el aviso de edición, sólo si lo tenía el usuario indicado. */
   releaseCourseLock(courseGuid: string, editorGuid: string): void {
-    const current = this.editorsByCourse.get(courseGuid);
-    if (current?.guid !== editorGuid) return;
-
-    this.editorsByCourse.delete(courseGuid);
-    this.emitToCountry('course:editing-released', { courseGuid }, current.country);
+    const current = this.editsByCourse.get(courseGuid);
+    if (current?.editor.guid === editorGuid) this.release(courseGuid, current);
   }
 
   private releaseLocksHeldBy(guid: string): void {
-    for (const [courseGuid, editor] of this.editorsByCourse) {
-      if (editor.guid !== guid) continue;
-      this.editorsByCourse.delete(courseGuid);
-      this.emitToCountry('course:editing-released', { courseGuid }, editor.country);
+    for (const [courseGuid, edit] of this.editsByCourse) {
+      if (edit.editor.guid === guid) this.release(courseGuid, edit);
     }
   }
 
-  /** Cursos en edición dentro de una sede, como `courseGuid → editor`. */
-  private editorsIn(country: Country): Record<string, CourseEditor> {
-    return Object.fromEntries([...this.editorsByCourse].filter(([, editor]) => editor.country === country));
+  private release(courseGuid: string, { editor, teacherGuid }: CourseEdit): void {
+    this.editsByCourse.delete(courseGuid);
+    this.emitToCourseStaff('course:editing-released', { courseGuid }, editor.country, teacherGuid);
+  }
+
+  /** Cursos en edición que gestiona quien se conecta, como `courseGuid → editor`. */
+  private editorsFor(connection: Connection): Record<string, CourseEditor> {
+    return Object.fromEntries(
+      [...this.editsByCourse]
+        .filter(([, { editor, teacherGuid }]) =>
+          this.reaches(connection, { type: 'staff', country: editor.country, guids: [teacherGuid] }),
+        )
+        .map(([courseGuid, { editor }]) => [courseGuid, editor]),
+    );
   }
 
   // ── Escritura en el flujo ────────────────────────────────────────────────
@@ -315,4 +323,10 @@ export interface CourseEditor {
   name: string;
   role: UserRole;
   country: Country;
+}
+
+/** Un curso en edición: quién lo edita y de quién es el curso, para avisar sólo a su personal. */
+interface CourseEdit {
+  editor: CourseEditor;
+  teacherGuid: string;
 }

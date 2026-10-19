@@ -107,7 +107,6 @@ export interface CourseModule {
   title: string;
   description?: string | null;
   position: number;
-  requiresPrevious?: boolean;
   resources?: Resource[];
 }
 
@@ -119,8 +118,6 @@ export interface Resource {
   contentHtml?: string | null;
   referenceUrl?: string | null;
   position: number;
-  required?: boolean;
-  readingMinutes?: number | null;
   maxUploadMb?: number | null;
 
   /** Clave de almacenamiento del adjunto. La usa el editor al guardar. */
@@ -354,8 +351,6 @@ export interface EmailTemplate {
   subject: string;
   bodyHtml: string;
   active: boolean;
-  /** Las de sistema no se borran: sostienen avisos que la aplicación da por hechos. */
-  isSystem: boolean;
 }
 
 /** Momento del sistema que dispara un correo, con las plantillas que puede usar. */
@@ -366,6 +361,8 @@ export interface EmailEvent {
   description: string;
   /** JSON con los nombres de variable admitidos en la plantilla. */
   variables: string;
+  /** Sin él una cuenta no se puede usar (recuperar la contraseña, la temporal): no se desactiva. */
+  essential: boolean;
   templates: EmailTemplate[];
 }
 

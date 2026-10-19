@@ -16,6 +16,22 @@ export function breakableSpaces(html: string): string {
   );
 }
 
+/**
+ * Si el HTML del editor tiene algo que enseñar: texto o una imagen. El editor vacío no deja
+ * una cadena vacía sino párrafos vacíos (`<p></p>`, `<p><br></p>`), que no deben ocupar el
+ * sitio del aviso «sin contenido».
+ */
+export function hasContent(html: string | null | undefined): html is string {
+  if (!html) return false;
+  if (/<img\b/i.test(html)) return true;
+  return (
+    html
+      .replace(/<[^>]*>/g, '')
+      .replace(NON_BREAKING_RUN, '')
+      .trim() !== ''
+  );
+}
+
 /** Racha de espacios rígidos, escritos como entidad o como el propio carácter. */
 const NON_BREAKING_RUN = /(?:&nbsp;|\u00a0)+/g;
 

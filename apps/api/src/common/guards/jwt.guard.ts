@@ -10,7 +10,7 @@ import { JwtService } from '@nestjs/jwt';
 import { Reflector } from '@nestjs/core';
 import type { FastifyRequest } from 'fastify';
 import { IS_PUBLIC } from '../decorators/public.decorator';
-import { JwtPayload } from '../interfaces/jwt-payload.interface';
+import { JwtClaims, JwtPayload } from '../interfaces/jwt-payload.interface';
 import { PrismaService } from '../../prisma/prisma.service';
 
 /** Cada cuánto, como máximo, se persiste `lastAccessAt` de un mismo usuario. */
@@ -77,7 +77,7 @@ export class JwtGuard implements CanActivate, OnModuleDestroy {
    *         si muestra «sesión expirada» o «sesión revocada».
    */
   private async resolveIdentity(token: string): Promise<JwtPayload> {
-    const payload = await this.jwtService.verifyAsync<JwtPayload>(token);
+    const payload = await this.jwtService.verifyAsync<JwtClaims & Pick<JwtPayload, 'iat' | 'exp'>>(token);
 
     if (!payload?.sub) {
       throw new UnauthorizedException('Token inválido o expirado.');

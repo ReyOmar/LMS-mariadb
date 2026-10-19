@@ -1,9 +1,10 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { Users } from 'lucide-react';
 import { useDebounce } from '@/hooks/useDebounce';
-import { useLiveRefresh } from '@/hooks/useLiveRefresh';
+import { useLiveData } from '@/hooks/useLiveData';
+import api from '@/lib/api';
 import { useCountry } from '@/contexts/CountryContext';
 import { formatNumber } from '@/lib/country';
 import { searchQuery } from '@/lib/search';
@@ -14,7 +15,6 @@ import type { MonitoringSummary } from '@/types/models';
 import { PageHeading } from '../components/PageHeading';
 import { SearchAndFilter } from '../components/SearchAndFilter';
 import { PagedListArea } from '../components/PagedListArea';
-import { useSummary } from '../hooks/useSummary';
 import { MonitoringOverview } from './components/MonitoringOverview';
 import { StudentList } from './components/StudentList';
 import { MONITORING_EVENTS, useMonitoredStudents, type MonitoringFilter } from './components/useMonitoredStudents';
@@ -35,14 +35,17 @@ export default function StudentMonitoringPage() {
     () => ({ course: course || undefined, search: appliedSearch || undefined }),
     [course, appliedSearch],
   );
-  const summary = useSummary<MonitoringSummary>('/dashboards/monitoring/summary', filter);
+  const fetchSummary = useCallback(async () => {
+    const { data } = await api.get<MonitoringSummary>('/dashboards/monitoring/summary', { params: filter });
+    return data;
+  }, [filter]);
+  const summary = useLiveData(fetchSummary, 'No se pudo cargar el monitoreo.', MONITORING_EVENTS);
   const students = useMonitoredStudents(filter);
-  useLiveRefresh(MONITORING_EVENTS, summary.reload);
 
   const stats = summary.data;
   if (!stats) {
     return summary.error ? (
-      <LoadFailed message={summary.error} onRetry={() => void summary.reload()} />
+      <LoadFailed message={summary.error} onRetry={summary.retry} />
     ) : (
       <PageLoader message="Cargando monitoreo de estudiantes..." />
     );

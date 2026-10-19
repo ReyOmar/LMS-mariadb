@@ -6,8 +6,9 @@ import { sessionFor } from '../common/testing/test-campus';
  * Intentos de cuestionario.
  *
  * Lo que se comprueba aquí es el límite de intentos —dos aperturas a la vez no pueden
- * saltárselo, y un intento abierto que ya no cabe en él no se califica— y que una vuelta
- * dada de baja o ya certificada no admite intentos nuevos.
+ * saltárselo, y un intento abierto que ya no cabe en él no se califica—, que una vuelta
+ * dada de baja o ya certificada no admite intentos nuevos y que el avance cambia con la nota,
+ * bajo el mismo bloqueo de la matrícula.
  */
 
 const STUDENT = sessionFor('STUDENT', 'COLOMBIA', 'alumna');
@@ -56,7 +57,17 @@ function quizService(state: QuizState) {
       },
       updateMany: jest.fn(async () => ({ count: 1 })),
     },
-    resourceProgress: { findUnique: async () => null },
+    resourceProgress: {
+      findUnique: async () => null,
+      upsert: jest.fn(async () => {
+        steps.push('aprobado');
+      }),
+      deleteMany: jest.fn(async () => {
+        steps.push('reinicio del módulo');
+        return { count: 1 };
+      }),
+    },
+    $executeRaw: async () => 1,
   };
   const prisma = {
     resource: {
@@ -69,10 +80,13 @@ function quizService(state: QuizState) {
   };
   const access = {
     studentResourceAccess: async () => COURSE,
-    unlockedResourceAccess: async () => COURSE,
+    ensureUnlocked: jest.fn(async () => {
+      steps.push('desbloqueo');
+    }),
   };
-  const service = new QuizService(prisma as never, access as never, { emit: () => true } as never, {} as never);
-  return { service, steps, transactionOptions, tx };
+  const realtime = { emitToCourseStaff: () => undefined };
+  const service = new QuizService(prisma as never, access as never, { emit: () => true } as never, realtime as never);
+  return { service, steps, transactionOptions, tx, access };
 }
 
 describe('QuizService · límite de intentos', () => {
@@ -82,7 +96,7 @@ describe('QuizService · límite de intentos', () => {
     await service.startAttempt('quiz-1', STUDENT);
 
     // Con el bloqueo primero, una segunda apertura simultánea espera y ve el intento ya creado.
-    expect(steps).toEqual(['bloqueo', 'recuento']);
+    expect(steps).toEqual(['bloqueo', 'desbloqueo', 'recuento']);
     expect(transactionOptions).toEqual([{ isolationLevel: 'ReadCommitted' }]);
   });
 
@@ -99,6 +113,38 @@ describe('QuizService · límite de intentos', () => {
     await expect(service.gradeAttempt('quiz-1', STUDENT, { p1: 'a' })).rejects.toThrow(/Has agotado/);
     expect(steps).toEqual(['bloqueo', 'recuento', 'descarte']);
     expect(state.draft).toBeNull();
+  });
+});
+
+describe('QuizService · avance', () => {
+  it('comprueba el desbloqueo con la matrícula ya bloqueada: un suspenso recién confirmado cuenta', async () => {
+    const { service, access, tx } = quizService({ used: 0, draft: null });
+
+    await service.startAttempt('quiz-1', STUDENT);
+
+    expect(access.ensureUnlocked).toHaveBeenCalledWith('curso-1', 'quiz-1', 'alumna', tx);
+  });
+
+  it('aprobar lo deja superado dentro de la transacción de la nota', async () => {
+    const { service, steps } = quizService({ used: 0, draft: { guid: 'abierto', startedAt: new Date() } });
+
+    const result = await service.gradeAttempt('quiz-1', STUDENT, { p1: 'a' });
+
+    expect(result.passed).toBe(true);
+    expect(steps).toEqual(['bloqueo', 'recuento', 'aprobado']);
+  });
+
+  it('suspender reinicia sólo el material del módulo, dentro de la transacción de la nota', async () => {
+    const { service, steps, tx } = quizService({ used: 0, draft: { guid: 'abierto', startedAt: new Date() } });
+
+    const result = await service.gradeAttempt('quiz-1', STUDENT, { p1: 'b' });
+
+    expect(result.passed).toBe(false);
+    expect(steps).toEqual(['bloqueo', 'recuento', 'reinicio del módulo']);
+    // Ni las tareas calificadas ni los cuestionarios ya aprobados: sólo el material de estudio.
+    expect(tx.resourceProgress.deleteMany).toHaveBeenCalledWith({
+      where: { userGuid: 'alumna', resource: { moduleGuid: 'm1', type: { not: 'ASSIGNMENT' } } },
+    });
   });
 });
 

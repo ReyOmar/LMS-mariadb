@@ -29,6 +29,7 @@ describe('CertificatesService — emisión del certificado', () => {
   type SubmissionWhere = {
     guid?: { in: string[] };
     userGuid?: string;
+    status?: string;
     assignmentGuid?: { in: string[] };
     attachmentKey?: { not: null } | { in: string[] };
     assignment?: { module: { courseGuid: string } };
@@ -55,10 +56,20 @@ describe('CertificatesService — emisión del certificado', () => {
     return (
       (!where.guid || where.guid.in.includes(row.guid)) &&
       (!where.userGuid || row.userGuid === where.userGuid) &&
+      (!where.status || row.status === where.status) &&
       (!where.assignmentGuid || where.assignmentGuid.in.includes(row.assignmentGuid)) &&
       (!where.assignment || row.courseGuid === where.assignment.module.courseGuid) &&
       (!key || ('in' in key ? key.in.includes(row.attachmentKey as string) : row.attachmentKey !== null))
     );
+  }
+
+  /** Lo confirmado en la base: cada transacción trabaja sobre una copia que sólo pasa aquí si se confirma. */
+  interface Committed {
+    active: boolean;
+    completedAt: Date | null;
+    certificates: number;
+    progress: string[];
+    submissions: SubmissionRow[];
   }
 
   interface Scenario {
@@ -66,6 +77,8 @@ describe('CertificatesService — emisión del certificado', () => {
     previousCertificates?: number;
     /** La vuelta actual ya está cerrada cuando se llega al bloqueo. */
     alreadyClosed?: boolean;
+    /** Lo que otra petición confirma entre la primera comprobación y el bloqueo. */
+    beforeLock?: (committed: Committed) => void;
     /** El registro del certificado falla. */
     failCreate?: boolean;
     /** La transacción termina su trabajo, pero la base no llega a confirmarla. */
@@ -78,6 +91,7 @@ describe('CertificatesService — emisión del certificado', () => {
   function setup({
     previousCertificates = 0,
     alreadyClosed = false,
+    beforeLock,
     failCreate = false,
     failCommit = false,
     failFileDeletion = false,
@@ -91,14 +105,19 @@ describe('CertificatesService — emisión del certificado', () => {
     const notifications: Record<string, unknown>[] = [];
     const staffEvents: unknown[][] = [];
 
-    // Lo confirmado. Cada transacción trabaja sobre una copia que sólo pasa aquí si se confirma.
-    let committed = {
-      completedAt: alreadyClosed ? COMPLETED_AT : (null as Date | null),
+    let committed: Committed = {
+      active: true,
+      completedAt: alreadyClosed ? COMPLETED_AT : null,
       certificates: previousCertificates,
+      progress: ['tarea-1', 'tarea-2'],
       submissions,
     };
 
-    function submissionTable(state: typeof committed) {
+    function progressTable(state: Committed) {
+      return { findMany: async () => state.progress.map((resourceGuid) => ({ resourceGuid })) };
+    }
+
+    function submissionTable(state: Committed) {
       return {
         findMany: async ({ where }: { where: SubmissionWhere }) =>
           state.submissions.filter((row) => matches(row, where)),
@@ -110,9 +129,9 @@ describe('CertificatesService — emisión del certificado', () => {
       };
     }
 
-    function transactionOn(state: typeof committed) {
+    function transactionOn(state: Committed) {
       return {
-        $queryRaw: async () => [{ active: 1, completedAt: state.completedAt }],
+        $queryRaw: async () => [{ active: Number(state.active), completedAt: state.completedAt }],
         certificate: {
           count: async () => state.certificates,
           create: async ({ data }: { data: Record<string, unknown> }) => {
@@ -129,6 +148,7 @@ describe('CertificatesService — emisión del certificado', () => {
             return { count: 1 };
           },
         },
+        resourceProgress: progressTable(state),
         submission: submissionTable(state),
       };
     }
@@ -138,8 +158,10 @@ describe('CertificatesService — emisión del certificado', () => {
     const none = { findMany: async () => [] };
 
     const prisma = {
-      enrollment: { findUnique: async () => ({ completedAt: committed.completedAt }) },
-      resourceProgress: { findMany: async () => [{ resourceGuid: 'tarea-1' }, { resourceGuid: 'tarea-2' }] },
+      enrollment: { findUnique: async () => ({ active: committed.active, completedAt: committed.completedAt }) },
+      get resourceProgress() {
+        return progressTable(committed);
+      },
       get submission() {
         return submissionTable(committed);
       },
@@ -151,6 +173,7 @@ describe('CertificatesService — emisión del certificado', () => {
       certificate: { findMany: async () => [] },
       $transaction: (callback: (client: ReturnType<typeof transactionOn>) => Promise<unknown>) => {
         const run = queue.then(async () => {
+          beforeLock?.(committed);
           const draft = structuredClone(committed);
           const result = await callback(transactionOn(draft));
           if (failCommit) throw new Error('Se perdió la conexión al confirmar');
@@ -163,7 +186,6 @@ describe('CertificatesService — emisión del certificado', () => {
       },
     };
     const access = {
-      ensureEnrollment: async () => undefined,
       getCourseResources: async () => [
         { guid: 'tarea-1', type: 'ASSIGNMENT', title: 'Informe' },
         { guid: 'tarea-2', type: 'ASSIGNMENT', title: 'Mapa de riesgos' },
@@ -186,27 +208,31 @@ describe('CertificatesService — emisión del certificado', () => {
       emitToCourseStaff: (...args: unknown[]) => staffEvents.push(args),
     };
     const mail = { sendCertificateIssued: async () => undefined, sendCourseCompleted: async () => undefined };
+    const gatheredWith: unknown[] = [];
     const data = {
-      gather: async () => ({
-        activeSeconds: 3600,
-        studentEmail: 'ana@ejemplo.com',
-        studentName: 'Ana',
-        teacherGuid: 'carlos',
-        teacherEmail: 'carlos@ejemplo.com',
-        teacherName: 'Carlos',
-        certificate: {
-          studentName: 'Ana Ramírez',
-          courseTitle: 'Manejo defensivo',
-          verificationCode: 'CERT-ABC123',
-          startedAt: new Date('2026-01-10T00:00:00Z'),
-          completedAt: COMPLETED_AT,
-          validUntil: null,
-          totalHours: 4,
-          averageScore: 90,
-          logoKey: 'logos/sede.png',
-          signatureKey: null,
-        },
-      }),
+      gather: async (db: unknown) => {
+        gatheredWith.push(db);
+        return {
+          activeSeconds: 3600,
+          studentEmail: 'ana@ejemplo.com',
+          studentName: 'Ana',
+          teacherGuid: 'carlos',
+          teacherEmail: 'carlos@ejemplo.com',
+          teacherName: 'Carlos',
+          certificate: {
+            studentName: 'Ana Ramírez',
+            courseTitle: 'Manejo defensivo',
+            verificationCode: 'CERT-ABC123',
+            startedAt: new Date('2026-01-10T00:00:00Z'),
+            completedAt: COMPLETED_AT,
+            validUntil: null,
+            totalHours: 4,
+            averageScore: 90,
+            logoKey: 'logos/sede.png',
+            signatureKey: null,
+          },
+        };
+      },
       // Componer el PDF de verdad no aporta nada aquí: lo cubre `certificate-pdf.spec.ts`.
       compose: async () => Buffer.from('%PDF-1.7'),
     };
@@ -232,6 +258,7 @@ describe('CertificatesService — emisión del certificado', () => {
 
     return {
       service,
+      gatheredWith,
       steps,
       saved,
       deleted,
@@ -339,6 +366,44 @@ describe('CertificatesService — emisión del certificado', () => {
     expect(saved).toHaveLength(1);
     expect(steps.filter((step) => step === 'marcar entregas')).toHaveLength(1);
     expect(deleted).toEqual(['entregas/informe.pdf', 'entregas/mapa-de-riesgos.pdf']);
+  });
+
+  it('una calificación suspensa confirmada entre la comprobación y el bloqueo deja sin certificado', async () => {
+    // El examinador cambia un aprobado por un suspenso: se retira el avance de la tarea.
+    const { service, saved, created, deleted, notifications } = setup({
+      beforeLock: (committed) => {
+        committed.progress = ['tarea-1'];
+      },
+    });
+
+    await service.issueIfEligible('curso-1', 'ana', 'COLOMBIA');
+    await settle();
+
+    expect(created).toEqual([]);
+    expect(saved).toEqual([]);
+    expect(deleted).toEqual([]);
+    expect(notifications).toEqual([]);
+  });
+
+  it('una baja confirmada entre la comprobación y el bloqueo deja sin certificado', async () => {
+    const { service, created, saved } = setup({
+      beforeLock: (committed) => {
+        committed.active = false;
+      },
+    });
+
+    await service.issueIfEligible('curso-1', 'ana', 'COLOMBIA');
+
+    expect(created).toEqual([]);
+    expect(saved).toEqual([]);
+  });
+
+  it('lo que dice el diploma se lee dentro de la transacción, con la matrícula bloqueada', async () => {
+    const { service, gatheredWith } = setup();
+
+    await service.issueIfEligible('curso-1', 'ana', 'COLOMBIA');
+
+    expect(gatheredWith).toEqual([expect.objectContaining({ $queryRaw: expect.any(Function) })]);
   });
 
   it('numera la vuelta a partir de los certificados anteriores del curso', async () => {

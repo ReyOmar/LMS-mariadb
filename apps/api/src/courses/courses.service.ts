@@ -18,6 +18,7 @@ import { percent } from '../common/domain/progress';
 import { plural } from '../common/domain/text';
 import { JwtPayload } from '../common/interfaces/jwt-payload.interface';
 import { CourseStatus, CreateCourseDto, UpdateCourseDto } from './dto/courses.dto';
+import { lockCourseCapacity, occupiedSeats } from '../enrollments/course-capacity';
 
 /** Campos que bastan para pintar una tarjeta de curso en cualquier listado. */
 const COURSE_SUMMARY = {
@@ -67,6 +68,18 @@ function timeLimitOf(stored: string | null): number {
   }
 }
 
+/**
+ * Lo que se puede cambiar de un curso publicado: su estado y su cupo. El resto de la ficha —la
+ * nota mínima, el orden, las horas que acredita— rige lo que ya están haciendo sus alumnos, y
+ * como el contenido sólo se cambia en Borrador.
+ */
+const LIVE_FIELDS: ReadonlySet<string> = new Set<keyof UpdateCourseDto>(['status', 'maxStudents']);
+
+/** Si el DTO cambia algo de la ficha que sólo se edita en Borrador. */
+function changesDraftOnlyFields(dto: UpdateCourseDto): boolean {
+  return Object.entries(dto).some(([field, value]) => value !== undefined && !LIVE_FIELDS.has(field));
+}
+
 /** Lo que el DTO cambia de la ficha de un curso. */
 function courseChanges(dto: UpdateCourseDto): Prisma.CourseUpdateInput {
   return {
@@ -80,9 +93,6 @@ function courseChanges(dto: UpdateCourseDto): Prisma.CourseUpdateInput {
     ...(dto.passingScore !== undefined && { passingScore: dto.passingScore }),
     ...(dto.strictOrder !== undefined && { strictOrder: dto.strictOrder }),
     ...(dto.maxStudents !== undefined && { maxStudents: dto.maxStudents }),
-    ...(dto.accessCode !== undefined && { accessCode: dto.accessCode || null }),
-    ...(dto.startDate !== undefined && { startDate: dto.startDate ? new Date(dto.startDate) : null }),
-    ...(dto.endDate !== undefined && { endDate: dto.endDate ? new Date(dto.endDate) : null }),
   };
 }
 
@@ -281,11 +291,17 @@ export class CoursesService {
 
   /** Actualiza la ficha del curso con todo lo que admite el DTO. */
   async updateCourse(courseGuid: string, dto: UpdateCourseDto, user: JwtPayload) {
-    const course = await this.access.managedCourse(courseGuid, user);
+    const course = changesDraftOnlyFields(dto)
+      ? await this.access.editableCourse(courseGuid, user)
+      : await this.access.managedCourse(courseGuid, user);
 
-    if (dto.status !== undefined && dto.status !== course.status) {
-      await this.validateStatusChange(course, dto.status);
+    if (dto.passingScore !== undefined && dto.passingScore !== Number(course.passingScore)) {
+      await this.ensureNothingGraded(courseGuid);
     }
+
+    // Guardar el estado que ya tenía no es un cambio: no se valida ni se avisa a nadie.
+    const newStatus = dto.status !== undefined && dto.status !== course.status ? dto.status : null;
+    if (newStatus) await this.validateStatusChange(course, newStatus);
 
     const previous =
       dto.coverImage !== undefined
@@ -294,11 +310,14 @@ export class CoursesService {
     const cover = { folder: 'portadas' as const, current: previous?.coverImage, next: dto.coverImage };
 
     const updated = await this.files.replace([cover], { uploader: user.sub }, () =>
-      this.prisma.course.update({ where: { guid: courseGuid }, data: courseChanges(dto), select: COURSE_SUMMARY }),
+      this.prisma.$transaction(async (tx) => {
+        if (dto.maxStudents) await this.ensureSeatsFit(tx, courseGuid, dto.maxStudents);
+        return tx.course.update({ where: { guid: courseGuid }, data: courseChanges(dto), select: COURSE_SUMMARY });
+      }),
     );
 
     const students = await this.enrolledStudents(courseGuid);
-    if (updated.status === 'DRAFT' && course.status !== 'DRAFT') {
+    if (newStatus === 'DRAFT') {
       this.realtime.emitToUsers('course:maintenance', { courseGuid }, user.country, students);
     }
     this.emitToCourseAudience(
@@ -309,10 +328,38 @@ export class CoursesService {
       students,
     );
 
-    if (updated.status !== course.status) {
-      await this.announceStatusChange(updated.guid, updated.title, updated.status, user.country);
-    }
+    if (newStatus) await this.announceStatusChange(updated.guid, updated.title, newStatus, user.country);
     return updated;
+  }
+
+  /**
+   * La nota mínima ya decidió quién aprobó lo que está calificado, y con ello el avance de cada
+   * alumno: cambiarla después dejaría notas que dicen una cosa y avances que dicen otra.
+   */
+  private async ensureNothingGraded(courseGuid: string): Promise<void> {
+    const graded = await this.prisma.submission.findFirst({
+      where: { status: 'GRADED', assignment: { module: { courseGuid } } },
+      select: { guid: true },
+    });
+    if (graded) {
+      throw new BadRequestException(
+        'La nota mínima ya no puede cambiarse: hay tareas o cuestionarios calificados con la actual.',
+      );
+    }
+  }
+
+  /**
+   * Un cupo por debajo de los ya matriculados no se cumpliría. Con la fila del curso bloqueada,
+   * como al matricular: nadie ocupa una plaza entre el recuento y el cambio.
+   */
+  private async ensureSeatsFit(tx: Prisma.TransactionClient, courseGuid: string, maxStudents: number): Promise<void> {
+    await lockCourseCapacity(tx, courseGuid);
+    const occupied = await occupiedSeats(tx, courseGuid);
+    if (occupied > maxStudents) {
+      throw new BadRequestException(
+        `El curso ya tiene ${occupied} ${plural(occupied, 'estudiante matriculado', 'estudiantes matriculados')}: el cupo no puede ser menor.`,
+      );
+    }
   }
 
   /**
@@ -369,8 +416,6 @@ export class CoursesService {
     status: CourseStatus,
     country: Country,
   ): Promise<void> {
-    if (status === 'ARCHIVED') return;
-
     const enrolledStudents = await this.prisma.enrollment.findMany({
       where: { courseGuid, active: true, completedAt: null },
       select: { user: { select: { guid: true, email: true, firstName: true } } },

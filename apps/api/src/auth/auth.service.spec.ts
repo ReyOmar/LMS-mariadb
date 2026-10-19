@@ -191,7 +191,10 @@ describe('AuthService · lo que se revela sin la contraseña', () => {
  * antiguo, la clave temporal de la aprobación saldría hacia un buzón ajeno.
  */
 describe('AuthService · enviar una solicitud de acceso', () => {
-  function requestService(previous: { id: number; email: string; status: string } | null) {
+  function requestService(
+    previous: { id: number; email: string; status: string } | null,
+    { verified = true, registered = false } = {},
+  ) {
     const updates: { where: unknown; data: Record<string, unknown> }[] = [];
     const created: Record<string, unknown>[] = [];
     const tx = {
@@ -205,8 +208,8 @@ describe('AuthService · enviar una solicitud de acceso', () => {
       },
     };
     const prisma = {
-      user: { findUnique: async () => null, findMany: async () => [] },
-      emailVerification: { findFirst: async () => ({ id: 1, verified: true }) },
+      user: { findUnique: async () => (registered ? { guid: 'ana' } : null), findMany: async () => [] },
+      emailVerification: { findFirst: async () => (verified ? { id: 1, verified: true } : null) },
       accessRequest: { findUnique: async () => previous },
       $transaction: async (fn: (client: typeof tx) => unknown) => fn(tx),
     };
@@ -238,6 +241,12 @@ describe('AuthService · enviar una solicitud de acceso', () => {
     expect(updates).toEqual([
       { where: { id: 3 }, data: expect.objectContaining({ email: 'juan@empresa.com', status: 'PENDING' }) },
     ]);
+  });
+
+  it('sin el correo verificado no dice si tiene cuenta: eso se sabe sólo con el buzón probado', async () => {
+    const { service } = requestService(null, { verified: false, registered: true });
+
+    await expect(service.requestAccess(DTO as never)).rejects.toThrow('Verifica tu correo electrónico');
   });
 
   it('sin solicitud anterior la crea con el correo escrito', async () => {
@@ -467,10 +476,14 @@ describe('AuthService · confirmar el código de verificación', () => {
  * el paso a escribirlo.
  */
 describe('AuthService · pedir el código de verificación', () => {
-  function codeService(recent: { createdAt: Date } | null, request: { status: string } | null = null) {
+  function codeService(
+    recent: { createdAt: Date } | null,
+    request: { status: string; country: string } | null = null,
+    account: { firstName: string; country: string } | null = null,
+  ) {
     const created: unknown[] = [];
     const prisma = {
-      user: { findUnique: async () => null },
+      user: { findUnique: async () => account },
       accessRequest: { findUnique: async () => request },
       emailVerification: {
         findFirst: async () => recent,
@@ -482,10 +495,17 @@ describe('AuthService · pedir el código de verificación', () => {
       },
       $transaction: async (operations: Promise<unknown>[]) => Promise.all(operations),
     };
-    const mail = { sendVerificationCode: jest.fn().mockResolvedValue(true) };
+    const mail = {
+      sendVerificationCode: jest.fn().mockResolvedValue(undefined),
+      sendAccountExists: jest.fn().mockResolvedValue(undefined),
+      sendAccessRequestPending: jest.fn().mockResolvedValue(undefined),
+    };
     const service = new AuthService(prisma as never, {} as never, mail as never, {} as never, {} as never);
     return { service, created, mail };
   }
+
+  /** Deja correr el envío, que no se espera. */
+  const settle = () => new Promise((resolve) => setImmediate(resolve));
 
   it('envía un código nuevo y dice cuándo se podrá pedir otro', async () => {
     const { service, created, mail } = codeService(null);
@@ -493,6 +513,7 @@ describe('AuthService · pedir el código de verificación', () => {
     await expect(service.requestVerificationCode('nueva@pesv.test', 'COLOMBIA')).resolves.toMatchObject({
       resendInSeconds: 60,
     });
+    await settle();
     expect(created).toHaveLength(1);
     expect(mail.sendVerificationCode).toHaveBeenCalledTimes(1);
   });
@@ -508,17 +529,38 @@ describe('AuthService · pedir el código de verificación', () => {
     expect(mail.sendVerificationCode).not.toHaveBeenCalled();
   });
 
-  it('con una solicitud pendiente lo dice antes de enviar ningún código', async () => {
-    const { service, mail } = codeService(null, { status: 'PENDING' });
+  it('a un correo con cuenta le responde lo mismo, y es su buzón el que recibe cómo entrar', async () => {
+    const fresh = codeService(null);
+    const registered = codeService(null, null, { firstName: 'Ana', country: 'MEXICO' });
 
-    await expect(service.requestVerificationCode('nueva@pesv.test', 'COLOMBIA')).rejects.toThrow(/pendiente/);
+    const forFresh = await fresh.service.requestVerificationCode('nueva@pesv.test', 'COLOMBIA');
+    const forRegistered = await registered.service.requestVerificationCode('ana@pesv.test', 'COLOMBIA');
+    await settle();
+
+    expect(forRegistered).toEqual(forFresh);
+    // Se guarda un código igual: uno equivocado tiene que responder lo mismo que para cualquiera.
+    expect(registered.created).toHaveLength(1);
+    expect(registered.mail.sendVerificationCode).not.toHaveBeenCalled();
+    expect(registered.mail.sendAccountExists).toHaveBeenCalledWith('ana@pesv.test', 'Ana', 'MEXICO');
+  });
+
+  it('con una solicitud pendiente responde lo mismo y avisa de ella al buzón, en lugar del código', async () => {
+    const { service, mail } = codeService(null, { status: 'PENDING', country: 'COLOMBIA' });
+
+    await expect(service.requestVerificationCode('nueva@pesv.test', 'COLOMBIA')).resolves.toMatchObject({
+      resendInSeconds: 60,
+    });
+    await settle();
+
     expect(mail.sendVerificationCode).not.toHaveBeenCalled();
+    expect(mail.sendAccessRequestPending).toHaveBeenCalledWith('nueva@pesv.test', 'COLOMBIA');
   });
 
   it('tras un rechazo se puede volver a solicitar', async () => {
-    const { service, mail } = codeService(null, { status: 'REJECTED' });
+    const { service, mail } = codeService(null, { status: 'REJECTED', country: 'COLOMBIA' });
 
     await service.requestVerificationCode('nueva@pesv.test', 'COLOMBIA');
+    await settle();
     expect(mail.sendVerificationCode).toHaveBeenCalledTimes(1);
   });
 });

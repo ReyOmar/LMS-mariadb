@@ -28,7 +28,7 @@ export const CERTIFICATE_TEXT = {
   verification: 'Código de verificación institucional',
 } as const;
 
-/** Con más, el texto legal del PDF invade la fila de cifras, que se dibuja a una altura fija. */
+/** El tope de la API (`apps/api/src/certificates/certificate-pdf.ts`): con más, el texto legal invade la fila de cifras. */
 export const MAX_LEGAL_TEXT_LENGTH = 280;
 
 export const SAMPLE_CERTIFICATE = {

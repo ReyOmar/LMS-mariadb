@@ -1,9 +1,10 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { PrismaService } from '../prisma/prisma.service';
 import { SettingsService } from '../settings/settings.service';
-import { CourseAccessService } from '../courses/course-access.service';
+import { CourseAccessService, UNENROLLED_MESSAGE } from '../courses/course-access.service';
 import { recordCompletion } from '../courses/resource-progress';
+import { AFTER_LOCK, ClosedRoundMessages, assertRoundOpen, lockEnrollment } from '../enrollments/enrollment-lock';
 import { AWAITING_GRADE, waitedTooLong } from '../courses/progression';
 import { averageOfScores } from '../common/domain/grading';
 import { percent } from '../common/domain/progress';
@@ -21,6 +22,11 @@ import { emitEvent } from '../common/domain/domain-events';
  * el intervalo, este número tiene que acompañarlo.
  */
 const SESSION_CUTOFF_SECONDS = 150;
+
+const PROGRESS_CLOSED: ClosedRoundMessages = {
+  unenrolled: UNENROLLED_MESSAGE,
+  certified: 'Ya terminaste este curso: tu avance quedó cerrado con tu certificado.',
+};
 
 /** Primer instante del mes indicado (0–11; 12 es enero del año siguiente) en la zona de la sede. */
 function monthStart(year: number, month: number, timeZone: string): Date {
@@ -119,26 +125,29 @@ export class StudentsService {
    * aprobarlos, no porque el navegador diga que se leyeron. Con orden estricto, el recurso
    * tiene que estar desbloqueado.
    */
-  async markResourceCompleted(resourceGuid: string, user: JwtPayload) {
-    const course = await this.access.unlockedResourceAccess(resourceGuid, user);
+  async markResourceCompleted(resourceGuid: string, user: JwtPayload): Promise<void> {
+    const course = await this.access.studentResourceAccess(resourceGuid, user);
 
     const resource = await this.prisma.resource.findUnique({
       where: { guid: resourceGuid },
       select: { type: true, quizConfig: true },
     });
-    if (!resource) {
-      return { completed: false, reason: 'El recurso ya no existe.' };
-    }
+    if (!resource) throw new NotFoundException('El recurso ya no existe.');
     if (resource.type === 'ASSIGNMENT') {
-      return {
-        completed: false,
-        reason: resource.quizConfig
+      throw new BadRequestException(
+        resource.quizConfig
           ? 'Este cuestionario se completa al aprobarlo.'
           : 'Esta tarea se completa cuando el examinador la califica.',
-      };
+      );
     }
 
-    await recordCompletion(this.prisma, user.sub, resourceGuid, course.guid);
+    // Con la matrícula bloqueada, como la nota de un cuestionario: si un suspenso acaba de
+    // devolver al alumno al principio del módulo, este recurso puede haber dejado de tocarle.
+    await this.prisma.$transaction(async (tx) => {
+      assertRoundOpen(await lockEnrollment(tx, user.sub, course.guid), PROGRESS_CLOSED);
+      await this.access.ensureUnlocked(course.guid, resourceGuid, user.sub, tx);
+      await recordCompletion(tx, user.sub, resourceGuid, course.guid);
+    }, AFTER_LOCK);
 
     // Completar un recurso puede ser lo último que faltaba para el certificado.
     emitEvent(this.events, 'progress.updated', {
@@ -146,8 +155,6 @@ export class StudentsService {
       country: user.country,
       courseGuid: course.guid,
     });
-
-    return { completed: true };
   }
 
   // ── Métricas ─────────────────────────────────────────────────────────────

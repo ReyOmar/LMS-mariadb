@@ -173,22 +173,9 @@ export class AuthService {
    * Al sustituirse `currentSessionJti`, el token anterior deja de valer en la siguiente
    * petición: el guardián sólo acepta el que coincide.
    */
-  private async issueToken(user: {
-    guid: string;
-    email: string;
-    role: UserRole;
-    country: Country;
-    currentSessionJti?: string | null;
-  }): Promise<string> {
+  private async issueToken(user: { guid: string; currentSessionJti?: string | null }): Promise<string> {
     const jti = crypto.randomUUID();
-    const claims: JwtClaims = {
-      sub: user.guid,
-      jti,
-      email: user.email,
-      role: user.role,
-      country: user.country,
-    };
-
+    const claims: JwtClaims = { sub: user.guid, jti };
     const token = await this.jwtService.signAsync(claims);
 
     await this.prisma.user.update({ where: { guid: user.guid }, data: { currentSessionJti: jti } });
@@ -225,23 +212,24 @@ export class AuthService {
   /**
    * Registra una solicitud de acceso a una sede.
    * Exige que el correo haya sido verificado antes y consume esa verificación, para que un
-   * mismo código no sirva para solicitudes repetidas.
+   * mismo código no sirva para solicitudes repetidas. Sólo después, con el buzón ya probado,
+   * se dice si el correo tiene cuenta: antes serviría para averiguar quién está registrado.
    */
   async requestAccess(dto: RequestAccessDto) {
-    const alreadyExists = await this.prisma.user.findUnique({
-      where: { email: dto.email },
-      select: { guid: true },
-    });
-    if (alreadyExists) {
-      throw new BadRequestException('Este correo ya tiene una cuenta. Inicia sesión directamente.');
-    }
-
     const verification = await this.prisma.emailVerification.findFirst({
       where: { email: dto.email, verified: true, expiresAt: { gt: new Date() } },
       orderBy: { createdAt: 'desc' },
     });
     if (!verification) {
       throw new BadRequestException('Verifica tu correo electrónico antes de enviar la solicitud.');
+    }
+
+    const alreadyExists = await this.prisma.user.findUnique({
+      where: { email: dto.email },
+      select: { guid: true },
+    });
+    if (alreadyExists) {
+      throw new BadRequestException('Este correo ya tiene una cuenta. Inicia sesión directamente.');
     }
 
     const existing = await this.prisma.accessRequest.findUnique({ where: { email: dto.email } });
@@ -472,22 +460,15 @@ export class AuthService {
   /**
    * Envía un código de 6 dígitos para probar que el correo pertenece a quien solicita acceso.
    *
+   * La respuesta es la misma tenga o no cuenta el correo, o una solicitud pendiente: si no,
+   * cualquiera podría averiguar qué correos están registrados. Quien ya tiene una u otra
+   * recibe en su buzón, en lugar del código, el aviso de cómo seguir: sólo su dueño se entera.
+   *
    * Responde con los segundos que faltan para poder pedir otro. Quien lo vuelve a pedir antes
    * de tiempo —recargó la página o volvió atrás— ya tiene un código válido en su bandeja: no
    * se le envía otro, pero tampoco se le cierra el paso a escribir el que tiene.
    */
   async requestVerificationCode(email: string, country: Country) {
-    const alreadyExists = await this.prisma.user.findUnique({ where: { email }, select: { guid: true } });
-    if (alreadyExists) {
-      throw new BadRequestException('Este correo ya tiene una cuenta. Inicia sesión directamente.');
-    }
-
-    // Se dice ya en el primer paso, y no después de verificar el correo y rellenar los datos.
-    const request = await this.prisma.accessRequest.findUnique({ where: { email }, select: { status: true } });
-    if (request?.status === 'PENDING') {
-      throw new BadRequestException(REQUEST_PENDING);
-    }
-
     const recent = await this.prisma.emailVerification.findFirst({
       where: { email, createdAt: { gt: new Date(Date.now() - RESEND_DELAY_MS) } },
       select: { createdAt: true },
@@ -509,15 +490,29 @@ export class AuthService {
       }),
     ]);
 
+    // El código se guarda también para quien no lo va a recibir: un código equivocado tiene que
+    // responder igual, con los intentos que quedan, tenga o no cuenta el correo.
     // El envío no se espera, como en el resto de correos: con el proveedor lento o caído la
-    // respuesta tardaría lo que sus reintentos —cerca de un minuto— para decir lo mismo.
-    this.mail
-      .sendVerificationCode(email, code, country)
-      .catch((error) => this.logger.error('No se pudo enviar el código de verificación', error));
+    // respuesta tardaría lo que sus reintentos —cerca de un minuto— para decir lo mismo; y lo
+    // que tarde averiguar qué correo toca tampoco delata nada.
+    this.deliverVerification(email, code, country).catch((error) =>
+      this.logger.error('No se pudo enviar el correo de verificación', error),
+    );
     return {
-      message: 'Te enviamos un código de verificación a tu correo electrónico.',
+      message: 'Revisa tu correo electrónico: te enviamos un código de verificación.',
       resendInSeconds: RESEND_DELAY_MS / 1000,
     };
+  }
+
+  /** El código o, si el correo ya tiene cuenta o una solicitud en revisión, el aviso de ello. */
+  private async deliverVerification(email: string, code: string, country: Country): Promise<void> {
+    const [account, request] = await Promise.all([
+      this.prisma.user.findUnique({ where: { email }, select: { firstName: true, country: true } }),
+      this.prisma.accessRequest.findUnique({ where: { email }, select: { status: true, country: true } }),
+    ]);
+    if (account) return this.mail.sendAccountExists(email, account.firstName, account.country);
+    if (request?.status === 'PENDING') return this.mail.sendAccessRequestPending(email, request.country);
+    return this.mail.sendVerificationCode(email, code, country);
   }
 
   /**

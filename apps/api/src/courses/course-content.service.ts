@@ -35,7 +35,6 @@ function resourceChanges(dto: UpdateResourceDto, quizConfig: string | null): Pri
     ...(dto.attachmentName !== undefined && { attachmentName: dto.attachmentName }),
     ...(dto.quizConfig !== undefined && { quizConfig }),
     ...(dto.maxUploadMb !== undefined && { maxUploadMb: dto.maxUploadMb }),
-    ...(dto.readingMinutes !== undefined && { readingMinutes: dto.readingMinutes }),
   };
 }
 
@@ -74,7 +73,6 @@ export class CourseContentService {
       data: {
         ...(dto.title !== undefined && { title: dto.title }),
         ...(dto.description !== undefined && { description: dto.description }),
-        ...(dto.requiresPrevious !== undefined && { requiresPrevious: dto.requiresPrevious }),
       },
     });
   }
@@ -84,17 +82,6 @@ export class CourseContentService {
     await this.access.editableCourseOfModule(moduleGuid, user);
     await this.removal.remove({ moduleGuid });
     return { message: 'Módulo eliminado.' };
-  }
-
-  /** Reordena los módulos de un curso según la lista recibida. */
-  async reorderModules(courseGuid: string, guids: string[], user: JwtPayload) {
-    await this.access.editableCourse(courseGuid, user);
-
-    const existing = await this.prisma.courseModule.findMany({ where: { courseGuid }, select: { guid: true } });
-    await this.saveOrder(guids, existing, (guid, position) =>
-      this.prisma.courseModule.update({ where: { guid }, data: { position } }),
-    );
-    return { message: 'Orden actualizado.' };
   }
 
   // ── Recursos ─────────────────────────────────────────────────────────────

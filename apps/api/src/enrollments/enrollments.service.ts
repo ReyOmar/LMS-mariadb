@@ -11,6 +11,7 @@ import { MIN_SEARCH_LENGTH, searchTerm } from '../common/domain/search';
 import { MIN_SCORE } from '../common/domain/grading';
 import { plural } from '../common/domain/text';
 import { SubmissionFilesService } from '../certificates/submission-files.service';
+import { lockCourseCapacity, occupiedSeats } from './course-capacity';
 
 /** Candidatos que se ofrecen de una vez; con más, se afina la búsqueda. */
 const VISIBLE_CANDIDATES = 50;
@@ -149,7 +150,7 @@ export class EnrollmentsService {
     }
 
     const { enrollment, retiredFiles } = await this.prisma.$transaction(async (tx) => {
-      const maxStudents = await this.lockCourse(tx, courseGuid);
+      const maxStudents = await lockCourseCapacity(tx, courseGuid);
 
       const previous = await tx.enrollment.findUnique({
         where: { userGuid_courseGuid: { userGuid: studentGuid, courseGuid } },
@@ -343,24 +344,11 @@ export class EnrollmentsService {
     return { enrollment, retiredFiles };
   }
 
-  /**
-   * Bloquea la fila del curso hasta el final de la transacción y devuelve su cupo.
-   * Es la primera lectura de la transacción: lo que se lea después ya incluye las altas de
-   * quien tenía el bloqueo antes.
-   */
-  private async lockCourse(tx: Prisma.TransactionClient, courseGuid: string): Promise<number | null> {
-    const [course] = await tx.$queryRaw<{ maxStudents: number | null }[]>`
-      SELECT max_estudiantes AS maxStudents FROM lms_cursos WHERE guid = ${courseGuid} FOR UPDATE`;
-    if (!course) throw new NotFoundException('Curso no encontrado.');
-    return course.maxStudents === null ? null : Number(course.maxStudents);
-  }
-
   /** Impide superar el cupo declarado del curso. */
   private async checkCapacity(tx: Prisma.TransactionClient, courseGuid: string, maxStudents: number | null) {
     if (!maxStudents) return;
 
-    const enrolledCount = await tx.enrollment.count({ where: { courseGuid, active: true } });
-    if (enrolledCount >= maxStudents) {
+    if ((await occupiedSeats(tx, courseGuid)) >= maxStudents) {
       throw new BadRequestException(
         `El curso ha alcanzado su cupo máximo de ${maxStudents} ${plural(maxStudents, 'estudiante', 'estudiantes')}. Amplíalo desde la ficha del curso para poder matricular a más.`,
       );

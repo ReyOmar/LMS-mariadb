@@ -116,8 +116,8 @@ function validateSecret(config: ConfigService, logger: Logger): void {
 async function registerPlugins(app: NestFastifyApplication, logger: Logger): Promise<void> {
   await app.register(compress, {
     global: true,
-    // El flujo de eventos en tiempo real no se comprime: la compresión bufferiza y los
-    // mensajes no llegarían hasta acumular suficiente contenido.
+    // El flujo de eventos en tiempo real no pasa por aquí: se toma con `hijack()` y lo comprime
+    // `event-stream.ts` evento a evento. Se excluye igual, porque este plugin lo retendría.
     customTypes: /^(?!text\/event-stream)(text\/|application\/(json|javascript|xml))/,
   });
 

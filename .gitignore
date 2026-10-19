@@ -6,23 +6,15 @@ dist
 .next
 apps/client/prod
 *.tsbuildinfo
-.turbo
-
-# Paquetes de despliegue generados
-*.zip
+coverage/
 
 # Entorno: nunca se versiona, ver .env.example
 .env
 .env.*
 !.env.example
 
-# Base de datos local y archivos subidos
+# Archivos subidos en desarrollo
 apps/api/uploads/
-apps/api/prisma/*.db
-*.sqlite
-
-# Código generado por Prisma
-generated/
 
 # Registros y temporales del sistema
 *.log
@@ -31,7 +23,6 @@ generated/
 # Editores
 .vscode/
 .idea/
-
 
 # Paquetes para cPanel (npm run package:cpanel)
 despliegue/

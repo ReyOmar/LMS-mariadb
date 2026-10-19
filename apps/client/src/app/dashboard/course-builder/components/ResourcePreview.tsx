@@ -3,6 +3,7 @@
 import { useEffect, type ReactNode } from 'react';
 import { AlertTriangle, CheckCircle, Edit3, Trash2, UploadCloud } from 'lucide-react';
 import { sanitizeHTML } from '@/lib/sanitize';
+import { hasContent } from '@/lib/editor-html';
 import { displayTitle } from '@/lib/resources';
 import type { Resource } from '@/types/models';
 import { ResourceTarget } from '@/components/resources/ResourceTarget';
@@ -23,7 +24,6 @@ const NO_INSTRUCTIONS = '<p class="text-muted-foreground italic opacity-70">No h
 /** Cómo verá el alumno el recurso. Entregar y responder quedan inertes: es el curso propio. */
 export function ResourcePreview({ resource, readOnly, onEdit, onDelete }: Props) {
   const { kind, Icon, colorClass } = resourcePresentation(resource);
-  const html = resource.contentHtml ?? '';
 
   useEffect(() => {
     if (kind === 'LINK') import('@justinribeiro/lite-youtube').catch(() => undefined);
@@ -74,7 +74,9 @@ export function ResourcePreview({ resource, readOnly, onEdit, onDelete }: Props)
           <>
             <div
               className="prose dark:prose-invert max-w-none bg-muted/10 p-4 sm:p-8 rounded-2xl border border-border/50 shadow-inner"
-              dangerouslySetInnerHTML={sanitizeHTML(html || NO_CONTENT)}
+              dangerouslySetInnerHTML={sanitizeHTML(
+                hasContent(resource.contentHtml) ? resource.contentHtml : NO_CONTENT,
+              )}
             />
             <ResourceExtras resource={resource} />
           </>
@@ -154,7 +156,9 @@ function Simulation({
         </h3>
         <div
           className="prose dark:prose-invert max-w-none text-foreground"
-          dangerouslySetInnerHTML={sanitizeHTML(resource.contentHtml || NO_INSTRUCTIONS)}
+          dangerouslySetInnerHTML={sanitizeHTML(
+            hasContent(resource.contentHtml) ? resource.contentHtml : NO_INSTRUCTIONS,
+          )}
         />
         <ResourceExtras resource={resource} />
       </div>

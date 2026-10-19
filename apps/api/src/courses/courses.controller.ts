@@ -97,12 +97,6 @@ export class CoursesController {
   }
 
   @Roles('ADMIN', 'TEACHER')
-  @Patch('/:courseGuid/modules/order')
-  reorderModules(@CurrentUser() user: JwtPayload, @Param('courseGuid') courseGuid: string, @Body() dto: ReorderDto) {
-    return this.content.reorderModules(courseGuid, dto.guids, user);
-  }
-
-  @Roles('ADMIN', 'TEACHER')
   @Patch('/modules/:moduleGuid')
   updateModule(@CurrentUser() user: JwtPayload, @Param('moduleGuid') moduleGuid: string, @Body() dto: UpdateModuleDto) {
     return this.content.updateModule(moduleGuid, dto, user);

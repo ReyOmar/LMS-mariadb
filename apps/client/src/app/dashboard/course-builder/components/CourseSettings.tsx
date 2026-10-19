@@ -57,15 +57,15 @@ export function CourseSettings({ course, readOnly, cover, onSave }: Props) {
           onSave={onSave}
         />
 
+        {/* El cupo no cambia lo que hacen los alumnos: se amplía también con el curso publicado. */}
         <NumberSetting
           icon={Users}
           title="Cupo máximo de estudiantes"
-          hint="Cuántos estudiantes puede haber matriculados a la vez. Déjalo vacío para no poner límite."
+          hint="Cuántos estudiantes puede haber cursándolo a la vez; quien ya se certificó no ocupa plaza. Déjalo vacío para no poner límite."
           unit="estudiantes"
           placeholder="Sin límite"
           min={1}
           defaultValue={course.maxStudents}
-          readOnly={readOnly}
           parse={parseCapacity}
           onSave={onSave}
         />
@@ -143,7 +143,7 @@ interface NumberSettingProps extends Omit<SettingProps, 'error' | 'children'> {
   min: number;
   max?: number;
   defaultValue: number | null | undefined;
-  readOnly: boolean;
+  readOnly?: boolean;
   parse: (typed: string) => FieldInput<Partial<Course>>;
   onSave: (changes: Partial<Course>) => void;
 }
@@ -155,7 +155,7 @@ function NumberSetting({
   min,
   max,
   defaultValue,
-  readOnly,
+  readOnly = false,
   parse,
   onSave,
   ...setting

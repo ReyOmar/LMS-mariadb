@@ -33,11 +33,11 @@ export interface JwtPayload {
   exp: number;
 }
 
-/** Claims que se firman al emitir un token. El resto los añade `jsonwebtoken`. */
+/**
+ * Lo que se firma en el token: quién es y qué sesión. Rol, sede y correo se leen de la base en
+ * cada petición (`JwtGuard`), así que no viajan en él. `iat` y `exp` los añade `jsonwebtoken`.
+ */
 export interface JwtClaims {
   sub: string;
   jti: string;
-  email: string;
-  role: UserRole;
-  country: Country;
 }

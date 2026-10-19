@@ -52,10 +52,14 @@ const messagesFor = async (value: object) => (await validate(Filter, value)).mes
 
 describe('validación de entrada', () => {
   it('traduce al español los mensajes por defecto', async () => {
-    const messages = await messagesFor({ limit: 'diez' });
-    expect(messages).toContain('El campo «curso» debe ser texto.');
+    const messages = await messagesFor({ course: 'demasiado largo', limit: 'diez' });
+    expect(messages).toContain('El campo «curso» es demasiado largo.');
     expect(messages).toContain('El campo «límite» debe ser un número entero.');
     expect(messages.join(' ')).not.toMatch(/must|should/);
+  });
+
+  it('de un campo obligatorio que falta sólo dice que falta', async () => {
+    expect(await messagesFor({})).toEqual(['El campo «curso» es obligatorio.']);
   });
 
   it('nombra los campos en español, no con el nombre interno', async () => {
@@ -112,6 +116,10 @@ describe('validación de entrada · booleanos', () => {
     expect((await validate(Answer, { accept: true, active: 'quizá' })).messages).toEqual([
       'El campo «activa» debe ser verdadero o falso.',
     ]);
+  });
+
+  it('si falta el obligatorio, lo dice con su nombre en español', async () => {
+    expect((await validate(Answer, {})).messages).toEqual(['El campo «respuesta a la solicitud» es obligatorio.']);
   });
 
   it('un booleano opcional ausente sigue siendo opcional', async () => {

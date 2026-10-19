@@ -1,6 +1,7 @@
 import { AlignLeft, Type } from 'lucide-react';
 import { CERTIFICATE_TEXT, MAX_LEGAL_TEXT_LENGTH, type CertificateSettings } from '../certificate';
-import { INPUT_CLASS, SettingsCard } from './SettingsCard';
+import { SectionCard } from '@/components/ui/SectionCard';
+import { INPUT_CLASS } from './input';
 
 /** El tope de la columna en la base de datos. */
 const MAX_HEADING_LENGTH = 191;
@@ -12,7 +13,7 @@ interface Props {
 
 export function TitleSettings({ settings, onChange }: Props) {
   return (
-    <SettingsCard icon={Type} title="Título del certificado">
+    <SectionCard icon={Type} title="Título del certificado">
       <div className="space-y-4">
         <div>
           <label htmlFor="cert-title" className="block text-sm font-bold text-foreground mb-1.5">
@@ -46,7 +47,7 @@ export function TitleSettings({ settings, onChange }: Props) {
           />
         </div>
       </div>
-    </SettingsCard>
+    </SectionCard>
   );
 }
 
@@ -54,7 +55,7 @@ export function LegalTextSettings({ settings, onChange }: Props) {
   const length = settings.certLegalText?.length ?? 0;
 
   return (
-    <SettingsCard icon={AlignLeft} title="Texto descriptivo / legal">
+    <SectionCard icon={AlignLeft} title="Texto descriptivo / legal">
       <textarea
         aria-label="Texto descriptivo o legal del certificado"
         value={settings.certLegalText ?? ''}
@@ -72,6 +73,6 @@ export function LegalTextSettings({ settings, onChange }: Props) {
           {length} / {MAX_LEGAL_TEXT_LENGTH}
         </span>
       </div>
-    </SettingsCard>
+    </SectionCard>
   );
 }

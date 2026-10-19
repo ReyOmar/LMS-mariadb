@@ -18,6 +18,13 @@ export interface ClosedRoundMessages {
 /**
  * Una vuelta dada de baja o ya certificada no admite trabajo nuevo: cambiarla alteraría lo que
  * respalda el certificado y un archivo entregado después ya no se retiraría.
+ */
+export function isRoundOpen(enrollment: LockedEnrollment | null | undefined): boolean {
+  return Boolean(enrollment?.active && !enrollment.completedAt);
+}
+
+/**
+ * Como `isRoundOpen`, para quien intenta trabajar sobre la vuelta.
  *
  * @throws ForbiddenException con el mensaje que corresponde.
  */

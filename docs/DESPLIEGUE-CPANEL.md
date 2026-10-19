@@ -52,14 +52,17 @@ npm run init
 npm run package:cpanel -- --api-url https://api-lms.investigaciongipia.com/api
 ```
 
-Deja un único archivo, `despliegue/lms-cpanel.zip` (≈20 MB), con la misma estructura que la
+Deja un único archivo, `despliegue/lms-cpanel.zip` (≈30 MB), con la misma estructura que la
 carpeta del proyecto en el servidor:
 
 ```
-apps/api/           dist/, prisma/ (con el script de migración), prisma.config.ts,
+apps/api/           dist/, prisma/ (con el script de migración), prisma.config.ts, tsconfig.json,
                     package.json, package-lock.json — las dependencias se instalan allí
 apps/client/prod/   el servidor del cliente, con todas sus dependencias
 ```
+
+No lleva código fuente, historial de git ni archivos `.env` (el script se niega a generarlo si
+encontrara alguno): es lo único que se sube al servidor.
 
 `--api-url` fija dentro del cliente la dirección de la API: Next la incrusta al compilar, así
 que la variable `NEXT_PUBLIC_API_URL` del panel no cuenta, y tampoco la de tu `.env` local (un
@@ -75,7 +78,7 @@ levantado (`docker compose up -d`):
 docker exec lms-mariadb mariadb -uroot -proot -e "CREATE DATABASE lms_ensayo CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci; GRANT ALL ON lms_ensayo.* TO 'lms_user'@'%';"
 docker exec -i lms-mariadb mariadb -uroot -proot lms_ensayo < investig_lms_db.sql
 cd apps/api
-export DATABASE_URL="mysql://lms_user:lms_password@127.0.0.1:3307/lms_ensayo"
+export DATABASE_URL="mysql://lms_user:lms_password@127.0.0.1:3306/lms_ensayo"
 export STORAGE_DIR="$HOME/lms-ensayo-uploads"
 node prisma/migracion-julio/migrar.js diagnostico
 ```
@@ -181,11 +184,12 @@ npx prisma --version
 
 ### 7.2 · Preparar la Terminal
 
-La Terminal no ve las variables de la aplicación: exporta las dos que usa la migración. En
-`DATABASE_URL` pega el valor tal cual está en las variables de la API, entre comillas simples.
+La Terminal no ve las variables de la aplicación: define las dos que usa la migración. Cuando
+pida `DATABASE_URL`, pega el valor tal cual está en las variables de la API; no se ve al
+escribirlo ni queda en el historial de la Terminal.
 
 ```bash
-export DATABASE_URL='mysql://investig_lms:…@127.0.0.1:3306/investig_lms_db'
+read -rsp 'DATABASE_URL: ' DATABASE_URL && export DATABASE_URL && echo
 export STORAGE_DIR='/home/investig/lms-data/uploads'
 ```
 
@@ -227,11 +231,12 @@ node prisma/migracion-julio/migrar.js despues
   repite, se niega, porque volvería a multiplicar las notas. Si se cortara a mitad, restaura
   `base.sql` (ver _Volver a julio_) y empieza de nuevo el paso 7.
 - **`db push`** aplica el esquema nuevo. Antes enumera lo que va a perder; es lo esperado:
-  - columnas que ya no se usan: `usuarios.activo`, `lms_cursos.escala`, `emite_certificado` y
-    `deleted_at`, `lms_entregas.contenido_texto` e `ip_address`,
-    `lms_progreso_recurso.tiempo_invertido`, `lms_recursos.leccion_guid` y `deleted_at`, y de
-    `lms_configuracion` `idioma`, `contrasena_defecto`, `email_remitente`, `email_nombre` y
-    `bienvenida_html`;
+  - columnas que ya no se usan: `usuarios.activo`; `lms_cursos.escala`, `emite_certificado`,
+    `deleted_at`, `fecha_inicio`, `fecha_fin` y `codigo_acceso`; `lms_modulos.requiere_anterior`;
+    `lms_recursos.leccion_guid`, `deleted_at`, `obligatorio` y `tiempo_lectura`;
+    `lms_entregas.contenido_texto` e `ip_address`; `lms_progreso_recurso.tiempo_invertido`;
+    `lms_plantillas_correo.es_sistema`, y de `lms_configuracion` `idioma`, `contrasena_defecto`,
+    `email_remitente`, `email_nombre` y `bienvenida_html`;
   - tablas: `lms_lecciones` (sus recursos ya están en los módulos), `lms_metricas_capacitacion`
     (se calcula al vuelo), `lms_token_revocations` y `_migracion_julio` (la marca del paso
     anterior);
@@ -289,14 +294,18 @@ terminar con «Todo en orden» o con la lista concreta de lo que falta.
   URL, Node 20.20.2, modo _Production_) se queda igual.
 - **Variables**, con _Añadir variable_:
 
-  | Variable         | Valor                                    |
-  | ---------------- | ---------------------------------------- |
-  | `STORAGE_DIR`    | `/home/investig/lms-data/uploads`        |
-  | `API_PUBLIC_URL` | `https://api-lms.investigaciongipia.com` |
+  | Variable         | Valor                                                                        |
+  | ---------------- | ---------------------------------------------------------------------------- |
+  | `STORAGE_DIR`    | `/home/investig/lms-data/uploads`                                            |
+  | `API_PUBLIC_URL` | `https://api-lms.investigaciongipia.com`                                     |
+  | `MAIL_FROM`      | Remitente de los correos, de un dominio verificado en Brevo                  |
+  | `MAIL_FROM_NAME` | Nombre que ven los destinatarios (opcional; si no, «Campus Virtual»)         |
+  | `BREVO_API_KEY`  | La clave de la API de Brevo, si no estaba ya (ver _Correo_ en la referencia) |
 
-  Las demás (`APP_URL`, `CORS_ORIGIN`, `DATABASE_URL`, `JWT_SECRET`, `NODE_ENV`, `SMTP_*`) se
-  quedan como están. Recomendado: cambia `JWT_SECRET` por uno nuevo, ya que todo el mundo tendrá
-  que volver a entrar de todas formas:
+  Si existen `SMTP_FROM` y `SMTP_FROM_NAME`, sus valores pasan a `MAIL_FROM` y `MAIL_FROM_NAME`;
+  bórralas, y con Brevo también el resto de `SMTP_*`. Las demás (`APP_URL`, `CORS_ORIGIN`,
+  `DATABASE_URL`, `JWT_SECRET`, `NODE_ENV`) se quedan como están. Recomendado: cambia
+  `JWT_SECRET` por uno nuevo, ya que todo el mundo tendrá que volver a entrar de todas formas:
 
   ```bash
   node -e "console.log(require('crypto').randomBytes(64).toString('hex'))"
@@ -348,7 +357,9 @@ Después, en cada sede:
 - Si el diagnóstico avisó de cuentas desactivadas, elimínalas desde _Usuarios_ si no deben
   entrar.
 
-Avisa a los usuarios de que tendrán que volver a iniciar sesión.
+Por último, aplica lo de _Seguridad_ (Parte 2) y avisa a los usuarios de que tendrán que volver a
+iniciar sesión. Cuando el campus lleve unos días sin problemas, descarga `~/respaldo-julio` a un
+lugar seguro y bórrala del servidor: contiene la base entera.
 
 ## Si algo sale mal: volver a julio
 
@@ -381,6 +392,50 @@ Avisa a los usuarios de que tendrán que volver a iniciar sesión.
 - MariaDB 10.6 o superior, con un usuario con todos los privilegios sobre la base.
 - Dos subdominios: el del cliente y el de la API (por ejemplo `lms.` y `api-lms.`).
 
+## Seguridad
+
+Lo que Apache encuentra en la raíz web de un dominio se lo entrega a quien lo pida. Con una
+carpeta `.git` a la vista, por ejemplo, se reconstruye el proyecto entero y cualquier clave que
+haya pasado por él. Por eso:
+
+- **El proyecto vive fuera de la raíz web** (`~/lms-pesv-project`, nunca en `public_html`). La
+  raíz de cada subdominio (cPanel → _Dominios_) sólo contiene el `.htaccess` que crea cPanel; ni
+  el proyecto, ni copias (`.sql`, `.zip`, `.tar.gz`) van ahí.
+- **En el servidor no se usa git**: se sube sólo `lms-cpanel.zip`, que no lleva `.git` ni `.env`.
+- **Las claves sólo en _Setup Node.js App_.** En producción la API no lee ningún `.env`: no
+  crees uno en el servidor. En la Terminal, `DATABASE_URL` se pide sin eco (paso 7.2).
+- **La base sólo acepta conexiones locales**: `DATABASE_URL` apunta a `127.0.0.1` y cPanel →
+  _Remote MySQL_ no tiene ningún host.
+
+En el `.htaccess` de la raíz de cada subdominio (cliente y API), fuera del bloque
+`CLOUDLINUX PASSENGER CONFIGURATION`, añade:
+
+```apache
+Options -Indexes
+RedirectMatch 404 "/\.(?!well-known/)"
+```
+
+La primera línea impide listar carpetas; la segunda responde 404 a cualquier ruta con una parte
+que empiece por punto (`/.git/config`, `/.env`…), salvo `/.well-known/`, que usa AutoSSL para
+renovar los certificados. Para comprobarlo, y buscar restos en la cuenta y rastros de que alguien
+los haya pedido:
+
+```bash
+curl -o /dev/null -sw '%{http_code}\n' https://api-lms.investigaciongipia.com/.git/config   # 404
+curl -o /dev/null -sw '%{http_code}\n' https://lms.investigaciongipia.com/.env              # 404
+find ~ -maxdepth 4 \( -name .git -o -name '.env*' \) -not -path '*/node_modules/*' -not -path '*/nodevenv/*'
+grep -hE '"[A-Z]+ [^"]*/\.(git|env)' ~/access-logs/* | tail
+```
+
+Si `find` encuentra algo dentro de una raíz web, o el registro de accesos muestra peticiones a
+`/.git` o `/.env` con respuesta `200`, da por expuestas las claves: borra esos archivos y cambia
+la contraseña del usuario de la base (cPanel → _Bases de datos MySQL_) y con ella
+`DATABASE_URL`, `JWT_SECRET` (cierra todas las sesiones), `STORAGE_SECRET` si existe, y la clave
+de Brevo (crea otra y elimina la anterior). Reinicia la API.
+
+El historial del repositorio conserva una clave de Google Maps en un archivo antiguo de
+`.devcontainer`. El campus ya no la usa: revócala en Google Cloud.
+
 ## Tiempo real sin WebSockets
 
 Las aplicaciones Node de cPanel se sirven detrás de Apache con Passenger, que no propaga la
@@ -408,22 +463,24 @@ vez y el tope de intentos de acceso se multiplicaría. Un proceso aguanta de sob
 
 ## Variables de la API
 
-| Variable                                                                          | Obligatoria | Para qué                                                                              |
-| --------------------------------------------------------------------------------- | ----------- | ------------------------------------------------------------------------------------- |
-| `NODE_ENV`                                                                        | Sí          | `production`: lee la configuración del panel y oculta `/docs`                         |
-| `DATABASE_URL`                                                                    | Sí          | `mysql://usuario:clave@127.0.0.1:3306/base`; codifica los especiales (`@` → `%40`)    |
-| `JWT_SECRET`                                                                      | Sí          | 32 caracteres o más; la API no arranca con uno corto o de ejemplo                     |
-| `STORAGE_DIR`                                                                     | Sí          | Carpeta de archivos, fuera de la aplicación                                           |
-| `CORS_ORIGIN`                                                                     | Sí          | Dominio del cliente, exacto; varios separados por comas                               |
-| `APP_URL`                                                                         | Sí          | Dominio del cliente, para los enlaces de los correos                                  |
-| `API_PUBLIC_URL`                                                                  | Sí          | Dominio de la API, para las imágenes de los correos                                   |
-| `BREVO_API_KEY`                                                                   | Recomendada | Correo por la API HTTP de Brevo (puerto 443)                                          |
-| `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM`, `SMTP_FROM_NAME` | No          | Sólo si no hay `BREVO_API_KEY`                                                        |
-| `DATABASE_POOL_SIZE`                                                              | No          | Conexiones con la base (10 por defecto, 50 como mucho)                                |
-| `MAX_UPLOAD_MB`                                                                   | No          | Tope técnico de una subida (2048 por defecto, 4096 como mucho)                        |
-| `UPLOAD_TMP_DIR`                                                                  | No          | Carpeta temporal de las subidas si `/tmp` es pequeño                                  |
-| `STORAGE_SECRET`                                                                  | No          | Firma de las descargas; por defecto, `JWT_SECRET`                                     |
-| `TRUST_PROXY`                                                                     | No          | No hace falta en cPanel: por defecto confía en el bucle local, por donde entra Apache |
+| Variable                                           | Obligatoria    | Para qué                                                                               |
+| -------------------------------------------------- | -------------- | -------------------------------------------------------------------------------------- |
+| `NODE_ENV`                                         | Sí             | `production`: lee la configuración del panel y oculta `/docs`                          |
+| `DATABASE_URL`                                     | Sí             | `mysql://usuario:clave@127.0.0.1:3306/base`; codifica los especiales (`@` → `%40`)     |
+| `JWT_SECRET`                                       | Sí             | 32 caracteres o más; la API no arranca con uno corto o de ejemplo                      |
+| `STORAGE_DIR`                                      | Sí             | Carpeta de archivos, fuera de la aplicación                                            |
+| `CORS_ORIGIN`                                      | Sí             | Dominio del cliente, exacto; varios separados por comas                                |
+| `APP_URL`                                          | Sí             | Dominio del cliente, para los enlaces de los correos                                   |
+| `API_PUBLIC_URL`                                   | Sí             | Dominio de la API, para las imágenes de los correos                                    |
+| `MAIL_FROM`                                        | Para el correo | Dirección remitente, de un dominio verificado en Brevo; sin ella no sale ningún correo |
+| `MAIL_FROM_NAME`                                   | No             | Nombre del remitente (por defecto, «Campus Virtual»)                                   |
+| `BREVO_API_KEY`                                    | Para el correo | Clave de la API HTTP de Brevo (puerto 443)                                             |
+| `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS` | No             | Sólo si no hay `BREVO_API_KEY`                                                         |
+| `DATABASE_POOL_SIZE`                               | No             | Conexiones con la base (10 por defecto, 50 como mucho)                                 |
+| `MAX_UPLOAD_MB`                                    | No             | Tope técnico de una subida (2048 por defecto, 4096 como mucho)                         |
+| `UPLOAD_TMP_DIR`                                   | No             | Carpeta temporal de las subidas si `/tmp` es pequeño                                   |
+| `STORAGE_SECRET`                                   | No             | Firma de las descargas; por defecto, `JWT_SECRET`                                      |
+| `TRUST_PROXY`                                      | No             | No hace falta en cPanel: por defecto confía en el bucle local, por donde entra Apache  |
 
 Reinicia la API después de cambiar cualquier variable: se leen al arrancar.
 
@@ -457,11 +514,20 @@ tamaño (en Cloudflare, ponlo en _DNS only_).
 
 ## Correo
 
-En alojamiento compartido los puertos SMTP salientes suelen estar cerrados, así que lo
-recomendable es la API HTTP de Brevo: crea una clave en Brevo, ponla en `BREVO_API_KEY` y
-verifica allí el dominio remitente. Con `BREVO_API_KEY` vacía se usa SMTP (`SMTP_HOST` y, si el
-servidor lo pide, `SMTP_USER` y `SMTP_PASS`). Sin ninguno el campus funciona, pero no sale
-ningún correo.
+En alojamiento compartido los puertos SMTP salientes suelen estar cerrados, así que el correo
+sale por la API HTTP de Brevo:
+
+1. En Brevo, verifica el dominio del remitente: da unos registros DNS (DKIM y DMARC) que se
+   añaden en cPanel → _Zone Editor_. Sin ellos Brevo rechaza el envío o acaba en spam.
+2. Crea una clave de API y ponla en `BREVO_API_KEY`. Es la única copia que hace falta: no la
+   guardes en ningún archivo del servidor.
+3. Pon en `MAIL_FROM` una dirección de ese dominio (por ejemplo,
+   `no-reply@investigaciongipia.com`) y, si quieres, el nombre en `MAIL_FROM_NAME`.
+
+Al arrancar, el registro de la API dice si el correo quedó activo y, si no, qué falta. Cada envío
+fallido queda anotado con la respuesta de Brevo. Con `BREVO_API_KEY` vacía se usa SMTP
+(`SMTP_HOST` y, si el servidor lo pide, `SMTP_USER` y `SMTP_PASS`); sin ninguno de los dos el
+campus funciona, pero no sale ningún correo.
 
 ## Actualizaciones posteriores
 
@@ -486,20 +552,41 @@ npx prisma db push      # sólo si cambió el esquema; nunca con --accept-data-l
 **Reiniciar** las dos aplicaciones. Despliega siempre las dos partes juntas: comparten rutas y
 nombres de campos. Los archivos subidos no se tocan: viven en `/home/investig/lms-data/uploads`.
 
+### Si el servidor ya tenía una versión posterior a julio
+
+Esta actualización pide, además:
+
+- **Remitente del correo**: `SMTP_FROM` y `SMTP_FROM_NAME` pasan a llamarse `MAIL_FROM` y
+  `MAIL_FROM_NAME`. Créalas con el mismo valor y borra las antiguas.
+- **`db push` con pérdida**: retira columnas que ya no se usan (`lms_cursos.fecha_inicio`,
+  `fecha_fin` y `codigo_acceso`, `lms_modulos.requiere_anterior`, `lms_recursos.obligatorio` y
+  `tiempo_lectura`, `lms_plantillas_correo.es_sistema`). Si lo que enumera es eso, ejecuta
+  `npx prisma db push --accept-data-loss`.
+
 ## Problemas frecuentes
 
-| Síntoma                                                                      | Causa                                                             | Solución                                                                          |
-| ---------------------------------------------------------------------------- | ----------------------------------------------------------------- | --------------------------------------------------------------------------------- |
-| La API no arranca y el registro dice `JWT_SECRET`                            | Secreto ausente o de menos de 32 caracteres                       | Genera uno de 64 y reinicia                                                       |
-| La API no arranca y el registro menciona `@prisma/client` o `.prisma/client` | Falta generar el cliente de la base                               | `npx prisma generate` en `apps/api` y reinicia                                    |
-| `migrar.js` dice «Falta DATABASE_URL»                                        | La Terminal no ve las variables de la aplicación                  | `export DATABASE_URL='…'` (paso 6.2)                                              |
-| `db push` se detiene con `errno: 121 "Duplicate key on write or update"`     | MariaDB rechaza recrear una clave ajena con el mismo nombre       | Ejecuta `npx prisma db push --accept-data-loss` otra vez hasta que diga «in sync» |
-| `npm install` se queja de la carpeta `node_modules`                          | Se borró el enlace que crea cPanel                                | Pulsa **Run NPM Install** en _Setup Node.js App_ y repite `npx prisma generate`   |
-| «No hay conexión con el servidor» al entrar                                  | El cliente no llega a la API                                      | Comprueba `/api/health` y que el paquete se generó con el `--api-url` correcto    |
-| El navegador bloquea las peticiones por CORS                                 | `CORS_ORIGIN` no coincide con el dominio del cliente              | Ponlo exacto, con `https://` y sin barra final                                    |
-| Las imágenes no salen en los correos                                         | Falta `API_PUBLIC_URL`                                            | Defínela y reinicia                                                               |
-| `/api/health` dice `storage: error`                                          | `STORAGE_DIR` no existe, no es de la cuenta o el disco está lleno | Revisa la ruta y el espacio; el registro de arranque dice qué falló               |
-| Una imagen o un PDF antiguo no se ve                                         | El archivo no estaba en el origen al ejecutar `archivos`          | `comprobar` lista los que faltan; búscalos en la copia y repite `archivos`        |
-| `max_user_connections` o `Too many connections` en el registro               | La API y otras herramientas superan el cupo del usuario de base   | Baja `DATABASE_POOL_SIZE` y reinicia                                              |
-| Los certificados salen sin logotipo                                          | El logotipo de la sede no es PNG ni JPG                           | Panel → _Tema y apariencia_: súbelo en PNG o JPG                                  |
-| Un alumno no puede entrar                                                    | Está en la sede equivocada                                        | Que cambie de sede con el selector de la pantalla de acceso                       |
+| Síntoma                                                                      | Causa                                                             | Solución                                                                             |
+| ---------------------------------------------------------------------------- | ----------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| La API no arranca y el registro dice `JWT_SECRET`                            | Secreto ausente o de menos de 32 caracteres                       | Genera uno de 64 y reinicia                                                          |
+| La API no arranca y el registro menciona `@prisma/client` o `.prisma/client` | Falta generar el cliente de la base                               | `npx prisma generate` en `apps/api` y reinicia                                       |
+| `migrar.js` dice «Falta DATABASE_URL»                                        | La Terminal no ve las variables de la aplicación                  | Defínela como en el paso 7.2                                                         |
+| `db push` se detiene con `errno: 121 "Duplicate key on write or update"`     | MariaDB rechaza recrear una clave ajena con el mismo nombre       | Ejecuta `npx prisma db push --accept-data-loss` otra vez hasta que diga «in sync»    |
+| `db push` no puede crear `lms_contacto_chat_curso_guid_fkey`                 | Quedan contactos de chat de cursos ya borrados                    | En phpMyAdmin, la consulta de debajo de esta tabla; repite `db push`                 |
+| `npm install` se queja de la carpeta `node_modules`                          | Se borró el enlace que crea cPanel                                | Pulsa **Ejecutar NPM Install** en _Setup Node.js App_ y repite `npx prisma generate` |
+| No sale ningún correo                                                        | Falta `MAIL_FROM` o `BREVO_API_KEY`, o Brevo rechaza el remitente | El registro de la API dice cuál; ver _Correo_                                        |
+| «No hay conexión con el servidor» al entrar                                  | El cliente no llega a la API                                      | Comprueba `/api/health` y que el paquete se generó con el `--api-url` correcto       |
+| El navegador bloquea las peticiones por CORS                                 | `CORS_ORIGIN` no coincide con el dominio del cliente              | Ponlo exacto, con `https://` y sin barra final                                       |
+| Las imágenes no salen en los correos                                         | Falta `API_PUBLIC_URL`                                            | Defínela y reinicia                                                                  |
+| `/api/health` dice `storage: error`                                          | `STORAGE_DIR` no existe, no es de la cuenta o el disco está lleno | Revisa la ruta y el espacio; el registro de arranque dice qué falló                  |
+| Una imagen o un PDF antiguo no se ve                                         | El archivo no estaba en el origen al ejecutar `archivos`          | `comprobar` lista los que faltan; búscalos en la copia y repite `archivos`           |
+| `max_user_connections` o `Too many connections` en el registro               | La API y otras herramientas superan el cupo del usuario de base   | Baja `DATABASE_POOL_SIZE` y reinicia                                                 |
+| Los certificados salen sin logotipo                                          | El logotipo de la sede no es PNG ni JPG                           | Panel → _Tema y apariencia_: súbelo en PNG o JPG                                     |
+| Un alumno no puede entrar                                                    | Está en la sede equivocada                                        | Que cambie de sede con el selector de la pantalla de acceso                          |
+
+Contactos de chat sin curso:
+
+```sql
+DELETE c FROM lms_contacto_chat c
+LEFT JOIN lms_cursos cu ON cu.guid = c.curso_guid
+WHERE cu.guid IS NULL;
+```

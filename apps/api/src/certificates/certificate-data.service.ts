@@ -1,6 +1,6 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import * as crypto from 'crypto';
-import { PrismaService } from '../prisma/prisma.service';
+import { Prisma } from '@prisma/client';
 import { StorageService } from '../storage/storage.service';
 import { SettingsService } from '../settings/settings.service';
 import { CourseAccessService } from '../courses/course-access.service';
@@ -83,20 +83,27 @@ export class CertificateDataService {
   private readonly logger = new Logger(CertificateDataService.name);
 
   constructor(
-    private readonly prisma: PrismaService,
     private readonly storage: StorageService,
     private readonly settings: SettingsService,
     private readonly access: CourseAccessService,
   ) {}
 
-  /** Reúne del curso, el alumno y la configuración todo lo que se imprime en el PDF. */
-  async gather(courseGuid: string, userGuid: string, country: Country): Promise<IssuanceData> {
+  /**
+   * Reúne del curso, el alumno y la configuración todo lo que se imprime en el PDF. Se lee con
+   * `db`, la transacción de la emisión, para que diga lo mismo que se acaba de comprobar.
+   */
+  async gather(
+    db: Prisma.TransactionClient,
+    courseGuid: string,
+    userGuid: string,
+    country: Country,
+  ): Promise<IssuanceData> {
     const [user, course, enrollment, config, resources] = await Promise.all([
-      this.prisma.user.findUnique({
+      db.user.findUnique({
         where: { guid: userGuid },
         select: { firstName: true, lastName: true, email: true },
       }),
-      this.prisma.course.findUnique({
+      db.course.findUnique({
         where: { guid: courseGuid },
         select: {
           title: true,
@@ -115,18 +122,18 @@ export class CertificateDataService {
           _count: { select: { modules: true } },
         },
       }),
-      this.prisma.enrollment.findUnique({
+      db.enrollment.findUnique({
         where: { userGuid_courseGuid: { userGuid, courseGuid } },
         select: { enrolledAt: true },
       }),
       this.settings.getSettings(country),
-      this.access.getCourseResources(courseGuid),
+      this.access.getCourseResources(courseGuid, db),
     ]);
     if (!user || !course) throw new NotFoundException('No se encontró el alumno o el curso.');
 
     const issuedAt = new Date();
     const roundStart = enrollment?.enrolledAt ?? issuedAt;
-    const { averageScore, activeSeconds } = await this.roundResults(courseGuid, userGuid, roundStart);
+    const { averageScore, activeSeconds } = await this.roundResults(db, courseGuid, userGuid, roundStart);
     const modules = course._count.modules;
     const assessments = resources.filter((resource) => resource.type === 'ASSIGNMENT').length;
 
@@ -172,14 +179,14 @@ export class CertificateDataService {
    * Nota media y tiempo de estudio de la vuelta actual. La nota es la mejor de cada evaluación:
    * los suspensos previos no la rebajan, y las de vueltas anteriores ya están archivadas.
    */
-  private async roundResults(courseGuid: string, userGuid: string, roundStart: Date) {
+  private async roundResults(db: Prisma.TransactionClient, courseGuid: string, userGuid: string, roundStart: Date) {
     const [bestScores, studyTime] = await Promise.all([
-      this.prisma.submission.groupBy({
+      db.submission.groupBy({
         by: ['assignmentGuid'],
         where: { userGuid, status: 'GRADED', score: { not: null }, assignment: { module: { courseGuid } } },
         _max: { score: true },
       }),
-      this.prisma.studySession.aggregate({
+      db.studySession.aggregate({
         where: { userGuid, courseGuid, startedAt: { gte: roundStart } },
         _sum: { durationSeconds: true },
       }),

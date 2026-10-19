@@ -4,7 +4,6 @@ import path from 'node:path';
 export default defineConfig({
   schema: path.join('prisma', 'schema.prisma'),
   migrations: {
-    path: 'prisma/migrations',
     seed: 'npx ts-node prisma/seed.ts',
   },
   datasource: {

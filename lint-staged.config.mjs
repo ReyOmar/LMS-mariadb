@@ -13,7 +13,7 @@ function prettier(files) {
   return batches;
 }
 
+// Todo lo que Prettier sabe formatear; lo generado lo excluye `.prettierignore`.
 export default {
-  'apps/api/{src,prisma}/**/*.ts': prettier,
-  'apps/client/src/**/*.{ts,tsx,css}': prettier,
+  '*.{ts,tsx,js,mjs,json,css,md,yml}': prettier,
 };

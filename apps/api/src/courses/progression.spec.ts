@@ -1,4 +1,4 @@
-import { AUTO_UNLOCK_HOURS, isModuleOpen, isResourceOpen, isResourceUnlocked, waitedTooLong } from './progression';
+import { AUTO_UNLOCK_HOURS, isResourceUnlocked, waitedTooLong } from './progression';
 
 /**
  * Orden estricto del curso en el servidor.
@@ -13,38 +13,38 @@ const COURSE = [{ resources: [{ guid: 'r1' }, { guid: 'r2' }] }, { resources: [{
 const done = (...guids: string[]) => new Set(guids);
 
 describe('progresión del curso', () => {
-  describe('isModuleOpen', () => {
-    it('el primero siempre está abierto', () => {
-      expect(isModuleOpen(COURSE, 0, done())).toBe(true);
-    });
-
-    it('el segundo espera a que el primero esté entero', () => {
-      expect(isModuleOpen(COURSE, 1, done('r1'))).toBe(false);
-      expect(isModuleOpen(COURSE, 1, done('r1', 'r2'))).toBe(true);
-    });
-
-    it('un módulo vacío no bloquea a los siguientes', () => {
-      expect(isModuleOpen([{ resources: [] }, ...COURSE.slice(1)], 1, done())).toBe(true);
-    });
-  });
-
-  describe('isResourceOpen', () => {
-    it('los siguientes esperan a los anteriores de su módulo', () => {
-      expect(isResourceOpen(COURSE, 0, 0, done())).toBe(true);
-      expect(isResourceOpen(COURSE, 0, 1, done())).toBe(false);
-      expect(isResourceOpen(COURSE, 0, 1, done('r1'))).toBe(true);
-    });
-
-    it('completar por delante no abre lo de atrás', () => {
-      expect(isResourceOpen(COURSE, 0, 1, done('r4'))).toBe(false);
-    });
-  });
-
   describe('isResourceUnlocked', () => {
-    it('localiza el recurso y aplica la regla', () => {
+    it('el primero siempre está abierto', () => {
+      expect(isResourceUnlocked(COURSE, 'r1', done())).toBe(true);
+    });
+
+    it('los siguientes esperan a los anteriores de su módulo', () => {
+      expect(isResourceUnlocked(COURSE, 'r2', done())).toBe(false);
+      expect(isResourceUnlocked(COURSE, 'r2', done('r1'))).toBe(true);
+    });
+
+    it('un módulo espera a que el anterior esté entero', () => {
       expect(isResourceUnlocked(COURSE, 'r3', done('r1'))).toBe(false);
       expect(isResourceUnlocked(COURSE, 'r3', done('r1', 'r2'))).toBe(true);
       expect(isResourceUnlocked(COURSE, 'r4', done('r1', 'r2'))).toBe(false);
+    });
+
+    it('completar por delante no abre lo de atrás', () => {
+      expect(isResourceUnlocked(COURSE, 'r2', done('r4'))).toBe(false);
+    });
+
+    it('un módulo vacío no abre lo que viene después', () => {
+      const withEmpty = [COURSE[0], { resources: [] }, COURSE[1]];
+
+      expect(isResourceUnlocked(withEmpty, 'r3', done())).toBe(false);
+      expect(isResourceUnlocked(withEmpty, 'r3', done('r1', 'r2'))).toBe(true);
+    });
+
+    it('cuenta todo lo anterior, no sólo el módulo de antes', () => {
+      // Una tarea del primer módulo, suspendida después de que el segundo se completara.
+      const threeModules = [...COURSE, { resources: [{ guid: 'r5' }] }];
+
+      expect(isResourceUnlocked(threeModules, 'r5', done('r2', 'r3', 'r4'))).toBe(false);
     });
 
     it('un recurso ajeno al curso no está abierto', () => {

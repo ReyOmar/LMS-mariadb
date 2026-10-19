@@ -1,4 +1,4 @@
-import { IsNumber, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
+import { IsISO8601, IsNumber, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
 import { MAX_SCORE, MIN_SCORE } from '../../common/domain/grading';
 
 export class GradeSubmissionDto {
@@ -12,4 +12,11 @@ export class GradeSubmissionDto {
   @IsString()
   @MaxLength(2000, { message: 'El comentario no puede superar los 2000 caracteres.' })
   feedback?: string;
+
+  /**
+   * Cuándo se envió la versión que el examinador revisó. Mientras no está calificada, el alumno
+   * puede sustituirla: la nota sólo se guarda si sigue siendo esa.
+   */
+  @IsISO8601({ strict: true }, { message: 'Falta la versión de la entrega que se califica.' })
+  submittedAt: string;
 }

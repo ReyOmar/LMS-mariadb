@@ -3,6 +3,7 @@
 import { useEffect } from 'react';
 import { CheckCircle } from 'lucide-react';
 import { sanitizeHTML } from '@/lib/sanitize';
+import { hasContent } from '@/lib/editor-html';
 import { displayTitle, isQuiz } from '@/lib/resources';
 import type { Resource } from '@/types/models';
 import QuizViewer from '@/components/quiz/QuizViewer';
@@ -57,7 +58,7 @@ export function ResourceView({
         <div className="space-y-6">
           <div
             className="prose prose-slate dark:prose-invert max-w-none bg-card rounded-2xl p-4 sm:p-8 border border-border/50 shadow-sm"
-            dangerouslySetInnerHTML={sanitizeHTML(resource.contentHtml || NO_CONTENT)}
+            dangerouslySetInnerHTML={sanitizeHTML(hasContent(resource.contentHtml) ? resource.contentHtml : NO_CONTENT)}
           />
           <ResourceExtras resource={resource} />
           {canMarkCompleted && <MarkCompletedButton onClick={onMarkCompleted} busy={marking} />}
@@ -115,7 +116,7 @@ export function ResourceView({
 function CompletedQuiz({ resource }: { resource: Resource }) {
   return (
     <div className="space-y-4">
-      {resource.contentHtml && (
+      {hasContent(resource.contentHtml) && (
         <div
           className="prose prose-slate dark:prose-invert max-w-none bg-card rounded-2xl p-4 sm:p-6 border border-border/50 shadow-sm"
           dangerouslySetInnerHTML={sanitizeHTML(resource.contentHtml)}

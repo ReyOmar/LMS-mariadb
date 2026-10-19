@@ -11,6 +11,7 @@ const DEFAULT_PRIMARY = '#4f46e5';
 interface Props {
   subjectRef: RefObject<HTMLDivElement | null>;
   bodyRef: RefObject<HTMLDivElement | null>;
+  /** HTML ya saneado y con las variables como etiquetas (`useTemplateEditor`). */
   initialSubject: string;
   initialBody: string;
   onCaretMove: () => void;

@@ -5,7 +5,7 @@
  * Actualización de una instalación de la versión de julio de 2026 a la actual.
  *
  * La versión de julio no tenía sedes, calificaba de 0 a 5, agrupaba los recursos en lecciones
- * y guardaba los archivos en `uploads/` sin carpetas (o en Cloudflare R2). `prisma db push`
+ * y guardaba los archivos en `uploads/` sin carpetas. `prisma db push`
  * sólo sabe igualar la estructura: sin estos pasos fallaría (columnas obligatorias en tablas
  * con filas) o perdería datos (los recursos al retirar las lecciones).
  *
@@ -63,8 +63,7 @@ const DOWNLOAD_PATH = '/storage/download/';
  * Clave `carpeta/nombre` de un valor guardado por la versión de julio, o `null` si no apunta a
  * un archivo del campus. Julio guardaba la clave tal cual, un nombre suelto sin carpeta (los
  * archivos más antiguos y los PDF de los certificados), o la URL completa de descarga en los
- * bloques de imagen (`https://api-…/api/storage/download/recursos/…`). Con R2 y URL pública,
- * la dirección del bucket (`https://pub-….r2.dev/portadas/…`).
+ * bloques de imagen (`https://api-…/api/storage/download/recursos/…`).
  */
 function keyFromStored(value, spec) {
   if (value == null) return null;
@@ -456,10 +455,11 @@ async function antes() {
 
   title('Limpieza para las claves ajenas nuevas');
   await step(
-    'Contactos de chat de cuentas que ya no existen',
+    'Contactos de chat de cuentas o cursos que ya no existen',
     `DELETE t FROM lms_contacto_chat t
      WHERE NOT EXISTS (SELECT 1 FROM usuarios u WHERE u.guid = t.solicitante_guid)
-        OR NOT EXISTS (SELECT 1 FROM usuarios u WHERE u.guid = t.receptor_guid)`,
+        OR NOT EXISTS (SELECT 1 FROM usuarios u WHERE u.guid = t.receptor_guid)
+        OR NOT EXISTS (SELECT 1 FROM lms_cursos c WHERE c.guid = t.curso_guid)`,
   );
 
   title('Archivos: claves «carpeta/nombre»');
@@ -595,7 +595,7 @@ async function referencedKeys() {
   return keys;
 }
 
-/** Dónde puede estar un archivo en la carpeta antigua: con su carpeta (R2, certificados) o suelto. */
+/** Dónde puede estar un archivo en la carpeta antigua: dentro de su carpeta o suelto. */
 function sourceOf(origin, key) {
   const [folder, name] = key.split('/');
   for (const candidate of [path.join(origin, folder, name), path.join(origin, name)]) {
@@ -650,7 +650,7 @@ async function archivos() {
   if (missing.length) {
     console.log(`  ! ${missing.length} archivo(s) que la base usa y no están en el origen:`);
     for (const line of missing) console.log(`      ${line}`);
-    console.log('    Búscalos en la copia de seguridad (o en R2) y vuelve a ejecutar este paso.');
+    console.log('    Búscalos en la copia de seguridad y vuelve a ejecutar este paso.');
   }
   console.log('  Lo que quede en el origen no lo usa ninguna fila: puedes conservarlo como copia o borrarlo.');
 }

@@ -48,11 +48,12 @@ export interface QuizOverview {
  * lo acota el límite del cuerpo JSON de la API (2 MB, `main.ts`), muy por debajo de lo que
  * admite la columna (MEDIUMTEXT, 16 MB): todo cuestionario que pase la validación cabe.
  */
-const MAX_QUESTIONS = 200;
-const MAX_OPTIONS = 10;
-const MAX_ATTEMPTS = 100;
-/** Diez horas, como el tiempo de lectura de un recurso. */
-const MAX_TIME_LIMIT_MINUTES = 600;
+export const MAX_QUESTIONS = 200;
+export const MIN_OPTIONS = 2;
+export const MAX_OPTIONS = 10;
+export const MAX_ATTEMPTS = 100;
+/** Diez horas. */
+export const MAX_TIME_LIMIT_MINUTES = 600;
 
 /** Configuración guardada en la base → formato de la API. */
 export function parseQuizConfig(stored: string | null): QuizConfig {
@@ -235,8 +236,8 @@ function validateQuestion(question: unknown, index: number): QuizQuestion {
   }
 
   const rawOptions = question.options;
-  if (!Array.isArray(rawOptions) || rawOptions.length < 2) {
-    throw new BadRequestException(`La pregunta ${questionNumber} debe tener al menos dos opciones.`);
+  if (!Array.isArray(rawOptions) || rawOptions.length < MIN_OPTIONS) {
+    throw new BadRequestException(`La pregunta ${questionNumber} debe tener al menos ${MIN_OPTIONS} opciones.`);
   }
   if (rawOptions.length > MAX_OPTIONS) {
     throw new BadRequestException(`La pregunta ${questionNumber} no puede tener más de ${MAX_OPTIONS} opciones.`);

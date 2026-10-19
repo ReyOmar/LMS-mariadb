@@ -16,6 +16,9 @@ describe('MaintenanceService — ninguna tarea borra archivos ni información de
 
   const WRITES = ['create', 'createMany', 'update', 'updateMany', 'upsert', 'delete', 'deleteMany'];
 
+  /** Tablas que tocan las escrituras crudas, con el nombre de su modelo. */
+  const RAW_TABLES: Record<string, string> = { lms_matriculas: 'enrollment', lms_mensajes: 'message' };
+
   /** Métodos con `@Cron`, `@Interval` o `@Timeout`: `@nestjs/schedule` los marca con esta clave. */
   function scheduledTasks(): string[] {
     const prototype = MaintenanceService.prototype as unknown as Record<string, unknown>;
@@ -32,10 +35,11 @@ describe('MaintenanceService — ninguna tarea borra archivos ni información de
       {},
       {
         get: (_, model: string) => {
-          // Las escrituras crudas sólo recalculan el recuento de avance de `lms_matriculas`.
+          // Una escritura cruda se anota con la tabla que toca, como las demás.
           if (model === '$executeRaw') {
-            return async () => {
-              writes.push('enrollment.$executeRaw');
+            return async (sql: TemplateStringsArray) => {
+              const [, statement, table] = /\b(UPDATE|DELETE \w+ FROM)\s+(\w+)/.exec(sql.join('?')) ?? [];
+              writes.push(`${RAW_TABLES[table] ?? table}.${statement === 'UPDATE' ? 'updateMany' : 'deleteMany'}`);
               return 1;
             };
           }
@@ -116,7 +120,7 @@ describe('MaintenanceService — ninguna tarea borra archivos ni información de
         'emailVerification.deleteMany',
         'passwordReset.deleteMany',
         'message.deleteMany',
-        'enrollment.$executeRaw',
+        'enrollment.updateMany',
       ]),
     );
     // …y ninguna escritura ha ido a una tabla que referencie archivos.
@@ -390,7 +394,12 @@ describe('MaintenanceService — recordatorio de inactividad', () => {
         },
       },
     };
-    const notifications = { create: async () => undefined };
+    const reminded: string[] = [];
+    const notifications = {
+      create: async ({ userGuid }: { userGuid: string }) => {
+        reminded.push(userGuid);
+      },
+    };
     const mail = {
       sendInactivityReminder: async (email: string) => {
         inFlight++;
@@ -405,15 +414,17 @@ describe('MaintenanceService — recordatorio de inactividad', () => {
     const service = new MaintenanceService(base as never, notifications as never, mail as never);
     jest.spyOn(service['logger'], 'log').mockImplementation(() => undefined);
     const warnings = jest.spyOn(service['logger'], 'warn').mockImplementation(() => undefined);
-    return { service, queries, mailed, warnings, maxInFlight: () => maxInFlight };
+    return { service, queries, mailed, reminded, warnings, maxInFlight: () => maxInFlight };
   }
 
-  it('sólo busca alumnos con alguna matrícula activa sin terminar', async () => {
+  it('sólo busca alumnos con alguna matrícula activa sin terminar en un curso publicado', async () => {
     const { service, queries } = reminderService([student('ana')]);
 
     await service.sendInactivityReminders();
 
-    expect(queries[0].where.enrollments).toEqual({ some: { active: true, completedAt: null } });
+    expect(queries[0].where.enrollments).toEqual({
+      some: { active: true, completedAt: null, course: { status: 'PUBLISHED' } },
+    });
   });
 
   it('no repite el aviso a quien ya lo recibió en el periodo', async () => {
@@ -442,6 +453,14 @@ describe('MaintenanceService — recordatorio de inactividad', () => {
 
     expect(mailed).toEqual(['ana@ejemplo.com', 'carla@ejemplo.com']);
     expect(warnings).toHaveBeenCalled();
+  });
+
+  it('a quien le falla el correo no le queda el aviso: mañana se le vuelve a intentar', async () => {
+    const { service, reminded } = reminderService(['ana', 'beto'].map(student), { mailFailsFor: 'beto' });
+
+    await service.sendInactivityReminders();
+
+    expect(reminded).toEqual(['ana']);
   });
 });
 

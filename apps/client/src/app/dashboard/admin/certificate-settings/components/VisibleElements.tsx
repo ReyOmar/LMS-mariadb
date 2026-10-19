@@ -1,6 +1,6 @@
 import { ToggleLeft } from 'lucide-react';
 import type { CertificateSettings, CertificateToggle } from '../certificate';
-import { SettingsCard } from './SettingsCard';
+import { SectionCard } from '@/components/ui/SectionCard';
 import { ToggleRow } from './ToggleRow';
 
 const TOGGLES: { key: CertificateToggle; label: string; description: string }[] = [
@@ -38,7 +38,7 @@ interface Props {
 
 export function VisibleElements({ settings, onChange }: Props) {
   return (
-    <SettingsCard icon={ToggleLeft} title="Elementos visibles">
+    <SectionCard icon={ToggleLeft} title="Elementos visibles">
       <div className="space-y-3">
         {TOGGLES.map(({ key, label, description }) => (
           <ToggleRow
@@ -50,6 +50,6 @@ export function VisibleElements({ settings, onChange }: Props) {
           />
         ))}
       </div>
-    </SettingsCard>
+    </SectionCard>
   );
 }

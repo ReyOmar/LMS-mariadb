@@ -7,18 +7,17 @@ import { RealtimeService } from '../realtime/realtime.service';
 import { MailService } from '../mail/mail.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { CourseAccessService } from '../courses/course-access.service';
-import { AFTER_LOCK, lockEnrollment } from '../enrollments/enrollment-lock';
-import { percent } from '../common/domain/progress';
+import { AFTER_LOCK, LockedEnrollment, isRoundOpen, lockEnrollment } from '../enrollments/enrollment-lock';
 import { Country } from '../common/domain/country';
-import { plural } from '../common/domain/text';
 import { JwtPayload } from '../common/interfaces/jwt-payload.interface';
 import { CertificateDataService, IssuanceData, parseSnapshot } from './certificate-data.service';
 import { SubmissionFilesService } from './submission-files.service';
 import { isValid } from './validity';
 
 /**
- * Tope de la transacción de emisión: cubre la espera por la matrícula bloqueada y la escritura
- * del PDF en un disco compartido, que bajo carga puede pasar de los 5 s por defecto de Prisma.
+ * Tope de la transacción de emisión: cubre la espera por la matrícula bloqueada, la composición
+ * del PDF y su escritura en un disco compartido, que bajo carga pueden pasar de los 5 s por
+ * defecto de Prisma.
  */
 const ISSUANCE_TIMEOUT_MS = 10_000;
 
@@ -33,17 +32,6 @@ interface IssuedCertificate {
   country: Country;
   data: IssuanceData;
   filesRetired: boolean;
-}
-
-/** Resultado de comprobar si un alumno ya puede recibir su certificado. */
-export interface CompletionStatus {
-  complete: boolean;
-  canGetCertificate: boolean;
-  completed: number;
-  total: number;
-  percent: number;
-  pendingAssignments: { resourceGuid: string; title: string; status: string | null }[];
-  reason: string | null;
 }
 
 /**
@@ -74,60 +62,24 @@ export class CertificatesService {
   // ── Comprobación de finalización ─────────────────────────────────────────
 
   /**
-   * Comprueba si un alumno cumple los requisitos del certificado y, si no, explica cuál
-   * falta. El mensaje es el que ve el alumno, así que nombra las tareas pendientes en vez
-   * de decir sólo que «no puede».
+   * Si el alumno cumple los requisitos del certificado: todos los recursos completados y todas
+   * las tareas calificadas. Una tarea cuenta como completada sin nota mientras espera más de la
+   * cuenta a su examinador (el desbloqueo por espera), y por eso hace falta lo segundo.
    */
-  async checkCompletion(courseGuid: string, userGuid: string): Promise<CompletionStatus> {
-    // La matrícula activa sólo existe dentro de una sede: comprobarla impide preguntar por
-    // un curso ajeno, de la propia sede o de la otra.
-    await this.access.ensureEnrollment(courseGuid, userGuid);
+  private async isComplete(db: Prisma.TransactionClient, courseGuid: string, userGuid: string): Promise<boolean> {
+    const resources = await this.access.getCourseResources(courseGuid, db);
+    if (resources.length === 0) return false;
 
-    const resources = await this.access.getCourseResources(courseGuid);
-
-    if (resources.length === 0) {
-      return {
-        complete: false,
-        canGetCertificate: false,
-        completed: 0,
-        total: 0,
-        percent: 0,
-        pendingAssignments: [],
-        reason: 'Este curso todavía no tiene contenido.',
-      };
-    }
-
-    const assignments = resources.filter((resource) => resource.type === 'ASSIGNMENT');
-    const [completed, submissions] = await Promise.all([
+    const assignments = resources.filter((resource) => resource.type === 'ASSIGNMENT').map(({ guid }) => guid);
+    const [completed, graded] = await Promise.all([
       this.completedResources(
+        db,
         userGuid,
         resources.map((resource) => resource.guid),
       ),
-      this.submissionsOf(
-        userGuid,
-        assignments.map((assignment) => assignment.guid),
-      ),
+      this.gradedAssignments(db, userGuid, assignments),
     ]);
-
-    const pending = assignments
-      .filter((assignment) => !submissions.graded.has(assignment.guid))
-      .map((assignment) => ({
-        resourceGuid: assignment.guid,
-        title: assignment.title,
-        status: submissions.statusOf.get(assignment.guid) ?? null,
-      }));
-
-    const complete = completed.size === resources.length;
-
-    return {
-      complete,
-      canGetCertificate: complete && pending.length === 0,
-      completed: completed.size,
-      total: resources.length,
-      percent: percent(completed.size, resources.length),
-      pendingAssignments: pending,
-      reason: this.getBlockedReason(complete, resources.length - completed.size, pending),
-    };
+    return completed.size === resources.length && assignments.every((guid) => graded.has(guid));
   }
 
   /**
@@ -148,9 +100,9 @@ export class CertificatesService {
     if (resources.length === 0) return [];
 
     const guids = resources.map((resource) => resource.guid);
-    const [completed, submissions] = await Promise.all([
-      this.completedResources(userGuid, guids),
-      this.submissionsOf(userGuid, guids),
+    const [completed, graded] = await Promise.all([
+      this.completedResources(this.prisma, userGuid, guids),
+      this.gradedAssignments(this.prisma, userGuid, guids),
     ]);
 
     const byCourse = new Map<string, typeof resources>();
@@ -167,7 +119,7 @@ export class CertificatesService {
       if (!courseResources.every((resource) => completed.has(resource.guid))) continue;
 
       const pending = courseResources
-        .filter((resource) => resource.type === 'ASSIGNMENT' && !submissions.graded.has(resource.guid))
+        .filter((resource) => resource.type === 'ASSIGNMENT' && !graded.has(resource.guid))
         .map((resource) => ({ title: resource.title }));
 
       if (pending.length > 0) {
@@ -183,8 +135,12 @@ export class CertificatesService {
   }
 
   /** Recursos que el alumno tiene completados, de entre los indicados. */
-  private async completedResources(userGuid: string, resourceGuids: string[]): Promise<Set<string>> {
-    const progress = await this.prisma.resourceProgress.findMany({
+  private async completedResources(
+    db: Prisma.TransactionClient,
+    userGuid: string,
+    resourceGuids: string[],
+  ): Promise<Set<string>> {
+    const progress = await db.resourceProgress.findMany({
       where: { userGuid, resourceGuid: { in: resourceGuids } },
       select: { resourceGuid: true },
     });
@@ -192,38 +148,21 @@ export class CertificatesService {
   }
 
   /**
-   * Entregas del alumno en las tareas indicadas: cuáles están calificadas y el estado de
-   * cada una. Un cuestionario puede tener varios intentos; basta con que uno esté calificado.
+   * Tareas calificadas del alumno, de entre las indicadas. Un cuestionario puede tener varios
+   * intentos; basta con que uno esté calificado.
    */
-  private async submissionsOf(userGuid: string, assignmentGuids: string[]) {
-    const graded = new Set<string>();
-    const statusOf = new Map<string, string>();
-    if (assignmentGuids.length === 0) return { graded, statusOf };
+  private async gradedAssignments(
+    db: Prisma.TransactionClient,
+    userGuid: string,
+    assignmentGuids: string[],
+  ): Promise<Set<string>> {
+    if (assignmentGuids.length === 0) return new Set();
 
-    const submissions = await this.prisma.submission.findMany({
-      where: { userGuid, assignmentGuid: { in: assignmentGuids } },
-      select: { assignmentGuid: true, status: true },
+    const submissions = await db.submission.findMany({
+      where: { userGuid, assignmentGuid: { in: assignmentGuids }, status: 'GRADED' },
+      select: { assignmentGuid: true },
     });
-    for (const { assignmentGuid, status } of submissions) {
-      if (!assignmentGuid) continue;
-      statusOf.set(assignmentGuid, status);
-      if (status === 'GRADED') graded.add(assignmentGuid);
-    }
-    return { graded, statusOf };
-  }
-
-  private getBlockedReason(complete: boolean, missing: number, pending: { title: string }[]): string | null {
-    if (!complete) {
-      return (
-        `${plural(missing, 'Te falta', 'Te faltan')} ${missing} ${plural(missing, 'recurso', 'recursos')} ` +
-        'por completar antes de poder obtener el certificado.'
-      );
-    }
-    if (pending.length > 0) {
-      const names = pending.map((assignment) => `"${assignment.title}"`).join(', ');
-      return `Tu examinador todavía debe calificar ${pending.length} ${plural(pending.length, 'tarea', 'tareas')}: ${names}.`;
-    }
-    return null;
+    return new Set(submissions.flatMap(({ assignmentGuid }) => (assignmentGuid ? [assignmentGuid] : [])));
   }
 
   // ── Emisión ──────────────────────────────────────────────────────────────
@@ -234,50 +173,54 @@ export class CertificatesService {
    * haber cerrado el curso.
    */
   async issueIfEligible(courseGuid: string, userGuid: string, country: Country): Promise<void> {
-    if (await this.isRoundClosed(courseGuid, userGuid)) return;
-
-    const status = await this.checkCompletion(courseGuid, userGuid);
-    if (!status.canGetCertificate) return;
+    // Primero sin bloquear nada: casi ningún avance termina el curso.
+    const enrollment = await this.prisma.enrollment.findUnique({
+      where: { userGuid_courseGuid: { userGuid, courseGuid } },
+      select: { active: true, completedAt: true },
+    });
+    if (!(await this.isEligible(this.prisma, enrollment, courseGuid, userGuid))) return;
 
     if (await this.issue(courseGuid, userGuid, country)) {
       this.logger.log(`Certificado emitido automáticamente: alumno ${userGuid}, curso ${courseGuid}`);
     }
   }
 
-  /** Si la vuelta actual ya terminó con su certificado: la misma condición que se comprueba al emitir. */
-  private async isRoundClosed(courseGuid: string, userGuid: string): Promise<boolean> {
-    const enrollment = await this.prisma.enrollment.findUnique({
-      where: { userGuid_courseGuid: { userGuid, courseGuid } },
-      select: { completedAt: true },
-    });
-    return Boolean(enrollment?.completedAt);
+  /** Si la vuelta sigue abierta —ni dada de baja ni certificada— y cumple los requisitos. */
+  private async isEligible(
+    db: Prisma.TransactionClient,
+    enrollment: LockedEnrollment | null | undefined,
+    courseGuid: string,
+    userGuid: string,
+  ): Promise<boolean> {
+    return isRoundOpen(enrollment) && (await this.isComplete(db, courseGuid, userGuid));
   }
 
   /**
-   * Compone el PDF, lo guarda, lo registra y retira los archivos entregados en la vuelta. Quien
-   * llama ya comprobó que procede.
+   * Comprueba otra vez que procede, compone el PDF, lo guarda, lo registra y retira los archivos
+   * entregados en la vuelta.
    *
-   * Dos emisiones casi simultáneas (el último avance y la última calificación) se ponen en fila
-   * sobre la matrícula: la segunda encuentra la vuelta cerrada y no guarda ni retira nada.
+   * Todo con la matrícula bloqueada: entre la primera comprobación y el bloqueo pudo llegar una
+   * calificación suspensa o una baja, y el certificado tiene que responder a lo último que se
+   * confirmó. Dos emisiones casi simultáneas (el último avance y la última calificación) se
+   * ponen en fila: la segunda encuentra la vuelta cerrada y no guarda ni retira nada.
    *
    * @returns si se emitió.
    */
   private async issue(courseGuid: string, userGuid: string, country: Country): Promise<boolean> {
-    const data = await this.data.gather(courseGuid, userGuid, country);
-    const pdf = await this.data.compose(data.certificate);
     const pdfKey = `certificados/${crypto.randomUUID()}.pdf`;
 
-    let issued: { certificateGuid: string; retiredFiles: string[] } | null;
+    let issued: { certificateGuid: string; data: IssuanceData; retiredFiles: string[] } | null;
     try {
       issued = await this.prisma.$transaction(
         async (tx) => {
           const enrollment = await lockEnrollment(tx, userGuid, courseGuid);
-          if (!enrollment || enrollment.completedAt) return null;
+          if (!(await this.isEligible(tx, enrollment, courseGuid, userGuid))) return null;
 
-          await this.storage.saveWithKey(pdfKey, pdf);
+          const data = await this.data.gather(tx, courseGuid, userGuid, country);
+          await this.storage.saveWithKey(pdfKey, await this.data.compose(data.certificate));
           const certificate = await this.recordIssuance(tx, { courseGuid, userGuid, country, pdfKey, data });
           const retiredFiles = await this.submissionFiles.retireRound(tx, { userGuid, courseGuid });
-          return { certificateGuid: certificate.guid, retiredFiles };
+          return { certificateGuid: certificate.guid, data, retiredFiles };
         },
         { ...AFTER_LOCK, timeout: ISSUANCE_TIMEOUT_MS },
       );
@@ -294,7 +237,7 @@ export class CertificatesService {
       courseGuid,
       userGuid,
       country,
-      data,
+      data: issued.data,
       filesRetired: issued.retiredFiles.length > 0,
     });
     return true;

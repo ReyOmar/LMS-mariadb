@@ -11,7 +11,7 @@ import { LoadFailed } from '@/components/ui/LoadFailed';
 import { UnsavedChangesBar } from '@/components/ui/UnsavedChangesBar';
 import { PageHeading } from '../components/PageHeading';
 import { useSignatureSettings, type SignatureDraft } from './useSignatureSettings';
-import { SignatureSection } from './components/SignatureSection';
+import { SectionCard } from '@/components/ui/SectionCard';
 import { SignatureImage } from './components/SignatureImage';
 import { SignatureFields } from './components/SignatureFields';
 import { SignaturePreview } from './components/SignaturePreview';
@@ -65,21 +65,21 @@ export default function ExaminerSignature() {
         description="Configura tu firma escaneada, nombre y cargo para los certificados de tus cursos asignados."
       />
 
-      <SignatureSection icon={Upload} title="Imagen de firma escaneada">
+      <SectionCard icon={Upload} title="Imagen de firma escaneada" padded={false}>
         <SignatureImage imageUrl={imageUrl} disabled={saving} onPick={pickImage} onRemove={removeImage} />
-      </SignatureSection>
+      </SectionCard>
 
-      <SignatureSection icon={FileSignature} title="Datos de la firma">
+      <SectionCard icon={FileSignature} title="Datos de la firma" padded={false}>
         <SignatureFields draft={draft} fullName={signature.fullName} onChange={edit} />
-      </SignatureSection>
+      </SectionCard>
 
-      <SignatureSection icon={Eye} title="Vista previa de tu firma">
+      <SectionCard icon={Eye} title="Vista previa de tu firma" padded={false}>
         <SignaturePreview
           imageUrl={imageUrl}
           name={draft.signatureName || signature.fullName}
           title={draft.signatureTitle}
         />
-      </SignatureSection>
+      </SectionCard>
 
       {hasChanges && <UnsavedChangesBar saving={saving} onSave={() => void save()} />}
     </div>

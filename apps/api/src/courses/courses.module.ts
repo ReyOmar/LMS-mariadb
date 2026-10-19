@@ -3,16 +3,14 @@ import { CoursesController } from './courses.controller';
 import { CoursesService } from './courses.service';
 import { CourseContentService } from './course-content.service';
 import { QuizService } from './quiz.service';
-import { CourseAccessService } from './course-access.service';
+import { CourseAccessModule } from './course-access.module';
 import { ContentRemovalService } from './content-removal.service';
 import { StorageModule } from '../storage/storage.module';
 
 @Module({
-  imports: [StorageModule],
+  imports: [StorageModule, CourseAccessModule],
   controllers: [CoursesController],
-  providers: [CoursesService, CourseContentService, ContentRemovalService, QuizService, CourseAccessService],
-  // Evaluaciones, estudiantes, certificados y paneles comparten las mismas comprobaciones
-  // de sede, propiedad y matrícula.
-  exports: [CourseAccessService],
+  providers: [CoursesService, CourseContentService, ContentRemovalService, QuizService],
+  exports: [CourseAccessModule],
 })
 export class CoursesModule {}

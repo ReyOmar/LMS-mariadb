@@ -19,6 +19,7 @@ import { useCountry } from '@/contexts/CountryContext';
 import { useRealtimeEvent, useRealtimeReconnect } from '@/contexts/RealtimeContext';
 import { useDialog } from '@/hooks/useDialog';
 import { sanitizeHTML } from '@/lib/sanitize';
+import { hasContent } from '@/lib/editor-html';
 import { externalUrl } from '@/lib/resources';
 import type { QuizState, QuizQuestion } from '@/types/models';
 import { clearQuizDraft, readQuizDraft, saveQuizDraft, type QuizAnswers } from './quiz-draft';
@@ -348,7 +349,9 @@ export default function QuizViewer({
             <div
               className="prose prose-slate dark:prose-invert max-w-none text-foreground"
               dangerouslySetInnerHTML={sanitizeHTML(
-                instructionsHtml || '<p class="text-muted-foreground italic">Sin instrucciones específicas.</p>',
+                hasContent(instructionsHtml)
+                  ? instructionsHtml
+                  : '<p class="text-muted-foreground italic">Sin instrucciones específicas.</p>',
               )}
             />
 
