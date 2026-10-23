@@ -1,5 +1,12 @@
 import type { Course } from '@/types/models';
-import { changedFields, deletionWarning, publishBlocker, unpublishWarning } from './course-changes';
+import {
+  changedFields,
+  deletionWarning,
+  moduleDeletionWarning,
+  publishBlocker,
+  resourceDeletionWarning,
+  unpublishWarning,
+} from './course-changes';
 
 const COURSE = { guid: 'c1', title: 'Manejo defensivo', durationHours: 8, maxStudents: null } as Course;
 
@@ -59,5 +66,26 @@ describe('avisos con la cifra de matriculados', () => {
 
   it('si no se pudo saber cuántos hay, el aviso va sin la cifra', () => {
     expect(unpublishWarning(null)).not.toContain('Ahora hay');
+  });
+});
+
+describe('avisos al borrar contenido', () => {
+  const text = { guid: 'r1', title: 'Lectura', type: 'TEXT' } as const;
+  const task = { guid: 'r2', title: 'Informe', type: 'ASSIGNMENT' } as const;
+
+  it('una tarea o un cuestionario avisa de que se pierden las entregas de los estudiantes', () => {
+    expect(resourceDeletionWarning(task)).toBe(
+      'Se borrará «Informe» y, con él, las entregas de los estudiantes, con sus notas y sus archivos. No se puede deshacer.',
+    );
+    expect(resourceDeletionWarning(text)).toBe('Se borrará «Lectura». No se puede deshacer.');
+  });
+
+  it('un módulo dice cuántos recursos lleva y si se pierden entregas', () => {
+    expect(moduleDeletionWarning({ title: 'Normativa', resources: [text, task] as never })).toBe(
+      'Se borrará el módulo «Normativa» con sus 2 recursos y las entregas de los estudiantes, con sus notas y sus archivos. No se puede deshacer.',
+    );
+    expect(moduleDeletionWarning({ title: 'Vacío', resources: [] })).toBe(
+      'Se borrará el módulo «Vacío». No se puede deshacer.',
+    );
   });
 });

@@ -243,6 +243,16 @@ describe('AuthService · enviar una solicitud de acceso', () => {
     ]);
   });
 
+  it('volver a pedir acceso tras un rechazo cuenta desde ahora: se fecha y se ordena como nueva', async () => {
+    const { service, updates } = requestService({ id: 3, email: 'juan@empresa.com', status: 'REJECTED' });
+    const before = Date.now();
+
+    await service.requestAccess(DTO as never);
+
+    const { createdAt } = (updates[0] as unknown as { data: { createdAt: Date } }).data;
+    expect(createdAt.getTime()).toBeGreaterThanOrEqual(before);
+  });
+
   it('sin el correo verificado no dice si tiene cuenta: eso se sabe sólo con el buzón probado', async () => {
     const { service } = requestService(null, { verified: false, registered: true });
 
@@ -261,7 +271,7 @@ describe('AuthService · enviar una solicitud de acceso', () => {
 
 describe('AuthService · aprobar una solicitud de acceso', () => {
   /** `resolvedMeanwhile`: otro administrador la resolvió entre la carga y la decisión. */
-  function approvalService({ resolvedMeanwhile = false } = {}) {
+  function approvalService({ resolvedMeanwhile = false, hasAccount = false } = {}) {
     const created: Record<string, unknown>[] = [];
     const welcomePasswords: string[] = [];
     const request = {
@@ -277,7 +287,7 @@ describe('AuthService · aprobar una solicitud de acceso', () => {
     };
     const tx = {
       user: {
-        findUnique: async () => null,
+        findUnique: async () => (hasAccount ? { guid: 'ya-existe' } : null),
         create: async ({ data }: { data: Record<string, unknown> }) => (created.push(data), { guid: 'g', ...data }),
       },
       accessRequest: { updateMany: async () => ({ count: resolvedMeanwhile ? 0 : 1 }) },
@@ -322,6 +332,16 @@ describe('AuthService · aprobar una solicitud de acceso', () => {
       dataConsentAt: new Date('2026-09-20T10:00:00Z'),
       dataConsentVersion: '2026-09-25',
     });
+  });
+
+  it('si la persona ya tiene cuenta, la da por atendida sin crear otra ni escribirle', async () => {
+    const { service, created, welcomePasswords } = approvalService({ hasAccount: true });
+
+    await expect(service.approveAccessRequest(7, 'COLOMBIA')).resolves.toEqual({
+      message: 'Esta persona ya tenía cuenta: la solicitud queda atendida sin enviarle nada.',
+    });
+    expect(created).toEqual([]);
+    expect(welcomePasswords).toEqual([]);
   });
 
   it('si otro administrador la resolvió a la vez, no crea la cuenta ni envía la bienvenida', async () => {

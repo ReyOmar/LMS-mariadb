@@ -53,7 +53,7 @@ const messagesFor = async (value: object) => (await validate(Filter, value)).mes
 describe('validación de entrada', () => {
   it('traduce al español los mensajes por defecto', async () => {
     const messages = await messagesFor({ course: 'demasiado largo', limit: 'diez' });
-    expect(messages).toContain('El campo «curso» es demasiado largo.');
+    expect(messages).toContain('El campo «curso» admite como mucho 10 caracteres.');
     expect(messages).toContain('El campo «límite» debe ser un número entero.');
     expect(messages.join(' ')).not.toMatch(/must|should/);
   });
@@ -64,13 +64,13 @@ describe('validación de entrada', () => {
 
   it('nombra los campos en español, no con el nombre interno', async () => {
     expect(await messagesFor({ course: 'c1', search: 'demasiado' })).toEqual([
-      'El campo «búsqueda» es demasiado largo.',
+      'El campo «búsqueda» admite como mucho 5 caracteres.',
     ]);
   });
 
   it('un campo sin nombre en español se nombra tal como llegó', async () => {
     expect(await messagesFor({ course: 'c1', sinEtiqueta: 'demasiado' })).toEqual([
-      'El campo «sinEtiqueta» es demasiado largo.',
+      'El campo «sinEtiqueta» admite como mucho 5 caracteres.',
     ]);
   });
 

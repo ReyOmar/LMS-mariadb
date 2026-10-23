@@ -9,7 +9,7 @@ import { BadRequestException, ValidationError, ValidationPipe } from '@nestjs/co
 const DEFAULT_MESSAGES: Record<string, string> = {
   isString: 'El campo «{field}» debe ser texto.',
   isNotEmpty: 'El campo «{field}» es obligatorio.',
-  maxLength: 'El campo «{field}» es demasiado largo.',
+  maxLength: 'El campo «{field}» admite como mucho {limit} caracteres.',
   length: 'El campo «{field}» no tiene la longitud permitida.',
   isInt: 'El campo «{field}» debe ser un número entero.',
   isNumber: 'El campo «{field}» debe ser un número.',
@@ -157,7 +157,11 @@ function messagesOf(error: ValidationError, parent?: string): string[] {
     if (constraint === 'whitelistValidation') {
       return DEFAULT_MESSAGES.whitelistValidation.replace('{field}', error.property);
     }
-    return (DEFAULT_MESSAGES[constraint] ?? 'El campo «{field}» no es válido.').replace('{field}', field);
+    // El tope viene en el mensaje original («… shorter than or equal to 191 characters»).
+    const limit = /(\d+) characters/.exec(message)?.[1] ?? '';
+    return (DEFAULT_MESSAGES[constraint] ?? 'El campo «{field}» no es válido.')
+      .replace('{field}', field)
+      .replace('{limit}', limit);
   });
   return [...own, ...(error.children ?? []).flatMap((child) => messagesOf(child, field))];
 }

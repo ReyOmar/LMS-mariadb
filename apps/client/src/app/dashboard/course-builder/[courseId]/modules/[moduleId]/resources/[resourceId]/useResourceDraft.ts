@@ -20,12 +20,11 @@ import {
   type StoredAttachment,
 } from './resource-form';
 
-/** El alta admite tipo, título y contenido; el resto llega con el `PATCH` que la sigue. */
+/** El alta lleva el recurso completo: si algo no vale, no queda nada creado a medias. */
 async function createResource(moduleGuid: string, kind: ResourceKind, patch: ResourcePatch): Promise<string> {
   const { data } = await api.post<Resource>(`/courses/modules/${moduleGuid}/resources`, {
     type: newResource(kind).type,
-    title: patch.title,
-    contentHtml: patch.contentHtml,
+    ...patch,
   });
   return data.guid;
 }
@@ -82,9 +81,10 @@ export function useResourceDraft(moduleGuid: string, target: EditorTarget) {
 
   const persist = async (attachment: StoredAttachment | null): Promise<string> => {
     const patch = buildResourcePatch(target.kind, form, attachment, ceilingMb);
-    const guid = resourceGuid ?? (await createResource(moduleGuid, target.kind, patch));
+    let guid = resourceGuid;
+    if (guid) await api.patch(`/courses/resources/${guid}`, patch);
+    else guid = await createResource(moduleGuid, target.kind, patch);
     setResourceGuid(guid);
-    await api.patch(`/courses/resources/${guid}`, patch);
     edit({ attachment });
     setSaved({ ...form, attachment });
     return guid;

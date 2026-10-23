@@ -113,7 +113,7 @@ function OpenCourse({ course, workspace, initialSelection, canDelete, leave }: O
               course={course}
               readOnly={readOnly}
               cover={workspace.cover}
-              onSave={(changes) => void workspace.saveFields(changes)}
+              onSave={workspace.saveFields}
             />
           )}
 
@@ -122,7 +122,7 @@ function OpenCourse({ course, workspace, initialSelection, canDelete, leave }: O
               key={selected.module.guid}
               module={selected.module}
               readOnly={readOnly}
-              onRename={(title) => void outline.renameModule(selected.module.guid, title)}
+              onRename={(title) => outline.renameModule(selected.module.guid, title)}
             />
           )}
 
@@ -131,7 +131,7 @@ function OpenCourse({ course, workspace, initialSelection, canDelete, leave }: O
               resource={selected.resource}
               readOnly={readOnly}
               onEdit={() => router.push(resourceEditorUrl(course.guid, selected.module.guid, selected.resource.guid))}
-              onDelete={() => void outline.deleteResource(selected.resource.guid)}
+              onDelete={() => void outline.deleteResource(selected.resource)}
             />
           )}
         </div>
@@ -147,6 +147,7 @@ function OpenCourse({ course, workspace, initialSelection, canDelete, leave }: O
           onCreateModule={outline.createModule}
           onNewResource={(moduleGuid, kind) => router.push(newResourceEditorUrl(course.guid, moduleGuid, kind))}
           onMoveResource={(moduleGuid, from, to) => void outline.moveResource(moduleGuid, from, to)}
+          onMoveModule={(from, to) => void outline.moveModule(from, to)}
         />
       </div>
 

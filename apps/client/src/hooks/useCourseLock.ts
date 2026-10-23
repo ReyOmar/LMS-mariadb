@@ -19,23 +19,29 @@ import type { CourseEditor } from '@/lib/realtime/events';
 export function useCourseLock(courseGuid: string | undefined): CourseEditor | null {
   const { coursesBeingEdited } = useRealtime();
   const { user } = useSession();
+  const editor = courseGuid ? coursesBeingEdited[courseGuid] : undefined;
+  const isFree = courseGuid !== undefined && !editor;
+
+  // Se pide al entrar y cada vez que queda libre: si quien lo tenía sale, lo hereda quien sigue
+  // dentro, y no quien vuelva a entrar después.
+  useEffect(() => {
+    if (!courseGuid || !isFree) return;
+    void api.post(`/realtime/courses/${courseGuid}/lock`).catch(() => {
+      // Si no se puede tomar el aviso, se sigue editando: es informativo.
+    });
+  }, [courseGuid, isFree]);
 
   useEffect(() => {
     if (!courseGuid) return;
 
     let released = false;
-    const lockPath = `/realtime/courses/${courseGuid}/lock`;
-
-    void api.post(lockPath).catch(() => {
-      // Si no se puede tomar el aviso, se sigue editando: es informativo.
-    });
-
     // Con `keepalive` la petición sale aunque la pestaña se esté cerrando; si no, el aviso
-    // seguiría puesto mientras el usuario tenga otra pestaña del campus abierta.
+    // seguiría puesto mientras el usuario tenga otra pestaña del campus abierta. Si no lo
+    // tenía uno mismo, la API no suelta nada.
     const release = () => {
       if (released) return;
       released = true;
-      sendKeepalive('DELETE', lockPath);
+      sendKeepalive('DELETE', `/realtime/courses/${courseGuid}/lock`);
     };
 
     window.addEventListener('pagehide', release);
@@ -45,9 +51,6 @@ export function useCourseLock(courseGuid: string | undefined): CourseEditor | nu
     };
   }, [courseGuid]);
 
-  if (!courseGuid) return null;
-
-  const editor = coursesBeingEdited[courseGuid];
   // Tenerlo uno mismo no es un bloqueo: no hay nada que avisar.
   return editor && editor.guid !== user?.guid ? editor : null;
 }

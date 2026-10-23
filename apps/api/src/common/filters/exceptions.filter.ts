@@ -57,6 +57,13 @@ export class ExceptionsFilter implements ExceptionFilter {
       );
     }
 
+    // Con la respuesta ya empezada (una descarga cortada a mitad) no cabe otra: intentarlo
+    // lanzaría ERR_HTTP_HEADERS_SENT fuera de toda captura y tumbaría el proceso.
+    if (response.sent || response.raw.headersSent) {
+      if (!response.raw.writableEnded) response.raw.destroy();
+      return;
+    }
+
     // Rechazada una subida por su tamaño, el resto del cuerpo sobra: cerrar la conexión hace
     // que el navegador deje de enviarlo en lugar de subirlo entero para nada.
     if (status === HttpStatus.PAYLOAD_TOO_LARGE) response.header('Connection', 'close');

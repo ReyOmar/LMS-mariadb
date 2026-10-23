@@ -3,12 +3,12 @@
 import { Layers } from 'lucide-react';
 import { plural } from '@/lib/text';
 import type { CourseModule } from '@/types/models';
-import { saveNameOnBlur } from './names';
+import { MAX_TITLE_LENGTH, saveNameOnBlur } from './names';
 
 interface Props {
   module: CourseModule;
   readOnly: boolean;
-  onRename: (title: string) => void;
+  onRename: (title: string) => Promise<boolean>;
 }
 
 /** Ajustes de un módulo. Su contenido se ordena y se añade desde el temario. */
@@ -27,6 +27,7 @@ export function ModuleSettings({ module, readOnly, onRename }: Props) {
         id="module-title"
         type="text"
         defaultValue={module.title}
+        maxLength={MAX_TITLE_LENGTH}
         readOnly={readOnly}
         onBlur={saveNameOnBlur(module.title, onRename)}
         className="w-full bg-muted border border-border rounded-xl px-4 py-3 font-medium focus:outline-none focus:ring-2 focus:ring-primary/50 text-lg read-only:opacity-60 read-only:cursor-not-allowed"

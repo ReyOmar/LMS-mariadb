@@ -4,6 +4,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { Country } from '../common/domain/country';
 import { JwtPayload } from '../common/interfaces/jwt-payload.interface';
 import { AWAITING_GRADE, isResourceUnlocked, waitedTooLong } from './progression';
+import { SYLLABUS_ORDER } from './syllabus-order';
 
 /** Lo que ve un alumno dado de baja al intentar trabajar en el curso. */
 export const UNENROLLED_MESSAGE = 'Tu matrícula en este curso está dada de baja. Contacta con el administrador.';
@@ -161,8 +162,8 @@ export class CourseAccessService {
       select: {
         strictOrder: true,
         modules: {
-          orderBy: { position: 'asc' },
-          select: { resources: { orderBy: { position: 'asc' }, select: { guid: true } } },
+          orderBy: SYLLABUS_ORDER,
+          select: { resources: { orderBy: SYLLABUS_ORDER, select: { guid: true } } },
         },
       },
     });
@@ -217,7 +218,7 @@ export class CourseAccessService {
     return db.resource.findMany({
       where: { module: { courseGuid } },
       select: { guid: true, type: true, title: true },
-      orderBy: [{ module: { position: 'asc' } }, { position: 'asc' }],
+      orderBy: [{ module: { position: 'asc' } }, { module: { createdAt: 'asc' } }, ...SYLLABUS_ORDER],
     });
   }
 

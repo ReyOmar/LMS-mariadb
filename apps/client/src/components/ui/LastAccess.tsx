@@ -32,7 +32,7 @@ export function LastAccess({ guid, date }: { guid: string; date?: string | null 
   const text = timeAgo(date);
   if (!text) {
     return (
-      <span className="text-muted-foreground flex items-center gap-1">
+      <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
         <Clock className="h-3 w-3" /> Sin acceso
       </span>
     );

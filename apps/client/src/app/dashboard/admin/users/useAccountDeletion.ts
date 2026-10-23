@@ -52,13 +52,28 @@ export function useAccountDeletion(currentUserGuid: string | undefined, onDelete
     }
   };
 
+  /** Cursos a su cargo ahora mismo: la fila de la lista puede ser de antes de que le asignaran uno. */
+  const currentCourses = async (user: User): Promise<number> => {
+    if (user.role === 'STUDENT') return 0;
+    const { data } = await api.get<unknown[]>(`/courses/user/${encodeURIComponent(user.guid)}`);
+    return data.length;
+  };
+
   const requestDelete = async (user: User) => {
     if (user.guid === currentUserGuid) {
       showAlert.warning('Operación no permitida', 'No puedes eliminar tu propia cuenta.');
       return;
     }
-    if ((user.taughtCourses ?? 0) > 0) {
-      await openTransfer(user);
+
+    let taughtCourses: number;
+    try {
+      taughtCourses = await currentCourses(user);
+    } catch (error) {
+      showAlert.error('No se pudo preparar la eliminación', errorMessage(error));
+      return;
+    }
+    if (taughtCourses > 0) {
+      await openTransfer({ ...user, taughtCourses });
       return;
     }
     const confirmed = await showConfirmation(

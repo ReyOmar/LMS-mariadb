@@ -19,6 +19,8 @@ import { plural } from '../common/domain/text';
 import { JwtPayload } from '../common/interfaces/jwt-payload.interface';
 import { CourseStatus, CreateCourseDto, UpdateCourseDto } from './dto/courses.dto';
 import { lockCourseCapacity, occupiedSeats } from '../enrollments/course-capacity';
+import { SYLLABUS_ORDER } from './syllabus-order';
+import { NOTIFICATION_REF } from '../notifications/notification-ref';
 
 /** Campos que bastan para pintar una tarjeta de curso en cualquier listado. */
 const COURSE_SUMMARY = {
@@ -258,8 +260,8 @@ export class CoursesService {
       include: {
         teacher: { select: { guid: true, firstName: true, lastName: true } },
         modules: {
-          orderBy: { position: 'asc' },
-          include: { resources: { orderBy: { position: 'asc' } } },
+          orderBy: SYLLABUS_ORDER,
+          include: { resources: { orderBy: SYLLABUS_ORDER } },
         },
       },
     });
@@ -302,6 +304,7 @@ export class CoursesService {
     // Guardar el estado que ya tenía no es un cambio: no se valida ni se avisa a nadie.
     const newStatus = dto.status !== undefined && dto.status !== course.status ? dto.status : null;
     if (newStatus) await this.validateStatusChange(course, newStatus);
+    const change = newStatus && (await this.statusChange(courseGuid, newStatus));
 
     const previous =
       dto.coverImage !== undefined
@@ -312,7 +315,11 @@ export class CoursesService {
     const updated = await this.files.replace([cover], { uploader: user.sub }, () =>
       this.prisma.$transaction(async (tx) => {
         if (dto.maxStudents) await this.ensureSeatsFit(tx, courseGuid, dto.maxStudents);
-        return tx.course.update({ where: { guid: courseGuid }, data: courseChanges(dto), select: COURSE_SUMMARY });
+        return tx.course.update({
+          where: { guid: courseGuid },
+          data: { ...courseChanges(dto), ...(change && { firstPublishedAt: change.firstPublishedAt }) },
+          select: COURSE_SUMMARY,
+        });
       }),
     );
 
@@ -328,8 +335,27 @@ export class CoursesService {
       students,
     );
 
-    if (newStatus) await this.announceStatusChange(updated.guid, updated.title, newStatus, user.country);
+    if (change) await this.announceStatusChange(updated.guid, updated.title, change.kind, user.country);
     return updated;
+  }
+
+  /**
+   * Qué supone pasar al nuevo estado y la fecha de primera publicación que queda. Los cursos
+   * publicados antes de que existiera esa fecha la reciben al cambiar de estado; mientras no la
+   * tengan, el avance o las entregas de sus alumnos prueban que ya se habían publicado.
+   */
+  private async statusChange(courseGuid: string, newStatus: CourseStatus) {
+    const { status, firstPublishedAt } = await this.prisma.course.findUniqueOrThrow({
+      where: { guid: courseGuid },
+      select: { status: true, firstPublishedAt: true },
+    });
+    const kind: StatusChange =
+      newStatus === 'DRAFT'
+        ? 'maintenance'
+        : firstPublishedAt || status !== 'DRAFT' || (await this.hasStudentActivity(courseGuid))
+          ? 'reopening'
+          : 'firstRelease';
+    return { kind, firstPublishedAt: firstPublishedAt ?? new Date() };
   }
 
   /**
@@ -413,7 +439,7 @@ export class CoursesService {
   private async announceStatusChange(
     courseGuid: string,
     title: string,
-    status: CourseStatus,
+    change: StatusChange,
     country: Country,
   ): Promise<void> {
     const enrolledStudents = await this.prisma.enrollment.findMany({
@@ -422,8 +448,6 @@ export class CoursesService {
     });
     if (enrolledStudents.length === 0) return;
 
-    const change =
-      status === 'DRAFT' ? 'maintenance' : (await this.hasStudentActivity(courseGuid)) ? 'reopening' : 'firstRelease';
     const notice = STATUS_NOTICES[change](title);
 
     // Los avisos no bloquean la respuesta: publicar un curso no puede depender del servidor
@@ -435,7 +459,7 @@ export class CoursesService {
           userGuid: user.guid,
           country,
           actionUrl: `/courses/${courseGuid}`,
-          refType: 'curso',
+          refType: NOTIFICATION_REF.course,
           refGuid: courseGuid,
         }),
         this.sendStatusMail(change, user, title, courseGuid, country),
@@ -450,11 +474,7 @@ export class CoursesService {
     });
   }
 
-  /**
-   * Si algún alumno ha trabajado ya en el curso. Avance y entregas sólo existen con el curso
-   * publicado, así que con ellos el curso se publicó antes: el que se publica ahora vuelve de
-   * un mantenimiento y no sale por primera vez.
-   */
+  /** Si algún alumno ha trabajado ya en el curso: avance y entregas sólo existen con el curso publicado. */
   private async hasStudentActivity(courseGuid: string): Promise<boolean> {
     const inCourse = { module: { courseGuid } };
     const [progress, submission] = await Promise.all([

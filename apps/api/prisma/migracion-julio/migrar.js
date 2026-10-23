@@ -548,6 +548,23 @@ async function despues() {
        WHERE p.usuario_guid = m.usuario_guid AND mo.curso_guid = m.curso_guid)`,
   );
 
+  title('Cursos: fecha de primera publicación');
+  await step(
+    'Los publicados o archivados ya salieron alguna vez: al volver de un mantenimiento no son nuevos',
+    `UPDATE lms_cursos SET fecha_primera_publicacion = created_at
+     WHERE fecha_primera_publicacion IS NULL AND estado <> 'BORRADOR'`,
+  );
+
+  title('Avisos de lo que ya no existe');
+  await step(
+    'Avisos de cursos, cuestionarios, entregas o personas borrados',
+    `DELETE n FROM lms_notificaciones n
+     WHERE (n.ref_tipo = 'curso' AND NOT EXISTS (SELECT 1 FROM lms_cursos c WHERE c.guid = n.ref_guid))
+        OR (n.ref_tipo = 'quiz' AND NOT EXISTS (SELECT 1 FROM lms_recursos r WHERE r.guid = n.ref_guid))
+        OR (n.ref_tipo = 'entrega' AND NOT EXISTS (SELECT 1 FROM lms_entregas e WHERE e.guid = n.ref_guid))
+        OR (n.ref_tipo = 'mensaje' AND NOT EXISTS (SELECT 1 FROM usuarios u WHERE u.guid = n.ref_guid))`,
+  );
+
   title('Índices redundantes');
   for (const { table, index } of REDUNDANT_INDEXES) {
     const exists = await one(

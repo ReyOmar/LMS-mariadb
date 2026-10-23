@@ -7,8 +7,15 @@ import { MAX_SCORE, MIN_SCORE } from '@/lib/grading';
 import type { Course } from '@/types/models';
 import type { CoverEditor } from '../useCoverEditor';
 import { CoverField } from './CoverField';
-import { isFieldError, parseCapacity, parseDurationHours, parsePassingScore, type FieldInput } from './course-fields';
-import { saveNameOnBlur } from './names';
+import {
+  MAX_DURATION_HOURS,
+  isFieldError,
+  parseCapacity,
+  parseDurationHours,
+  parsePassingScore,
+  type FieldInput,
+} from './course-fields';
+import { MAX_TITLE_LENGTH, saveNameOnBlur } from './names';
 
 const INPUT =
   'bg-muted border border-border rounded-xl px-4 py-3 font-medium focus:outline-none focus:ring-2 focus:ring-primary/50 text-lg transition-colors text-foreground read-only:opacity-60 read-only:cursor-not-allowed';
@@ -17,7 +24,8 @@ interface Props {
   course: Course;
   readOnly: boolean;
   cover: CoverEditor;
-  onSave: (changes: Partial<Course>) => void;
+  /** @returns Si el curso queda con esos valores. */
+  onSave: (changes: Partial<Course>) => Promise<boolean>;
 }
 
 /** Ajustes que no dependen de ningún módulo; cada campo se guarda al salir de él. */
@@ -35,6 +43,7 @@ export function CourseSettings({ course, readOnly, cover, onSave }: Props) {
           <input
             type="text"
             defaultValue={course.title}
+            maxLength={MAX_TITLE_LENGTH}
             readOnly={readOnly}
             aria-label="Nombre del curso"
             onBlur={saveNameOnBlur(course.title, (title) => onSave({ title }))}
@@ -50,7 +59,7 @@ export function CourseSettings({ course, readOnly, cover, onSave }: Props) {
           unit="horas"
           placeholder="Ej: 8"
           min={1}
-          max={1000}
+          max={MAX_DURATION_HOURS}
           defaultValue={course.durationHours}
           readOnly={readOnly}
           parse={parseDurationHours}
@@ -145,10 +154,13 @@ interface NumberSettingProps extends Omit<SettingProps, 'error' | 'children'> {
   defaultValue: number | null | undefined;
   readOnly?: boolean;
   parse: (typed: string) => FieldInput<Partial<Course>>;
-  onSave: (changes: Partial<Course>) => void;
+  onSave: (changes: Partial<Course>) => Promise<boolean>;
 }
 
-/** Campo numérico que se guarda al salir de él; lo que no vale se explica en lugar de guardarse. */
+/**
+ * Campo numérico que se guarda al salir de él. Lo que no vale se explica en lugar de guardarse,
+ * y si el servidor lo rechaza, vuelve el valor guardado.
+ */
 function NumberSetting({
   unit,
   placeholder,
@@ -175,16 +187,18 @@ function NumberSetting({
           aria-label={setting.title}
           aria-invalid={error !== ''}
           placeholder={placeholder}
-          onBlur={(e) => {
-            const parsed = parse(e.target.value);
+          onBlur={async (e) => {
+            if (readOnly) return;
+            const input = e.currentTarget;
+            const parsed = parse(input.value);
             if (isFieldError(parsed)) {
               setError(parsed.error);
               return;
             }
             setError('');
-            onSave(parsed);
+            if (!(await onSave(parsed))) input.value = String(defaultValue ?? '');
           }}
-          className={`w-32 ${INPUT}`}
+          className={`w-40 ${INPUT}`}
         />
         <span className="text-sm font-medium text-muted-foreground">{unit}</span>
       </div>

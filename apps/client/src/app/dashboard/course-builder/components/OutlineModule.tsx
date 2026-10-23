@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { ChevronDown, ChevronRight, Trash2 } from 'lucide-react';
+import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, Trash2 } from 'lucide-react';
 import type { CourseModule } from '@/types/models';
 import { AddResourceMenu } from './AddResourceMenu';
 import { ResourceRow } from './ResourceRow';
@@ -10,6 +10,8 @@ import type { Selection } from './selection';
 
 interface Props {
   module: CourseModule;
+  first: boolean;
+  last: boolean;
   selection: Selection;
   expanded: boolean;
   readOnly: boolean;
@@ -18,11 +20,14 @@ interface Props {
   onDelete: () => void;
   onNewResource: (kind: ResourceKind) => void;
   onMove: (from: number, to: number) => void;
+  onMoveModule: (offset: -1 | 1) => void;
 }
 
 /** Un módulo del temario con sus recursos, que se reordenan dentro de él. */
 export function OutlineModule({
   module,
+  first,
+  last,
   selection,
   expanded,
   readOnly,
@@ -31,6 +36,7 @@ export function OutlineModule({
   onDelete,
   onNewResource,
   onMove,
+  onMoveModule,
 }: Props) {
   const [dragged, setDragged] = useState<number | null>(null);
   const [dropTarget, setDropTarget] = useState<number | null>(null);
@@ -77,6 +83,26 @@ export function OutlineModule({
 
         {!readOnly && (
           <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={() => onMoveModule(-1)}
+              disabled={first}
+              className="p-1.5 rounded border border-border bg-background text-muted-foreground shadow-sm hover:bg-muted disabled:opacity-30"
+              aria-label={`Subir el módulo «${module.title}»`}
+              title="Subir módulo"
+            >
+              <ArrowUp className="h-4 w-4" />
+            </button>
+            <button
+              type="button"
+              onClick={() => onMoveModule(1)}
+              disabled={last}
+              className="p-1.5 rounded border border-border bg-background text-muted-foreground shadow-sm hover:bg-muted disabled:opacity-30"
+              aria-label={`Bajar el módulo «${module.title}»`}
+              title="Bajar módulo"
+            >
+              <ArrowDown className="h-4 w-4" />
+            </button>
             <button
               type="button"
               onClick={onDelete}

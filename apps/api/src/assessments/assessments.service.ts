@@ -26,7 +26,8 @@ import { encodeCursor, rowsPerPage, decodeCursor, Cursor } from '../common/domai
 import { GradeSubmissionDto } from './dto/grade-submission.dto';
 import { SubmissionQueueDto, AttemptQueueDto, QueueStatus } from './dto/examiner-queue.dto';
 import { emitEvent } from '../common/domain/domain-events';
-import { searchTerm } from '../common/domain/search';
+import { everyWord } from '../common/domain/search';
+import { personSearchSql } from '../prisma/person-search';
 
 /** Campos que necesita el panel del examinador, iguales para tareas y cuestionarios. */
 const DASHBOARD_SELECT = {
@@ -355,21 +356,16 @@ export class AssessmentsService {
 
     const take = rowsPerPage(filter.limit);
     const cursor = decodeCursor(filter.cursor);
-    const text = searchTerm(filter.search);
-
     const matchFilter: Prisma.SubmissionWhereInput = {
       assignment: { quizConfig: null, module: { courseGuid: filter.course } },
       user: { enrollments: { some: { courseGuid: filter.course, active: true } } },
       status: queueStatusFilter(filter.status),
-      ...(text
-        ? {
-            OR: [
-              { user: { firstName: { contains: text } } },
-              { user: { lastName: { contains: text } } },
-              { assignment: { title: { contains: text } } },
-            ],
-          }
-        : {}),
+      // Cada palabra en el nombre o los apellidos del alumno, o en el título de la tarea.
+      ...everyWord<Prisma.SubmissionWhereInput>(filter.search, (word) => [
+        { user: { firstName: { contains: word } } },
+        { user: { lastName: { contains: word } } },
+        { assignment: { title: { contains: word } } },
+      ]),
     };
 
     const rows = await this.prisma.submission.findMany({
@@ -500,12 +496,8 @@ export class AssessmentsService {
 
     const take = rowsPerPage(filter.limit);
     const cursor = decodeCursor(filter.cursor);
-    const text = searchTerm(filter.search);
     const threshold = passingThreshold(course.passingScore);
-
-    const byName = text
-      ? Prisma.sql`AND (u.nombre LIKE ${`%${text}%`} OR u.apellido LIKE ${`%${text}%`})`
-      : Prisma.empty;
+    const byName = personSearchSql(filter.search);
 
     // Un `HAVING` siempre presente evita tener que componer la cláusula en dos trozos. La
     // menor de sus mejores notas decide: si no llega, algún cuestionario está sin superar.

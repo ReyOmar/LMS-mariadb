@@ -3,9 +3,12 @@
 import api from '@/lib/api';
 import { useAlerts } from '@/contexts/AlertContext';
 import { useInFlight } from '@/hooks/useInFlight';
-import type { CourseModule } from '@/types/models';
+import type { CourseModule, Resource } from '@/types/models';
+import { moduleDeletionWarning, resourceDeletionWarning } from './components/course-changes';
 import {
+  moduleOrder,
   resourceOrder,
+  withMovedModule,
   withMovedResource,
   withRenamedModule,
   withoutModule,
@@ -28,20 +31,18 @@ export function useOutlineActions({ course, reload, update, attempt }: CourseWor
       if (created) await reload();
     });
 
-  const renameModule = async (moduleGuid: string, title: string) => {
+  /** @returns Si el módulo queda con ese nombre. */
+  const renameModule = async (moduleGuid: string, title: string): Promise<boolean> => {
     const current = course?.modules?.find((courseModule) => courseModule.guid === moduleGuid);
-    if (!current || current.title === title) return;
-    await attempt('No se pudo renombrar el módulo', async () => {
+    if (!current || current.title === title) return true;
+    return attempt('No se pudo renombrar el módulo', async () => {
       await api.patch(`/courses/modules/${moduleGuid}`, { title });
       update((latest) => withRenamedModule(latest, moduleGuid, title));
     });
   };
 
   const deleteModule = async (courseModule: CourseModule) => {
-    const confirmed = await showConfirmation(
-      'Eliminar módulo',
-      `¿Eliminar el módulo "${courseModule.title}"? Todo su contenido será borrado permanentemente.`,
-    );
+    const confirmed = await showConfirmation('Eliminar módulo', moduleDeletionWarning(courseModule));
     if (!confirmed) return;
     await attempt('No se pudo eliminar el módulo', async () => {
       await api.delete(`/courses/modules/${courseModule.guid}`);
@@ -49,15 +50,12 @@ export function useOutlineActions({ course, reload, update, attempt }: CourseWor
     });
   };
 
-  const deleteResource = async (resourceGuid: string) => {
-    const confirmed = await showConfirmation(
-      'Eliminar recurso',
-      '¿Estás seguro de que deseas eliminar este recurso? Esta acción no se puede deshacer.',
-    );
+  const deleteResource = async (resource: Resource) => {
+    const confirmed = await showConfirmation('Eliminar recurso', resourceDeletionWarning(resource));
     if (!confirmed) return;
     await attempt('No se pudo eliminar el recurso', async () => {
-      await api.delete(`/courses/resources/${resourceGuid}`);
-      update((latest) => withoutResource(latest, resourceGuid));
+      await api.delete(`/courses/resources/${resource.guid}`);
+      update((latest) => withoutResource(latest, resource.guid));
     });
   };
 
@@ -73,5 +71,17 @@ export function useOutlineActions({ course, reload, update, attempt }: CourseWor
     if (!saved) await reload();
   };
 
-  return { createModule, renameModule, deleteModule, deleteResource, moveResource };
+  /** Como `moveResource`, para los módulos del curso. */
+  const moveModule = async (from: number, to: number) => {
+    if (!course || from === to) return;
+    const moved = withMovedModule(course, from, to);
+    update((latest) => withMovedModule(latest, from, to));
+
+    const saved = await attempt('No se pudo guardar el nuevo orden', async () => {
+      await api.patch(`/courses/${course.guid}/modules/order`, { guids: moduleOrder(moved) });
+    });
+    if (!saved) await reload();
+  };
+
+  return { createModule, renameModule, deleteModule, deleteResource, moveResource, moveModule };
 }

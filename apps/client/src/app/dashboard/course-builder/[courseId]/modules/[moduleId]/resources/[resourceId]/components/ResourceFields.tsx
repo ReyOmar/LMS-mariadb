@@ -4,6 +4,7 @@ import { Link as LinkIcon } from 'lucide-react';
 import { useConfig } from '@/contexts/ConfigContext';
 import { QuizEditor } from '@/app/dashboard/course-builder/components/QuizEditor';
 import type { ResourceKind } from '@/app/dashboard/course-builder/components/resources';
+import { MAX_TITLE_LENGTH } from '@/app/dashboard/course-builder/components/names';
 import type { ResourceDraft } from '../useResourceDraft';
 import { ContentEditor } from './ContentEditor';
 import { AttachmentField } from './AttachmentField';
@@ -42,6 +43,7 @@ export function ResourceFields({ kind, draft, readOnly }: Props) {
           id="resource-title"
           type="text"
           value={form.title}
+          maxLength={MAX_TITLE_LENGTH}
           onChange={(e) => edit({ title: e.target.value })}
           className={`${INPUT} py-3 focus:ring-primary/50 font-bold text-lg`}
           placeholder="Ingresa un título..."

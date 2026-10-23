@@ -240,14 +240,16 @@ node prisma/migracion-julio/migrar.js despues
   - tablas: `lms_lecciones` (sus recursos ya están en los módulos), `lms_metricas_capacitacion`
     (se calcula al vuelo), `lms_token_revocations` y `_migracion_julio` (la marca del paso
     anterior);
-  - cambios de tipo de las notas a `Decimal(5,2)`, que con valores de 0 a 100 no pierden nada.
+  - cambios de tipo de las notas a `Decimal(5,2)`, que con valores de 0 a 100 no pierden nada, y
+    de columnas de texto que se amplían (`MEDIUMTEXT`, `VARCHAR(255)` o `VARCHAR(500)`).
 
   Debe terminar con «_Your database is now in sync with your Prisma schema_». Si se detuviera
   con `errno: 121 "Duplicate key on write or update"`, ejecútalo otra vez: aplica lo que falta.
 
 - **`despues`** marca como terminadas las matrículas ya certificadas, calcula el avance de cada
-  matrícula, retira índices redundantes y adapta las plantillas de correo a la escala 0–100
-  («/5.0» pasa a «puntos»). Puede repetirse sin daño.
+  matrícula, anota como ya publicados los cursos que lo estaban, retira los avisos de cursos,
+  entregas o cuentas que ya no existen y los índices redundantes, y adapta las plantillas de
+  correo a la escala 0–100 («/5.0» pasa a «puntos»). Puede repetirse sin daño.
 
 ### 7.5 · Colocar los archivos
 
@@ -561,7 +563,11 @@ Esta actualización pide, además:
 - **`db push` con pérdida**: retira columnas que ya no se usan (`lms_cursos.fecha_inicio`,
   `fecha_fin` y `codigo_acceso`, `lms_modulos.requiere_anterior`, `lms_recursos.obligatorio` y
   `tiempo_lectura`, `lms_plantillas_correo.es_sistema`). Si lo que enumera es eso, ejecuta
-  `npx prisma db push --accept-data-loss`.
+  `npx prisma db push --accept-data-loss`. Además amplía, sin perder nada, columnas que se
+  quedaban cortas (el contenido de las lecciones, los textos legales, las plantillas de correo,
+  el mensaje de bienvenida, el motivo de rechazo, la URL de referencia, el nombre del titular de
+  los certificados y el título de los avisos), añade a los cursos la fecha de su primera
+  publicación y un índice a los avisos.
 
 ## Problemas frecuentes
 

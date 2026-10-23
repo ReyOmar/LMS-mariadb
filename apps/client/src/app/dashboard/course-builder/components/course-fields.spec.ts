@@ -41,4 +41,9 @@ describe('parseDurationHours', () => {
       expect(parseDurationHours(typed)).toEqual({ durationHours: null });
     }
   });
+
+  it('no deja pasar más horas de las que admite la API', () => {
+    expect(parseDurationHours('1000')).toEqual({ durationHours: 1000 });
+    expect(parseDurationHours('1500')).toHaveProperty('error');
+  });
 });

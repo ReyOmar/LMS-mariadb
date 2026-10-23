@@ -45,6 +45,8 @@ function serviceWith(prisma: Record<string, unknown>, course: Record<string, unk
   const client: Record<string, unknown> = {
     ...defaults,
     ...prisma,
+    // La fila del curso es la misma que devuelve el acceso; las pruebas añaden lo que necesiten.
+    course: { findUniqueOrThrow: async () => ({ firstPublishedAt: null, ...course }), ...(prisma.course as object) },
     $transaction: (work: Promise<unknown>[] | ((tx: unknown) => Promise<unknown>)) =>
       typeof work === 'function' ? work(client) : Promise.all(work),
   };
@@ -499,22 +501,23 @@ describe('CoursesService · avisos de mantenimiento', () => {
     expect(emitted).toContainEqual({ event: 'course:maintenance', to: 'alumna, egresada' });
   });
 
-  function publish(withActivity: boolean) {
+  function publish({ activity = false, firstPublishedAt = null as Date | null } = {}) {
     const { enrollment } = withEnrollments();
-    const activity = withActivity ? { id: 1 } : null;
-    return serviceWith(
+    const update = jest.fn(async () => ({ ...PUBLISHED }));
+    const harness = serviceWith(
       {
         enrollment,
-        resourceProgress: { findFirst: async () => activity },
+        resourceProgress: { findFirst: async () => (activity ? { id: 1 } : null) },
         submission: { findFirst: async () => null },
-        course: { update: async () => ({ ...PUBLISHED }) },
+        course: { update },
       },
-      { ...PUBLISHED, status: 'DRAFT' },
+      { ...PUBLISHED, status: 'DRAFT', firstPublishedAt },
     );
+    return { ...harness, update };
   }
 
   it('al volver a publicarse tras un mantenimiento avisa de la reactivación con enlace al curso', async () => {
-    const { service, notifications, mail } = publish(true);
+    const { service, notifications, mail } = publish({ activity: true });
 
     await service.updateCourse('curso-1', { status: 'PUBLISHED' }, ADMIN);
     await flushPromises();
@@ -525,8 +528,18 @@ describe('CoursesService · avisos de mantenimiento', () => {
     expect(mail.sendCourseReactivated).toHaveBeenCalledTimes(1);
   });
 
+  it('volver de un mantenimiento sin que nadie haya empezado tampoco es otra matrícula', async () => {
+    const { service, notifications, mail } = publish({ firstPublishedAt: new Date('2026-09-01') });
+
+    await service.updateCourse('curso-1', { status: 'PUBLISHED' }, ADMIN);
+    await flushPromises();
+
+    expect(notifications.create).toHaveBeenCalledWith(expect.objectContaining({ type: 'COURSE_REACTIVATED' }));
+    expect(mail.sendEnrollment).not.toHaveBeenCalled();
+  });
+
   it('la primera publicación no habla de mantenimiento: avisa de que el curso ya está disponible', async () => {
-    const { service, notifications, mail } = publish(false);
+    const { service, notifications, mail, update } = publish();
 
     await service.updateCourse('curso-1', { status: 'PUBLISHED' }, ADMIN);
     await flushPromises();
@@ -536,5 +549,9 @@ describe('CoursesService · avisos de mantenimiento', () => {
     );
     expect(mail.sendCourseReactivated).not.toHaveBeenCalled();
     expect(mail.sendEnrollment).toHaveBeenCalledTimes(1);
+    // Queda anotada: la próxima vez que se publique, volverá de un mantenimiento.
+    expect(update.mock.calls[0]).toEqual([
+      expect.objectContaining({ data: { status: 'PUBLISHED', firstPublishedAt: expect.any(Date) } }),
+    ]);
   });
 });

@@ -13,6 +13,7 @@ import { JwtPayload } from '../common/interfaces/jwt-payload.interface';
 import { CertificateDataService, IssuanceData, parseSnapshot } from './certificate-data.service';
 import { SubmissionFilesService } from './submission-files.service';
 import { isValid } from './validity';
+import { NOTIFICATION_REF } from '../notifications/notification-ref';
 
 /**
  * Tope de la transacción de emisión: cubre la espera por la matrícula bloqueada, la composición
@@ -307,7 +308,7 @@ export class CertificatesService {
           title: 'Certificado disponible',
           message: filesRetired ? `${ready} ${FILES_RETIRED_NOTICE}` : ready,
           actionUrl: '/dashboard/student/certificates',
-          refType: 'certificado',
+          refType: NOTIFICATION_REF.certificate,
           refGuid: certificateGuid,
         }),
         this.mail.sendCertificateIssued(

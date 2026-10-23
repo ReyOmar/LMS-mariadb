@@ -90,9 +90,10 @@ export function useCourseWorkspace(courseGuid: string, onRemoved: () => void) {
 
   const cover = useCoverEditor(applyChanges, attempt);
 
-  const saveFields = async (changes: Partial<Course>) => {
+  /** @returns Si la ficha queda con esos valores. */
+  const saveFields = async (changes: Partial<Course>): Promise<boolean> => {
     const applied = latest.current && changedFields(latest.current, changes);
-    if (applied) await patchCourse('No se pudo actualizar el curso', applied);
+    return applied ? patchCourse('No se pudo actualizar el curso', applied) : true;
   };
 
   const publish = async (): Promise<boolean> => {

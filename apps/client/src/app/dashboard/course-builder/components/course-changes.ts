@@ -1,4 +1,4 @@
-import type { Course } from '@/types/models';
+import type { Course, CourseModule, Resource } from '@/types/models';
 import { plural } from '@/lib/text';
 import { unconfiguredResources } from './resources';
 
@@ -47,6 +47,22 @@ export function deletionWarning(course: Pick<Course, 'modules'>, enrolled: numbe
     enrolledNotice(enrolled, 'perderá el acceso', 'perderán el acceso') +
     ' Los certificados ya emitidos se conservan y se pueden seguir verificando. No se puede deshacer.'
   );
+}
+
+/** Las tareas y los cuestionarios guardan entregas de los estudiantes. */
+const GRADED_WORK = 'las entregas de los estudiantes, con sus notas y sus archivos';
+
+export function resourceDeletionWarning(resource: Pick<Resource, 'title' | 'type'>): string {
+  const graded = resource.type === 'ASSIGNMENT' ? ` y, con él, ${GRADED_WORK}` : '';
+  return `Se borrará «${resource.title}»${graded}. No se puede deshacer.`;
+}
+
+export function moduleDeletionWarning(courseModule: Pick<CourseModule, 'title' | 'resources'>): string {
+  const resources = courseModule.resources ?? [];
+  const content =
+    resources.length === 0 ? '' : resources.length === 1 ? ' con su recurso' : ` con sus ${resources.length} recursos`;
+  const graded = resources.some((resource) => resource.type === 'ASSIGNMENT') ? ` y ${GRADED_WORK}` : '';
+  return `Se borrará el módulo «${courseModule.title}»${content}${graded}. No se puede deshacer.`;
 }
 
 export function unpublishWarning(enrolled: number | null): string {

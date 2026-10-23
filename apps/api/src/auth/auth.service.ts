@@ -258,8 +258,9 @@ export class AuthService {
         consentVersion,
       };
 
+      // Volver a pedir acceso tras un rechazo es una solicitud nueva: se fecha y se ordena como tal.
       return existing
-        ? tx.accessRequest.update({ where: { id: existing.id }, data })
+        ? tx.accessRequest.update({ where: { id: existing.id }, data: { ...data, createdAt: new Date() } })
         : tx.accessRequest.create({ data });
     });
 
@@ -307,6 +308,8 @@ export class AuthService {
    * Aprueba una solicitud y crea la cuenta con una clave temporal.
    * La cuenta hereda el país de la solicitud, nunca el del administrador: así una
    * solicitud sólo puede acabar en la sede a la que se dirigió.
+   *
+   * Si la persona ya tiene cuenta, la solicitud se da por atendida sin crear otra ni escribirle.
    */
   async approveAccessRequest(id: number, country: Country) {
     const accessRequest = await this.pendingRequest(id, country);
@@ -320,9 +323,7 @@ export class AuthService {
       // Comprobación dentro de la transacción: entre la solicitud y la aprobación
       // pudo crearse la cuenta por otra vía.
       const duplicate = await tx.user.findUnique({ where: { email: accessRequest.email }, select: { guid: true } });
-      if (duplicate) {
-        throw new BadRequestException('Ya existe una cuenta con ese correo. Rechaza la solicitud.');
-      }
+      if (duplicate) return null;
 
       return tx.user.create({
         data: {
@@ -340,6 +341,7 @@ export class AuthService {
     });
 
     this.realtime.emitToRole('request:resolved', { id, action: 'approved' }, country, 'ADMIN');
+    if (!user) return { message: 'Esta persona ya tenía cuenta: la solicitud queda atendida sin enviarle nada.' };
     this.realtime.emitToRole('user:created', { guid: user.guid }, country, 'ADMIN');
 
     this.mail

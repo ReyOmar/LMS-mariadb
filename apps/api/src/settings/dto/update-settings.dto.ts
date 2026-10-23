@@ -14,6 +14,9 @@ import { IsStorageKey } from '../../storage/storage-key.validator';
 import { IsUploadLimitMb } from '../../storage/upload-limit.validator';
 import { EmptyToNull } from '../../common/validation/transforms';
 
+/** Tope de cada texto legal: cabe una política extensa, no un pegado accidental de megas. */
+export const MAX_LEGAL_DOCUMENT_LENGTH = 100_000;
+
 /**
  * Configuración editable de una sede.
  *
@@ -29,9 +32,9 @@ export class UpdateSettingsDto {
   @IsOptional() @IsString() @MaxLength(120) platformName?: string;
 
   // Claves de almacenamiento tal como las devuelve la subida, o `null` para quitarlas.
-  @IsOptional() @IsString() @IsStorageKey(['logos']) @MaxLength(512) logoUrl?: string | null;
-  @IsOptional() @IsString() @IsStorageKey(['logos']) @MaxLength(512) faviconUrl?: string | null;
-  @IsOptional() @IsString() @IsStorageKey(['fondos']) @MaxLength(512) loginBackgroundUrl?: string | null;
+  @IsOptional() @IsString() @IsStorageKey(['logos']) @MaxLength(191) logoUrl?: string | null;
+  @IsOptional() @IsString() @IsStorageKey(['logos']) @MaxLength(191) faviconUrl?: string | null;
+  @IsOptional() @IsString() @IsStorageKey(['fondos']) @MaxLength(191) loginBackgroundUrl?: string | null;
 
   @IsOptional()
   @IsHexColor({ message: 'El color primario debe ser hexadecimal (#RRGGBB).' })
@@ -68,10 +71,10 @@ export class UpdateSettingsDto {
 
   @IsOptional() @IsString() @MaxLength(60) landingPhone?: string;
   @IsOptional() @IsString() @MaxLength(120) landingPhoneSub?: string;
-  @IsOptional() @IsString() @MaxLength(255) landingEmail?: string;
+  @IsOptional() @IsString() @MaxLength(191) landingEmail?: string;
   @IsOptional() @IsString() @MaxLength(120) landingEmailSub?: string;
-  @IsOptional() @IsString() @MaxLength(255) landingOffice?: string;
-  @IsOptional() @IsString() @MaxLength(255) landingOfficeSub?: string;
+  @IsOptional() @IsString() @MaxLength(191) landingOffice?: string;
+  @IsOptional() @IsString() @MaxLength(191) landingOfficeSub?: string;
   @IsOptional() @IsString() @MaxLength(1000) landingFooterText?: string;
 
   // ── Legal: responsable del tratamiento y textos ──
@@ -84,7 +87,7 @@ export class UpdateSettingsDto {
   @IsEmail({}, { message: 'El correo de privacidad no es válido.' })
   @MaxLength(191)
   privacyEmail?: string | null;
-  @IsOptional() @IsString() legalTerms?: string | null;
-  @IsOptional() @IsString() legalPrivacy?: string | null;
-  @IsOptional() @IsString() legalData?: string | null;
+  @IsOptional() @IsString() @MaxLength(MAX_LEGAL_DOCUMENT_LENGTH) legalTerms?: string | null;
+  @IsOptional() @IsString() @MaxLength(MAX_LEGAL_DOCUMENT_LENGTH) legalPrivacy?: string | null;
+  @IsOptional() @IsString() @MaxLength(MAX_LEGAL_DOCUMENT_LENGTH) legalData?: string | null;
 }

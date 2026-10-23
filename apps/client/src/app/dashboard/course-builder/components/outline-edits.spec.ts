@@ -1,5 +1,13 @@
 import type { Course } from '@/types/models';
-import { resourceOrder, withMovedResource, withRenamedModule, withoutModule, withoutResource } from './outline-edits';
+import {
+  moduleOrder,
+  resourceOrder,
+  withMovedModule,
+  withMovedResource,
+  withRenamedModule,
+  withoutModule,
+  withoutResource,
+} from './outline-edits';
 
 const COURSE = {
   guid: 'c1',
@@ -15,6 +23,13 @@ describe('ediciones del temario', () => {
 
     expect(resourceOrder(moved, 'm1')).toEqual(['b', 'c', 'a']);
     expect(resourceOrder(moved, 'm2')).toEqual(['d']);
+  });
+
+  it('mueve un módulo con sus recursos', () => {
+    const moved = withMovedModule(COURSE, 1, 0);
+
+    expect(moduleOrder(moved)).toEqual(['m2', 'm1']);
+    expect(resourceOrder(moved, 'm1')).toEqual(['a', 'b', 'c']);
   });
 
   it('renombra sólo el módulo indicado', () => {

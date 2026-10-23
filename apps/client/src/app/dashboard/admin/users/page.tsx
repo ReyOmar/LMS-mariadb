@@ -17,6 +17,7 @@ import { CourseTransfer } from './components/CourseTransfer';
 import { useAccounts } from './useAccounts';
 import { useAccountDetails } from './useAccountDetails';
 import { useAccountDeletion } from './useAccountDeletion';
+import { useTemporaryPassword } from './useTemporaryPassword';
 
 const SEARCH_DELAY_MS = 300;
 const RELATIVE_TIME_REFRESH_MS = 60_000;
@@ -37,6 +38,7 @@ export default function UsersPage() {
   const [search, setSearch] = useState('');
   const accounts = useAccounts(tab, searchQuery(useDebounce(search, SEARCH_DELAY_MS)));
   const details = useAccountDetails();
+  const resendPassword = useTemporaryPassword();
   const deletion = useAccountDeletion(currentUser?.guid, (guid) => {
     details.close();
     accounts.remove(guid);
@@ -90,6 +92,7 @@ export default function UsersPage() {
           onClose={details.close}
           onEdit={(account) => setForm({ account })}
           onDelete={deletion.requestDelete}
+          onResendPassword={resendPassword}
         />
       )}
 

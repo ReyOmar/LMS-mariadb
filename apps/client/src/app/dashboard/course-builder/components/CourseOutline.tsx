@@ -18,6 +18,7 @@ interface Props {
   onCreateModule: () => void;
   onNewResource: (moduleGuid: string, kind: ResourceKind) => void;
   onMoveResource: (moduleGuid: string, from: number, to: number) => void;
+  onMoveModule: (from: number, to: number) => void;
 }
 
 /** Temario del curso: en escritorio, una columna fija; en el móvil, un cajón lateral con su botón. */
@@ -32,6 +33,7 @@ export function CourseOutline({
   onCreateModule,
   onNewResource,
   onMoveResource,
+  onMoveModule,
 }: Props) {
   const [visible, setVisible] = useState(false);
   const modules = course.modules ?? [];
@@ -83,10 +85,12 @@ export function CourseOutline({
           {modules.length === 0 ? (
             <div className="text-center py-8 text-muted-foreground text-sm">No hay módulos creados aún.</div>
           ) : (
-            modules.map((courseModule) => (
+            modules.map((courseModule, index) => (
               <OutlineModule
                 key={courseModule.guid}
                 module={courseModule}
+                first={index === 0}
+                last={index === modules.length - 1}
                 selection={selection}
                 expanded={Boolean(expandedModules[courseModule.guid])}
                 readOnly={readOnly}
@@ -95,6 +99,7 @@ export function CourseOutline({
                 onDelete={() => onDeleteModule(courseModule)}
                 onNewResource={(kind) => onNewResource(courseModule.guid, kind)}
                 onMove={(from, to) => onMoveResource(courseModule.guid, from, to)}
+                onMoveModule={(offset) => onMoveModule(index, index + offset)}
               />
             ))
           )}

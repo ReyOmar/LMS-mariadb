@@ -2,6 +2,9 @@ import { FileText, MapPin, Phone, Type } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { CountrySettings } from '@/contexts/ConfigContext';
 
+/** Tope de cada texto legal: cabe una política extensa, no un pegado accidental de megas. */
+const MAX_LEGAL_DOCUMENT_LENGTH = 100_000;
+
 export interface EditableField {
   field: keyof CountrySettings;
   label: string;
@@ -53,10 +56,10 @@ export const LANDING_TABS: LandingTab[] = [
         placeholder: 'Ej.: Lunes a viernes, de 8:00 a 18:00',
         limit: 120,
       },
-      { field: 'landingEmail', label: 'Correo de contacto', placeholder: 'Ej.: contacto@tuempresa.com', limit: 255 },
+      { field: 'landingEmail', label: 'Correo de contacto', placeholder: 'Ej.: contacto@tuempresa.com', limit: 191 },
       { field: 'landingEmailSub', label: 'Tiempo de respuesta', placeholder: 'Ej.: Respuesta en 24 horas', limit: 120 },
-      { field: 'landingOffice', label: 'Ciudad', placeholder: 'Ej.: ciudad de la oficina principal', limit: 255 },
-      { field: 'landingOfficeSub', label: 'Dirección', placeholder: 'Ej.: calle, número y barrio', limit: 255 },
+      { field: 'landingOffice', label: 'Ciudad', placeholder: 'Ej.: ciudad de la oficina principal', limit: 191 },
+      { field: 'landingOfficeSub', label: 'Dirección', placeholder: 'Ej.: calle, número y barrio', limit: 191 },
     ],
   },
   {
@@ -89,13 +92,19 @@ export const LANDING_TABS: LandingTab[] = [
         hint: 'Si se deja vacío se usa el correo de contacto.',
         limit: 191,
       },
-      { field: 'legalTerms', label: 'Términos de uso', type: 'document' },
+      { field: 'legalTerms', label: 'Términos de uso', type: 'document', limit: MAX_LEGAL_DOCUMENT_LENGTH },
       {
         field: 'legalPrivacy',
         label: 'Política de tratamiento de datos / Aviso de privacidad',
         type: 'document',
+        limit: MAX_LEGAL_DOCUMENT_LENGTH,
       },
-      { field: 'legalData', label: 'Derechos de los titulares y cómo ejercerlos', type: 'document' },
+      {
+        field: 'legalData',
+        label: 'Derechos de los titulares y cómo ejercerlos',
+        type: 'document',
+        limit: MAX_LEGAL_DOCUMENT_LENGTH,
+      },
     ],
   },
 ];

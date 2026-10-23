@@ -4,8 +4,10 @@ import { RealtimeService } from '../realtime/realtime.service';
 import { NotificationsService } from './notifications.service';
 import { JwtPayload, UserRole } from '../common/interfaces/jwt-payload.interface';
 import { SendMessageDto } from './dto/messages.dto';
-import { MIN_SEARCH_LENGTH, searchTerm } from '../common/domain/search';
+import { MIN_SEARCH_LENGTH } from '../common/domain/search';
+import { personSearch } from '../prisma/person-search';
 import { plural } from '../common/domain/text';
+import { NOTIFICATION_REF } from './notification-ref';
 
 /** Mensajes que devuelve una conversación. Basta para el historial visible. */
 const CONVERSATION_LIMIT = 200;
@@ -14,7 +16,6 @@ const CONVERSATION_LIMIT = 200;
 const CANDIDATES_LIMIT = 50;
 
 /** Avisos de la campana que corresponden a un mensaje; su referencia es quien lo envió. */
-const MESSAGE_REF = 'mensaje';
 
 const NO_SHARED_COURSE = 'Sólo puedes contactar con personas de un curso que compartan.';
 
@@ -81,7 +82,7 @@ export class ChatService {
       title: `Mensaje de ${senderName}`,
       message: dto.subject,
       actionUrl: '/dashboard/messages',
-      refType: MESSAGE_REF,
+      refType: NOTIFICATION_REF.person,
       refGuid: user.sub,
     });
 
@@ -203,7 +204,7 @@ export class ChatService {
 
   private markMessageNotificationsRead(contactGuid: string, user: JwtPayload) {
     return this.prisma.notification.updateMany({
-      where: { userGuid: user.sub, refType: MESSAGE_REF, refGuid: contactGuid, read: false },
+      where: { userGuid: user.sub, refType: NOTIFICATION_REF.person, refGuid: contactGuid, read: false },
       data: { read: true },
     });
   }
@@ -234,7 +235,7 @@ export class ChatService {
     const courseGuids = isAdmin ? [] : await this.userCourses(user);
     if (!isAdmin && courseGuids.length === 0) return [];
 
-    const term = searchTerm(typed);
+    const byName = personSearch(typed);
 
     const candidates = await this.prisma.user.findMany({
       where: {
@@ -254,17 +255,7 @@ export class ChatService {
                   ],
                 },
               ]),
-          ...(term
-            ? [
-                {
-                  OR: [
-                    { firstName: { contains: term } },
-                    { lastName: { contains: term } },
-                    { email: { contains: term } },
-                  ],
-                },
-              ]
-            : []),
+          ...(byName ? [byName] : []),
         ],
       },
       select: { guid: true, firstName: true, lastName: true, email: true, role: true },
@@ -348,6 +339,8 @@ export class ChatService {
       title: 'Solicitud de conversación',
       message: `${await this.displayName(user.sub)} quiere iniciar una conversación contigo.`,
       actionUrl: '/dashboard/messages',
+      refType: NOTIFICATION_REF.person,
+      refGuid: user.sub,
     });
     this.realtime.emitToUsers('contact:updated', {}, user.country, [receiverGuid]);
 
@@ -374,6 +367,8 @@ export class ChatService {
         title: 'Solicitud aceptada',
         message: `${await this.displayName(user.sub)} aceptó tu solicitud. Ya pueden conversar.`,
         actionUrl: '/dashboard/messages',
+        refType: NOTIFICATION_REF.person,
+        refGuid: user.sub,
       });
       // Quien pidió el contacto ve la conversación en su bandeja sin recargar.
       this.realtime.emitToUsers('contact:updated', {}, user.country, [contact.requesterGuid]);

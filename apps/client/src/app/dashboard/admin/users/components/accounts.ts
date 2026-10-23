@@ -49,7 +49,7 @@ export function roleChangeProblem(
 
   const courses = account.taughtCourses ?? 0;
   if (courses > 0 && !managesCourses(role)) {
-    return `Es responsable de ${courses} ${plural(courses, 'curso', 'cursos')}: asígnalos a otro examinador o administrador antes de hacerla ${USER_ROLE_LABEL[role].toLowerCase()}.`;
+    return `Es responsable de ${courses} ${plural(courses, 'curso', 'cursos')}: ${plural(courses, 'asígnalo', 'asígnalos')} a otro examinador o administrador antes de hacerla ${USER_ROLE_LABEL[role].toLowerCase()}.`;
   }
   return null;
 }

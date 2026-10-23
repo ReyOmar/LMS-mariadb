@@ -20,3 +20,21 @@ export function searchTerm(raw: string | undefined | null): string | undefined {
   const text = raw?.trim().normalize('NFD').replace(COMBINING_MARKS, '').normalize('NFC');
   return text ? text.replace(/[\\%_]/g, (char) => `\\${char}`) : undefined;
 }
+
+/**
+ * Las palabras de una búsqueda, cada una lista para `LIKE` (ver `searchTerm`). Buscar palabra a
+ * palabra deja escribir un nombre completo tal como se ve —«Álvaro Peña»— aunque el nombre y
+ * los apellidos vivan en columnas distintas.
+ */
+export function searchWords(raw: string | undefined | null): string[] {
+  return (raw ?? '').split(/\s+/).flatMap((word) => searchTerm(word) ?? []);
+}
+
+/**
+ * Condición de que cada palabra buscada case con alguno de los campos que da `fields`, en
+ * cualquier orden. `undefined` si no hay nada que buscar.
+ */
+export function everyWord<T>(raw: string | undefined | null, fields: (word: string) => T[]) {
+  const words = searchWords(raw);
+  return words.length > 0 ? { AND: words.map((word) => ({ OR: fields(word) })) } : undefined;
+}

@@ -29,8 +29,15 @@ export function parsePassingScore(typed: string): FieldInput<{ passingScore: num
   return { passingScore: score };
 }
 
+/** Tope de las horas que acredita un certificado, el mismo que aplica la API. */
+export const MAX_DURATION_HOURS = 1000;
+
 /** Horas que acredita el certificado; vacío o no válido las deja sin declarar. */
-export function parseDurationHours(typed: string): { durationHours: number | null } {
+export function parseDurationHours(typed: string): FieldInput<{ durationHours: number | null }> {
   const hours = Number(typed);
-  return { durationHours: Number.isFinite(hours) && hours > 0 ? Math.round(hours) : null };
+  if (!Number.isFinite(hours) || hours <= 0) return { durationHours: null };
+  if (Math.round(hours) > MAX_DURATION_HOURS) {
+    return { error: `La duración no puede superar las ${MAX_DURATION_HOURS} horas.` };
+  }
+  return { durationHours: Math.round(hours) };
 }

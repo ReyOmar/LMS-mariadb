@@ -7,11 +7,13 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { CourseAccessInfo, CourseAccessService } from '../courses/course-access.service';
 import { encodeCursor, ROWS_PER_PAGE, decodeCursor } from '../common/domain/pagination';
 import { JwtPayload } from '../common/interfaces/jwt-payload.interface';
-import { MIN_SEARCH_LENGTH, searchTerm } from '../common/domain/search';
+import { MIN_SEARCH_LENGTH } from '../common/domain/search';
+import { personSearch } from '../prisma/person-search';
 import { MIN_SCORE } from '../common/domain/grading';
 import { plural } from '../common/domain/text';
 import { SubmissionFilesService } from '../certificates/submission-files.service';
 import { lockCourseCapacity, occupiedSeats } from './course-capacity';
+import { NOTIFICATION_REF } from '../notifications/notification-ref';
 
 /** Candidatos que se ofrecen de una vez; con más, se afina la búsqueda. */
 const VISIBLE_CANDIDATES = 50;
@@ -101,18 +103,12 @@ export class EnrollmentsService {
     const typed = search?.trim() ?? '';
     if (typed.length > 0 && typed.length < MIN_SEARCH_LENGTH) return [];
 
-    const text = searchTerm(typed);
-
     const candidates = await this.prisma.user.findMany({
       where: {
         country: user.country,
         role: 'STUDENT',
         enrollments: { none: { courseGuid, active: true } },
-        ...(text
-          ? {
-              OR: [{ firstName: { contains: text } }, { lastName: { contains: text } }, { email: { contains: text } }],
-            }
-          : {}),
+        ...personSearch(typed),
       },
       select: {
         guid: true,
@@ -223,7 +219,7 @@ export class EnrollmentsService {
           ? `"${course.title}" ya está en tus cursos. Puedes empezar cuando quieras.`
           : `"${course.title}" todavía no está publicado. Podrás empezar en cuanto se publique; te avisaremos.`,
         actionUrl: `/courses/${course.guid}`,
-        refType: 'curso',
+        refType: NOTIFICATION_REF.course,
         refGuid: course.guid,
       })
       .catch((error) => this.logger.error('No se pudo crear el aviso de matrícula', error));

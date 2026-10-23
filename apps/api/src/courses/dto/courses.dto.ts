@@ -24,13 +24,19 @@ import { IsStorageKey } from '../../storage/storage-key.validator';
 const STATUSES = ['DRAFT', 'PUBLISHED'] as const;
 const LEVELS = ['BEGINNER', 'INTERMEDIATE', 'ADVANCED', 'EXPERT'] as const;
 
+/** Títulos de cursos, módulos y recursos: lo que cabe en su columna. */
+export const MAX_TITLE_LENGTH = 191;
+
+/** Horas que puede acreditar un certificado. */
+export const MAX_DURATION_HOURS = 1000;
+
 export type CourseStatus = (typeof STATUSES)[number];
 export type CourseLevel = (typeof LEVELS)[number];
 
 export class CreateCourseDto {
   @IsString()
   @IsNotEmpty({ message: 'El título del curso es obligatorio.' })
-  @MaxLength(200)
+  @MaxLength(MAX_TITLE_LENGTH)
   @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   title: string;
 
@@ -50,17 +56,17 @@ export class UpdateCourseDto {
   @IsOptional()
   @IsString()
   @IsNotEmpty({ message: 'El título no puede quedar vacío.' })
-  @MaxLength(200)
+  @MaxLength(MAX_TITLE_LENGTH)
   @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   title?: string;
 
   @IsOptional() @IsString() @MaxLength(5000) description?: string;
-  @IsOptional() @IsString() @MaxLength(300) shortDescription?: string;
+  @IsOptional() @IsString() @MaxLength(191) shortDescription?: string;
 
   /** Clave de la portada en el almacenamiento; `null` la quita. */
   @IsOptional()
   @IsString()
-  @MaxLength(512)
+  @MaxLength(191)
   @IsStorageKey(['portadas'], { message: 'La portada no es un archivo válido.' })
   coverImage?: string | null;
 
@@ -79,7 +85,7 @@ export class UpdateCourseDto {
   @IsOptional()
   @IsInt({ message: 'La duración debe ser un número entero de horas.' })
   @Min(1, { message: 'La duración debe ser de al menos una hora.' })
-  @Max(1000)
+  @Max(MAX_DURATION_HOURS, { message: `La duración no puede superar las ${MAX_DURATION_HOURS} horas.` })
   durationHours?: number | null;
 
   /** Nota mínima para aprobar, en la escala 0–100 del sistema. */
@@ -101,22 +107,20 @@ export class UpdateCourseDto {
 export class CreateModuleDto {
   @IsString()
   @IsNotEmpty({ message: 'El título del módulo es obligatorio.' })
-  @MaxLength(200)
+  @MaxLength(MAX_TITLE_LENGTH)
   @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   title: string;
-
-  @IsOptional() @IsInt() @Min(0) position?: number;
 }
 
 export class UpdateModuleDto {
   @IsOptional()
   @IsString()
   @IsNotEmpty({ message: 'El título no puede quedar vacío.' })
-  @MaxLength(200)
+  @MaxLength(MAX_TITLE_LENGTH)
   @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   title?: string;
 
-  @IsOptional() @IsString() @MaxLength(1000) description?: string;
+  @IsOptional() @IsString() @MaxLength(191) description?: string;
 }
 
 export class ReorderDto {

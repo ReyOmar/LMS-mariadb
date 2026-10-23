@@ -136,6 +136,14 @@ export class AuthController {
     return this.users.createUser(dto, user.country);
   }
 
+  /** Contraseña temporal nueva para quien aún no ha entrado: la primera pudo no llegarle. */
+  @Roles('ADMIN')
+  @Throttle(EMAIL_LIMIT)
+  @Post('users/:guid/temporary-password')
+  resendTemporaryPassword(@CurrentUser() user: JwtPayload, @Param('guid') guid: string) {
+    return this.users.resendTemporaryPassword(guid, user.country);
+  }
+
   @Roles('ADMIN')
   @Patch('users/:guid')
   updateUser(@CurrentUser() user: JwtPayload, @Param('guid') guid: string, @Body() dto: UpdateUserDto) {

@@ -7,6 +7,9 @@ import { FORMATS_BY_FOLDER } from './storage/folders';
 import { MAX_ATTEMPTS, MAX_OPTIONS, MAX_QUESTIONS, MAX_TIME_LIMIT_MINUTES, MIN_OPTIONS } from './courses/quiz-config';
 import { CERTIFICATE_TEXT, MAX_LEGAL_TEXT_LENGTH } from './certificates/certificate-pdf';
 import { REALTIME_EVENTS } from './realtime/events';
+import { MAX_DURATION_HOURS, MAX_TITLE_LENGTH } from './courses/dto/courses.dto';
+import { UpdateSettingsDto } from './settings/dto/update-settings.dto';
+import { maxLengthOf } from './common/testing/validation-metadata';
 
 /**
  * Reglas que el cliente repite para avisar antes de enviar nada. Quien decide es la API; si
@@ -116,6 +119,32 @@ describe('Reglas que repite el cliente', () => {
     mirror('src/app/dashboard/admin/certificate-settings/certificate.ts', (source) => {
       expect(entriesIn(source, 'CERTIFICATE_TEXT')).toEqual(CERTIFICATE_TEXT);
       expect(numberIn(source, 'MAX_LEGAL_TEXT_LENGTH')).toBe(MAX_LEGAL_TEXT_LENGTH);
+    }),
+  );
+
+  it(
+    'títulos y duración de los cursos',
+    mirror('src/app/dashboard/course-builder/components/names.ts', (source) => {
+      expect(numberIn(source, 'MAX_TITLE_LENGTH')).toBe(MAX_TITLE_LENGTH);
+    }),
+  );
+
+  it(
+    'horas que acredita un certificado',
+    mirror('src/app/dashboard/course-builder/components/course-fields.ts', (source) => {
+      expect(numberIn(source, 'MAX_DURATION_HOURS')).toBe(MAX_DURATION_HOURS);
+    }),
+  );
+
+  it(
+    'topes de los textos de la portada y de los textos legales',
+    mirror('src/app/dashboard/admin/landing-settings/landing-fields.ts', (source) => {
+      const limits = [...source.matchAll(/field: '(\w+)'[^}]*?limit: (\w+)/g)];
+      expect(limits.length).toBeGreaterThan(0);
+      for (const [, field, limit] of limits) {
+        const value = /^\d+$/.test(limit) ? Number(limit) : numberIn(source, limit);
+        expect({ field, limit: value }).toEqual({ field, limit: maxLengthOf(UpdateSettingsDto, field) });
+      }
     }),
   );
 

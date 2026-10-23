@@ -247,18 +247,20 @@ describe('cola de entregas del examinador', () => {
 
   it('busca en el servidor, no sobre la página cargada', async () => {
     const { service, queries } = recordingService(10);
-    await service.getSubmissionsToGrade(ADMIN, { course: COURSE, search: '  ana  ' });
+    await service.getSubmissionsToGrade(ADMIN, { course: COURSE, search: '  ana  informe ' });
 
-    expect(queries[0].where).toMatchObject({
+    // Cada palabra en el nombre o los apellidos del alumno, o en el título de la tarea.
+    const byWord = (word: string) => ({
       OR: [
-        { user: { firstName: { contains: 'ana' } } },
-        { user: { lastName: { contains: 'ana' } } },
-        { assignment: { title: { contains: 'ana' } } },
+        { user: { firstName: { contains: word } } },
+        { user: { lastName: { contains: word } } },
+        { assignment: { title: { contains: word } } },
       ],
     });
+    expect(queries[0].where).toMatchObject({ AND: [byWord('ana'), byWord('informe')] });
   });
 
-  it('la marca no pisa al OR de la búsqueda: ambas condiciones siguen en pie', async () => {
+  it('la marca no pisa a la búsqueda: ambas condiciones siguen en pie', async () => {
     const { service, queries } = recordingService(500);
     const date = new Date('2026-03-14T09:26:53.589Z');
 
@@ -269,7 +271,7 @@ describe('cola de entregas del examinador', () => {
     });
 
     const where = queries[0].where as { AND: Record<string, unknown>[] };
-    expect(where.AND[0]).toHaveProperty('OR');
+    expect(where.AND[0]).toHaveProperty('AND');
     expect(where.AND[1]).toHaveProperty('OR');
   });
 });

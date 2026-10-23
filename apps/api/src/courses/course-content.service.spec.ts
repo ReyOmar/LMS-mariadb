@@ -146,13 +146,102 @@ describe('CourseContentService', () => {
 
     it('se comprueba también al crear el recurso, no sólo al editarlo', async () => {
       const create = jest.fn(async () => ({ guid: 'r1' }));
-      const { service } = serviceWith({ resource: { count: async () => 0, create } });
+      const { service } = serviceWith({ resource: { aggregate: async () => ({ _max: { position: null } }), create } });
 
       await expect(
         service.createResource('modulo-1', { type: 'LINK', contentHtml: 'no-es-url' }, ADMIN),
       ).rejects.toThrow(/URL completa/);
       expect(create).not.toHaveBeenCalled();
     });
+  });
+
+  it('lo nuevo va al final aunque se haya borrado algo antes: la última posición más uno', async () => {
+    // Quedan las posiciones 1, 2 y 3 tras borrar la 0: contar daría 3 y repetiría la última.
+    const last = async () => ({ _max: { position: 3 } });
+    const created: { model: string; position: number }[] = [];
+    const record =
+      (model: string) =>
+      async ({ data }: { data: { position: number } }) => {
+        created.push({ model, position: data.position });
+        return { guid: 'nuevo' };
+      };
+    const { service } = serviceWith({
+      courseModule: { aggregate: last, create: record('módulo') },
+      resource: { aggregate: last, create: record('recurso') },
+    });
+
+    await service.createModule('curso-1', { title: 'Nuevo' }, ADMIN);
+    await service.createResource('modulo-1', { type: 'TEXT' }, ADMIN);
+
+    expect(created).toEqual([
+      { model: 'módulo', position: 4 },
+      { model: 'recurso', position: 4 },
+    ]);
+  });
+
+  it('un recurso nuevo llega completo: si algo no vale, no se crea nada', async () => {
+    const create = jest.fn(async () => ({ guid: 'r1' }));
+    const { service } = serviceWith({ resource: { aggregate: async () => ({ _max: { position: null } }), create } });
+
+    await expect(
+      service.createResource('modulo-1', { type: 'ASSIGNMENT', quizConfig: '{"questions":"no"}' }, ADMIN),
+    ).rejects.toThrow();
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('un recurso nuevo guarda en el alta todo lo que trae, adjunto incluido', async () => {
+    const create = jest.fn(async ({ data }: { data: Record<string, unknown> }) => ({ guid: 'r1', ...data }));
+    const { service } = serviceWith({ resource: { aggregate: async () => ({ _max: { position: null } }), create } });
+
+    await service.createResource(
+      'modulo-1',
+      {
+        type: 'TEXT',
+        title: 'Lectura',
+        contentHtml: '<p>Hola</p>',
+        referenceUrl: 'https://ejemplo.com',
+        attachmentKey: 'recursos/1-guia.pdf',
+        attachmentName: 'guia.pdf',
+      },
+      ADMIN,
+    );
+
+    expect(create.mock.calls[0][0].data).toMatchObject({
+      title: 'Lectura',
+      contentHtml: '<p>Hola</p>',
+      referenceUrl: 'https://ejemplo.com',
+      attachmentKey: 'recursos/1-guia.pdf',
+      attachmentName: 'guia.pdf',
+    });
+  });
+
+  it('el primero de un módulo vacío va en la posición 0', async () => {
+    const create = jest.fn(async ({ data }: { data: { position: number } }) => data);
+    const { service } = serviceWith({ resource: { aggregate: async () => ({ _max: { position: null } }), create } });
+
+    await expect(service.createResource('modulo-1', { type: 'TEXT' }, ADMIN)).resolves.toMatchObject({ position: 0 });
+  });
+
+  it('reordenar los módulos sólo toca los del curso, en el orden pedido', async () => {
+    const updates: { guid: string; position: number }[] = [];
+    const { service } = serviceWith({
+      courseModule: {
+        findMany: async () => [{ guid: 'm1' }, { guid: 'm2' }, { guid: 'm3' }],
+        update: ({ where, data }: { where: { guid: string }; data: { position: number } }) => {
+          updates.push({ guid: where.guid, position: data.position });
+          return Promise.resolve();
+        },
+      },
+      $transaction: async (operations: Promise<unknown>[]) => Promise.all(operations),
+    });
+
+    await service.reorderModules('curso-1', ['m3', 'modulo-de-otro-curso', 'm1', 'm2'], ADMIN);
+
+    expect(updates).toEqual([
+      { guid: 'm3', position: 0 },
+      { guid: 'm1', position: 1 },
+      { guid: 'm2', position: 2 },
+    ]);
   });
 
   it('reordenar ignora identificadores ajenos y repetidos', async () => {

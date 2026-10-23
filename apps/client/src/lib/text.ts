@@ -22,12 +22,15 @@ function searchable(text: string): string {
 }
 
 /**
- * ¿Aparece lo buscado dentro del texto? Sin distinguir tildes ni mayúsculas, para que
- * «Díaz», «diaz» y «DIAZ» coincidan igual que en las búsquedas del servidor. Los espacios
- * de los extremos no cuentan y una búsqueda vacía lo encuentra todo.
+ * ¿Aparece cada palabra buscada dentro del texto, en cualquier orden? Igual que en las
+ * búsquedas del servidor: sin distinguir tildes ni mayúsculas, para que «Díaz», «diaz» y
+ * «DIAZ» coincidan. Una búsqueda vacía lo encuentra todo.
  */
 export function matchesSearch(text: string, query: string): boolean {
-  return searchable(text).includes(searchable(query.trim()));
+  const haystack = searchable(text);
+  return searchable(query)
+    .split(/\s+/)
+    .every((word) => haystack.includes(word));
 }
 
 /** Iniciales para el avatar de una persona: siempre en mayúscula, o `?` si no hay nombre. */

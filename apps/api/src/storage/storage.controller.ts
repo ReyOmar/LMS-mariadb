@@ -77,13 +77,17 @@ export class StorageController {
    * el acceso a los reservados lo da la firma (`exp`, `sig`), que la API sólo genera para quien
    * puede verlos. Sin límite de peticiones: por IP, una oficina que avanza por un vídeo (una
    * petición por tramo) agotaría el cupo de todos.
+   *
+   * La respuesta la envía este método y nadie más (`@Res()` sin `passthrough`): si Nest la
+   * enviara otra vez al terminar, un navegador que cancela la descarga a mitad dejaría el
+   * envío repetido sobre una respuesta ya empezada.
    */
   @Public()
   @SkipThrottle()
   @Get('/download/*')
   async downloadFile(
     @Req() req: FastifyRequest,
-    @Res({ passthrough: true }) reply: FastifyReply,
+    @Res() reply: FastifyReply,
     @Query('originalName') originalName?: string,
     @Query('exp') exp?: string,
     @Query('sig') sig?: string,

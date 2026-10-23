@@ -21,6 +21,19 @@ export function withoutResource(course: Course, resourceGuid: string): Course {
   }));
 }
 
+/** Lleva el módulo de la posición `from` a `to`. */
+export function withMovedModule(course: Course, from: number, to: number): Course {
+  const modules = [...(course.modules ?? [])];
+  const [moved] = modules.splice(from, 1);
+  modules.splice(to, 0, moved);
+  return { ...course, modules };
+}
+
+/** Orden de los módulos, como lo espera la API. */
+export function moduleOrder(course: Course): string[] {
+  return course.modules?.map((courseModule) => courseModule.guid) ?? [];
+}
+
 /** Lleva el recurso de la posición `from` a `to` dentro de su módulo. */
 export function withMovedResource(course: Course, moduleGuid: string, from: number, to: number): Course {
   return mapModules(course, (courseModule) => {

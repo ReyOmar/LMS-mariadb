@@ -1,4 +1,11 @@
-import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  Logger,
+  NotFoundException,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { StorageService } from '../storage/storage.service';
@@ -11,11 +18,12 @@ import { CreateUserDto } from './dto/create-user.dto';
 import { ListAccountsDto } from './dto/list-accounts.dto';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
-import { searchTerm } from '../common/domain/search';
+import { personSearch } from '../prisma/person-search';
 import { plural } from '../common/domain/text';
 import { UserRole } from '../common/interfaces/jwt-payload.interface';
 import { SettingsService } from '../settings/settings.service';
 import { MailService } from '../mail/mail.service';
+import { NOTIFICATION_REF } from '../notifications/notification-ref';
 
 /** Campos que se devuelven al listar o consultar una cuenta. Nunca incluyen el hash. */
 const PUBLIC_FIELDS = {
@@ -67,21 +75,13 @@ export class UserService {
    */
   async getUsers(country: Country, filter: ListAccountsDto = {}) {
     const take = rowsPerPage(filter.limit);
-    const search = searchTerm(filter.search);
+    const search = personSearch(filter.search);
     const cursor = decodeCursor(filter.cursor);
 
     const matchFilter: Prisma.UserWhereInput = {
       country,
       ...(filter.role ? { role: filter.role } : {}),
-      ...(search
-        ? {
-            OR: [
-              { firstName: { contains: search } },
-              { lastName: { contains: search } },
-              { email: { contains: search } },
-            ],
-          }
-        : {}),
+      ...search,
     };
 
     // La marca va dentro de un `AND`: escrita como otro `OR` al mismo nivel pisaría al de
@@ -219,28 +219,46 @@ export class UserService {
    *
    * La contraseña temporal la genera el servidor, distinta en cada cuenta, y sólo la
    * conoce la persona, que la recibe por correo: ni el administrador llega a verla.
+   *
+   * Si esa persona tenía una solicitud de acceso pendiente, queda atendida con la cuenta: no
+   * se queda en la cola esperando una decisión que ya no tiene sentido.
    */
   async createUser(dto: CreateUserDto, country: Country) {
-    const existing = await this.prisma.user.findUnique({ where: { email: dto.email }, select: { guid: true } });
+    const [existing, request] = await Promise.all([
+      this.prisma.user.findUnique({ where: { email: dto.email }, select: { guid: true } }),
+      this.prisma.accessRequest.findUnique({
+        where: { email: dto.email },
+        select: { id: true, status: true, country: true },
+      }),
+    ]);
     if (existing) {
       throw new ConflictException('Ya existe una cuenta con ese correo electrónico.');
     }
 
     const temporaryPassword = generateTemporaryPassword();
-    const user = await this.prisma.user.create({
-      data: {
-        email: dto.email,
-        firstName: dto.firstName,
-        lastName: dto.lastName,
-        role: dto.role,
-        country,
-        password: await hashPassword(temporaryPassword),
-        usesDefaultPassword: true,
-      },
-      select: PUBLIC_FIELDS,
-    });
+    const [user] = await this.prisma.$transaction([
+      this.prisma.user.create({
+        data: {
+          email: dto.email,
+          firstName: dto.firstName,
+          lastName: dto.lastName,
+          role: dto.role,
+          country,
+          password: await hashPassword(temporaryPassword),
+          usesDefaultPassword: true,
+        },
+        select: PUBLIC_FIELDS,
+      }),
+      this.prisma.accessRequest.updateMany({
+        where: { email: dto.email, status: 'PENDING' },
+        data: { status: 'ACCEPTED', rejectionReason: null },
+      }),
+    ]);
 
     this.realtime.emitToRole('user:created', { guid: user.guid }, country, 'ADMIN');
+    if (request?.status === 'PENDING') {
+      this.realtime.emitToRole('request:resolved', { id: request.id, action: 'approved' }, request.country, 'ADMIN');
+    }
     this.logger.log(`Cuenta creada por un administrador: ${dto.email} (${dto.role}, ${country})`);
 
     this.mail
@@ -251,6 +269,45 @@ export class UserService {
       message: `Cuenta de ${dto.firstName} ${dto.lastName} creada. Recibirá por correo una contraseña temporal.`,
       user,
     };
+  }
+
+  /**
+   * Envía una contraseña temporal nueva a una cuenta que todavía no ha creado la suya, por si la
+   * primera no le llegó; la anterior deja de valer. Una cuenta con contraseña propia no se toca:
+   * si la olvidó, la recupera ella misma con el enlace que se envía a su correo.
+   *
+   * Aquí sí se espera al correo: el administrador necesita saber si salió.
+   */
+  async resendTemporaryPassword(guid: string, country: Country) {
+    const user = await this.prisma.user.findFirst({
+      where: { guid, country },
+      select: { email: true, firstName: true, usesDefaultPassword: true },
+    });
+    if (!user) throw new NotFoundException('Usuario no encontrado.');
+    if (!user.usesDefaultPassword) {
+      throw new BadRequestException(
+        'Esta cuenta ya creó su propia contraseña. Si la olvidó, puede recuperarla con «¿Olvidaste tu contraseña?».',
+      );
+    }
+    if (!this.mail.isConfigured) {
+      throw new ServiceUnavailableException(
+        'El correo del campus no está configurado: no se puede enviar la contraseña.',
+      );
+    }
+
+    const temporaryPassword = generateTemporaryPassword();
+    await this.prisma.user.update({
+      where: { guid },
+      data: { password: await hashPassword(temporaryPassword), currentSessionJti: null },
+    });
+
+    try {
+      await this.mail.sendWelcome(user.email, user.firstName, temporaryPassword, country);
+    } catch (error) {
+      this.logger.error(`No se pudo reenviar la contraseña temporal a ${user.email}`, error);
+      throw new ServiceUnavailableException('No se pudo enviar el correo. Inténtalo de nuevo en unos minutos.');
+    }
+    return { message: `Contraseña temporal enviada a ${user.email}.` };
   }
 
   // ── Edición ──────────────────────────────────────────────────────────────
@@ -450,13 +507,15 @@ export class UserService {
     // Se recogen antes de borrar las filas para no dejar archivos sin dueño. Los PDF de sus
     // certificados no: se conservan.
     const submissions = await this.prisma.submission.findMany({
-      where: { userGuid: guid, attachmentKey: { not: null } },
-      select: { attachmentKey: true },
+      where: { userGuid: guid },
+      select: { guid: true, attachmentKey: true },
     });
 
     // Sus secretos pendientes se van con él. Un enlace de recuperación se resuelve por
     // correo, así que si la cuenta se borra y alguien registra ese mismo correo, un enlace
-    // antiguo todavía vigente serviría para entrar en la cuenta nueva.
+    // antiguo todavía vigente serviría para entrar en la cuenta nueva. También su solicitud
+    // de acceso, con sus datos personales, y los avisos que otros tienen sobre esta persona
+    // o sobre sus entregas: llevarían a una conversación o a una entrega que ya no existe.
     //
     // Todo va en una transacción, traspaso de cursos incluido: si el borrado fallara, los
     // cursos no pueden haber cambiado ya de dueño.
@@ -471,6 +530,15 @@ export class UserService {
         : []),
       this.prisma.passwordReset.deleteMany({ where: { email: user.email } }),
       this.prisma.emailVerification.deleteMany({ where: { email: user.email } }),
+      this.prisma.accessRequest.deleteMany({ where: { email: user.email } }),
+      this.prisma.notification.deleteMany({
+        where: {
+          OR: [
+            { refType: NOTIFICATION_REF.person, refGuid: guid },
+            { refType: NOTIFICATION_REF.submission, refGuid: { in: submissions.map((submission) => submission.guid) } },
+          ],
+        },
+      }),
       // El resto de lo suyo —matrículas, entregas y las archivadas, progreso, mensajes, contactos,
       // notificaciones y métricas— cae por las relaciones en cascada. Lo que creó como
       // examinador no: sus cursos acaban de pasar a otra cuenta. Sus certificados tampoco:

@@ -17,7 +17,8 @@ describe('roleChangeProblem', () => {
   });
 
   it('quien tiene cursos a su cargo no pasa a estudiante', () => {
-    expect(roleChangeProblem({ role: 'TEACHER', taughtCourses: 2 }, 'STUDENT', false)).toMatch(/2 cursos/);
+    expect(roleChangeProblem({ role: 'TEACHER', taughtCourses: 2 }, 'STUDENT', false)).toMatch(/2 cursos: asígnalos/);
+    expect(roleChangeProblem({ role: 'TEACHER', taughtCourses: 1 }, 'STUDENT', false)).toMatch(/1 curso: asígnalo a/);
   });
 
   it('pero sí a administrador, que también puede tenerlos', () => {

@@ -8,7 +8,8 @@ import { encodeCursor, rowsPerPage, decodeCursor } from '../common/domain/pagina
 import { timeZoneOffset } from '../common/domain/time-zone';
 import { JwtPayload } from '../common/interfaces/jwt-payload.interface';
 import { MonitoringFilterDto } from './dto/monitoring-filter.dto';
-import { searchTerm } from '../common/domain/search';
+import { SYLLABUS_ORDER } from '../courses/syllabus-order';
+import { personSearchSql } from '../prisma/person-search';
 
 interface Scope {
   /** Cursos que gestiona quien consulta, para el selector de la pantalla. */
@@ -178,7 +179,7 @@ export class MonitoringService {
     const [modules, done] = await Promise.all([
       this.prisma.courseModule.findMany({
         where: { courseGuid },
-        orderBy: { position: 'asc' },
+        orderBy: SYLLABUS_ORDER,
         select: { guid: true, title: true, _count: { select: { resources: true } } },
       }),
       this.completedByModule([studentGuid], [courseGuid]),
@@ -217,11 +218,7 @@ export class MonitoringService {
 
   /** Alumnos de la sede (alias `u`) que casan con la búsqueda. */
   private studentsSql(user: JwtPayload, search?: string): Prisma.Sql {
-    const text = searchTerm(search);
-    const pattern = text ? `%${text}%` : null;
-
-    return Prisma.sql`u.pais = ${user.country} AND u.rol = 'ESTUDIANTE'
-      ${pattern ? Prisma.sql`AND (u.nombre LIKE ${pattern} OR u.apellido LIKE ${pattern} OR u.email LIKE ${pattern})` : Prisma.empty}`;
+    return Prisma.sql`u.pais = ${user.country} AND u.rol = 'ESTUDIANTE' ${personSearchSql(search)}`;
   }
 
   /** Que el alumno `u` tenga alguna matrícula en curso en los cursos dados. */

@@ -19,6 +19,12 @@ describe('matchesSearch', () => {
   it('no encuentra lo que no está', () => {
     expect(matchesSearch('Normativa básica', 'señales')).toBe(false);
   });
+
+  it('cada palabra cuenta por separado y en cualquier orden', () => {
+    expect(matchesSearch('Seguridad Vial QA Colombia', 'vial seguridad')).toBe(true);
+    expect(matchesSearch('Ana Ruiz', 'ruiz   ana')).toBe(true);
+    expect(matchesSearch('Ana Ruiz', 'ana peña')).toBe(false);
+  });
 });
 
 describe('plural', () => {

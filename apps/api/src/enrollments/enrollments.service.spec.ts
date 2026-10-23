@@ -542,8 +542,8 @@ describe('EnrollmentsService · candidatos', () => {
     await service.getCandidates(COURSE, ADMIN, '  ');
     await service.getCandidates(COURSE, ADMIN, 'an');
 
-    expect(queries[0].where).not.toHaveProperty('OR');
-    expect(JSON.stringify(queries[1].where.OR)).toContain('"contains":"an"');
+    expect(queries[0].where).not.toHaveProperty('AND');
+    expect(JSON.stringify(queries[1].where.AND)).toContain('"contains":"an"');
   });
 });
 

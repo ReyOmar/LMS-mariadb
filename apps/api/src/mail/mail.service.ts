@@ -174,6 +174,11 @@ export class MailService implements OnModuleInit {
     );
   }
 
+  /** Si hay un proveedor con el que enviar: sin él, el campus funciona pero no sale ningún correo. */
+  get isConfigured(): boolean {
+    return Boolean(this.brevoApiKey || this.transport);
+  }
+
   // ── Envío ────────────────────────────────────────────────────────────────
 
   /**

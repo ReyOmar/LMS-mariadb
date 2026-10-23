@@ -16,6 +16,7 @@ import {
   QuizPassed,
   QuizFailed,
 } from '../domain/domain-events';
+import { NOTIFICATION_REF } from '../../notifications/notification-ref';
 
 /**
  * Efectos colaterales de los eventos de dominio: avisos en la aplicación, correos y
@@ -54,7 +55,7 @@ export class EventsListener {
         title: 'Cuestionario aprobado',
         message: `Obtuviste ${formatScore(event.score)} en "${event.quizTitle}". ¡Buen trabajo!`,
         actionUrl: `/courses/${event.courseGuid}`,
-        refType: 'quiz',
+        refType: NOTIFICATION_REF.quiz,
         refGuid: event.resourceGuid,
       });
     });
@@ -85,7 +86,7 @@ export class EventsListener {
             `Obtuviste ${formatScore(event.score)} en "${event.quizTitle}" y se requieren ` +
             `${formatPoints(event.passingScore)} puntos. Repasa el módulo y vuelve a intentarlo.`,
           actionUrl: `/courses/${event.courseGuid}`,
-          refType: 'quiz',
+          refType: NOTIFICATION_REF.quiz,
           refGuid: event.resourceGuid,
         }),
         this.notifications.create({
@@ -96,7 +97,7 @@ export class EventsListener {
           message: `${studentName} obtuvo ${formatScore(event.score)} en "${event.quizTitle}" del curso "${event.courseTitle}".`,
           // El examinador revisa los intentos en su panel, no en la vista del alumno.
           actionUrl: '/dashboard/examiner/quizzes',
-          refType: 'quiz',
+          refType: NOTIFICATION_REF.quiz,
           refGuid: event.resourceGuid,
         }),
       ]);
@@ -126,7 +127,7 @@ export class EventsListener {
         title: 'Nuevo intento disponible',
         message: `Tu examinador te ha habilitado un nuevo intento en "${event.quizTitle}".`,
         actionUrl: `/courses/${event.courseGuid}`,
-        refType: 'quiz',
+        refType: NOTIFICATION_REF.quiz,
         refGuid: event.resourceGuid,
       });
     });
@@ -160,7 +161,7 @@ export class EventsListener {
         title: event.isResubmission ? 'Entrega corregida por el alumno' : 'Nueva entrega para calificar',
         message: `${studentName} envió "${event.assignmentTitle}" del curso "${event.courseTitle}".${detail}`,
         actionUrl: '/dashboard/examiner/grading',
-        refType: 'entrega',
+        refType: NOTIFICATION_REF.submission,
         refGuid: event.submissionGuid,
       });
 
@@ -206,7 +207,7 @@ export class EventsListener {
           : `Tu entrega de "${event.assignmentTitle}" obtuvo ${formatScore(event.score)} y se requieren ` +
             `${formatPoints(event.passingScore)} puntos. Puedes subir una nueva versión.${feedback}`,
         actionUrl: '/dashboard/student/courses',
-        refType: 'entrega',
+        refType: NOTIFICATION_REF.submission,
         refGuid: event.submissionGuid,
       });
 

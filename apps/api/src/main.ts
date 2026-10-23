@@ -11,6 +11,7 @@ import { AppModule } from './app.module';
 import { ExceptionsFilter } from './common/filters/exceptions.filter';
 import { createValidationPipe } from './common/validation/validation.pipe';
 import { allowedOrigins } from './common/cors';
+import { serializeJson } from './common/http/json';
 import { MIB, readUploadCeiling } from './storage/upload-limits';
 
 /** Tamaño máximo de un cuerpo JSON. Los archivos van por multipart, no por aquí. */
@@ -57,6 +58,8 @@ async function bootstrap(): Promise<void> {
 
   const config = app.get(ConfigService);
   validateSecret(config, logger);
+
+  app.getHttpAdapter().getInstance().setReplySerializer(serializeJson);
 
   await registerPlugins(app, logger);
   configureRequestLogging(app);

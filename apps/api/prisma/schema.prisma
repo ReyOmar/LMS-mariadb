@@ -144,8 +144,8 @@ model AccessRequest {
   requestedRole   Role                @map("rol_pedido")
   country         Country             @map("pais")
   status          AccessRequestStatus @default(PENDING) @map("estado")
-  // Motivo del rechazo, visible para el administrador que lo revise después
-  rejectionReason String?             @map("motivo")
+  // Motivo del rechazo: se le comunica por correo a quien la envió y queda como constancia
+  rejectionReason String?             @map("motivo") @db.VarChar(500)
   // Autorización de tratamiento de datos dada al enviar la solicitud; pasa a la cuenta al aprobarla.
   consentAt       DateTime?           @map("consentimiento_fecha")
   consentVersion  String?             @map("consentimiento_version") @db.VarChar(40)
@@ -190,6 +190,9 @@ model Course {
   coverImage       String?         @map("imagen_portada")
   level            DifficultyLevel @default(BEGINNER) @map("nivel")
   status           CourseStatus    @default(DRAFT) @map("estado")
+  /// Primera vez que se publicó. Al volver a publicarlo, distingue el fin de un mantenimiento
+  /// de una primera publicación: cambia lo que se les dice a los matriculados.
+  firstPublishedAt DateTime?       @map("fecha_primera_publicacion")
   durationHours    Int?            @map("duracion_horas")
   maxStudents      Int?            @map("max_estudiantes")
 
@@ -241,9 +244,9 @@ model Resource {
   title      String       @map("titulo")
   type       ResourceType @map("tipo")
 
-  contentHtml  String? @map("contenido_html") @db.Text
+  contentHtml  String? @map("contenido_html") @db.MediumText
   fileUrl      String? @map("url_archivo")
-  referenceUrl String? @map("url_referencia") // Enlace externo complementario
+  referenceUrl String? @map("url_referencia") @db.Text // Enlace externo complementario
 
   // Clave del adjunto en el almacenamiento (ej. "recursos/1699-ab.pdf"), no el binario
   attachmentKey  String? @map("archivo_adjunto")
@@ -414,15 +417,18 @@ model Notification {
   userGuid  String           @map("usuario_guid")
   user      User             @relation(fields: [userGuid], references: [guid], onDelete: Cascade)
   type      NotificationType @map("tipo")
-  title     String           @map("titulo")
+  // Cabe «Mensaje de» seguido del nombre completo más largo que admite una cuenta.
+  title     String           @map("titulo") @db.VarChar(255)
   message   String           @map("mensaje") @db.Text
   read      Boolean          @default(false) @map("leida")
   actionUrl String?          @map("url_accion")
-  refType   String?          @map("ref_tipo") // 'curso' | 'entrega' | 'quiz' | 'certificado' | 'mensaje'
+  refType   String?          @map("ref_tipo") // Ver NOTIFICATION_REF
   refGuid   String?          @map("ref_guid")
   createdAt DateTime         @default(now()) @map("created_at")
 
   @@index([userGuid, read])
+  // Al borrar un curso, una tarea o una cuenta se retiran los avisos que apuntan a ellos.
+  @@index([refType, refGuid])
   @@index([userGuid, createdAt])
   // El recordatorio de inactividad busca, alumno por alumno, si ya se le avisó en los
   // últimos días: sin él materializaba todos los avisos de la tabla (1,6 s frente a 37 ms).
@@ -545,7 +551,7 @@ model Certificate {
   userGuid         String?   @map("usuario_guid")
   user             User?     @relation(fields: [userGuid], references: [guid], onDelete: SetNull)
   // Nombre completo del titular tal como se emitió; no cambia si después edita su perfil.
-  holderName       String    @map("nombre_titular")
+  holderName       String    @map("nombre_titular") @db.VarChar(255)
   // Sede que lo emitió. Se guarda aquí porque la cuenta y el curso pueden borrarse después.
   country          Country   @map("pais")
   /**
@@ -611,7 +617,7 @@ model CountrySettings {
   loginBackgroundUrl String? @map("login_fondo_url")
 
   // Operativa
-  welcomeMessage String @default("Bienvenido") @map("mensaje_bienvenida")
+  welcomeMessage String @default("Bienvenido") @map("mensaje_bienvenida") @db.VarChar(500)
   timeZone       String @default("America/Bogota") @map("zona_horaria")
   maxFileMb      Int    @default(10) @map("max_archivo_mb")
 
@@ -650,9 +656,9 @@ model CountrySettings {
   privacyEmail     String?   @map("legal_email_privacidad")
   // Fecha de la versión vigente de los textos legales; cambia al editarlos.
   legalUpdatedAt   DateTime? @map("legal_actualizado")
-  legalTerms       String?   @map("legal_terminos") @db.Text
-  legalPrivacy     String?   @map("legal_privacidad") @db.Text
-  legalData        String?   @map("legal_datos") @db.Text
+  legalTerms       String?   @map("legal_terminos") @db.MediumText
+  legalPrivacy     String?   @map("legal_privacidad") @db.MediumText
+  legalData        String?   @map("legal_datos") @db.MediumText
 
   updatedAt DateTime @updatedAt @map("updated_at")
 
@@ -680,7 +686,7 @@ model EmailTemplate {
   country      Country    @map("pais")
   internalName String     @map("nombre_interno")
   subject      String     @map("asunto")
-  bodyHtml     String     @map("cuerpo_html") @db.Text
+  bodyHtml     String     @map("cuerpo_html") @db.MediumText
   active       Boolean    @default(true) @map("activo")
   createdAt    DateTime   @default(now()) @map("created_at")
   updatedAt    DateTime   @updatedAt @map("updated_at")
@@ -705,9 +711,9 @@ model LegalVersion {
   legalEntityTaxId String?  @map("identificacion")
   legalAddress     String?  @map("domicilio")
   privacyEmail     String?  @map("email_privacidad")
-  legalTerms       String?  @map("terminos") @db.Text
-  legalPrivacy     String?  @map("privacidad") @db.Text
-  legalData        String?  @map("datos") @db.Text
+  legalTerms       String?  @map("terminos") @db.MediumText
+  legalPrivacy     String?  @map("privacidad") @db.MediumText
+  legalData        String?  @map("datos") @db.MediumText
   createdAt        DateTime @default(now()) @map("created_at")
 
   @@unique([country, version])

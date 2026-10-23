@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { BookOpen, Loader2, Mail, Pencil, Trash2, X } from 'lucide-react';
+import { BookOpen, KeyRound, Loader2, Mail, Pencil, Trash2, X } from 'lucide-react';
 import type { User } from '@/types/models';
 import { UserAvatar } from '@/components/ui/UserAvatar';
 import { LastAccess } from '@/components/ui/LastAccess';
@@ -20,9 +20,19 @@ interface Props {
   onClose: () => void;
   onEdit: (user: User) => void;
   onDelete: (user: User) => void;
+  onResendPassword: (user: User) => void;
 }
 
-export function UserDetails({ user, courses, loadingCourses, isSelf, onClose, onEdit, onDelete }: Props) {
+export function UserDetails({
+  user,
+  courses,
+  loadingCourses,
+  isSelf,
+  onClose,
+  onEdit,
+  onDelete,
+  onResendPassword,
+}: Props) {
   const heading = coursesHeading(user.role);
   const { dialogProps, titleId } = useDialog({ onClose });
 
@@ -95,6 +105,15 @@ export function UserDetails({ user, courses, loadingCourses, isSelf, onClose, on
             >
               {user.usesDefaultPassword ? 'Clave temporal' : '✓ Clave propia'}
             </p>
+            {user.usesDefaultPassword && !isSelf && (
+              <button
+                type="button"
+                onClick={() => onResendPassword(user)}
+                className="mt-1 inline-flex items-center gap-1 text-xs font-semibold text-primary hover:underline"
+              >
+                <KeyRound className="h-3 w-3" /> Enviar otra
+              </button>
+            )}
           </Field>
 
           <Field title="Último acceso">

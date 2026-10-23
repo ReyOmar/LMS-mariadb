@@ -29,7 +29,11 @@ interface Scenario {
 
 function createService({ taughtCourses = 0, photo = 'avatars/foto.png', signature = null }: Scenario = {}) {
   const order: string[] = [];
-  const deleted: { emails: string[]; files: unknown[] } = { emails: [], files: [] };
+  const deleted: { emails: string[]; files: unknown[]; notifications: unknown[] } = {
+    emails: [],
+    files: [],
+    notifications: [],
+  };
   const certificateOperations: string[] = [];
 
   const prisma = {
@@ -58,7 +62,24 @@ function createService({ taughtCourses = 0, photo = 'avatars/foto.png', signatur
         },
       ]),
     ),
-    submission: { findMany: async () => [{ attachmentKey: 'entregas/b.pdf' }] },
+    submission: {
+      findMany: async () => [
+        { guid: 'entrega-1', attachmentKey: 'entregas/b.pdf' },
+        { guid: 'entrega-2', attachmentKey: null },
+      ],
+    },
+    accessRequest: {
+      deleteMany: async ({ where }: { where: { email: string } }) => {
+        deleted.emails.push(`solicitud:${where.email}`);
+        return { count: 1 };
+      },
+    },
+    notification: {
+      deleteMany: async ({ where }: { where: { OR: unknown[] } }) => {
+        deleted.notifications.push(...where.OR);
+        return { count: 2 };
+      },
+    },
     passwordReset: {
       deleteMany: async ({ where }: { where: { email: string } }) => {
         deleted.emails.push(`reset:${where.email}`);
@@ -116,19 +137,32 @@ describe('UserService · borrar una cuenta', () => {
 
     await service.deleteUser(GUID, 'COLOMBIA', ADMIN, 'otro-examinador');
 
-    // Traspaso, dos limpiezas de secretos y el borrado: cuatro operaciones, una transacción.
-    expect(order).toContain('transacción de 4');
+    // Traspaso, dos limpiezas de secretos, la solicitud, los avisos y el borrado: una transacción.
+    expect(order).toContain('transacción de 6');
     expect(order.indexOf('traspasar cursos')).toBeLessThan(order.indexOf('borrar usuario'));
   });
 
-  it('se lleva los secretos pendientes de su correo', async () => {
+  it('se lleva los secretos pendientes de su correo y su solicitud de acceso', async () => {
     // Un enlace de recuperación se resuelve por correo: si la cuenta se borra y alguien
-    // registra ese mismo correo, un enlace antiguo abriría la cuenta nueva.
+    // registra ese mismo correo, un enlace antiguo abriría la cuenta nueva. La solicitud
+    // guarda sus datos personales.
     const { service, deleted } = createService();
 
     await service.deleteUser(GUID, 'COLOMBIA', ADMIN);
 
-    expect(deleted.emails).toEqual([`reset:${EMAIL}`, `verificacion:${EMAIL}`]);
+    expect(deleted.emails).toEqual([`reset:${EMAIL}`, `verificacion:${EMAIL}`, `solicitud:${EMAIL}`]);
+  });
+
+  it('retira los avisos de otros sobre esta persona y sobre sus entregas', async () => {
+    // Llevarían a una conversación o a una entrega que ya no existe.
+    const { service, deleted } = createService();
+
+    await service.deleteUser(GUID, 'COLOMBIA', ADMIN);
+
+    expect(deleted.notifications).toEqual([
+      { refType: 'mensaje', refGuid: GUID },
+      { refType: 'entrega', refGuid: { in: ['entrega-1', 'entrega-2'] } },
+    ]);
   });
 
   it('borra sus archivos del almacenamiento', async () => {
@@ -256,20 +290,22 @@ describe('UserService — listado de cuentas', () => {
     expect(queries[0].where).toMatchObject({ country: 'MEXICO', role: 'TEACHER' });
   });
 
-  it('busca por nombre, apellido y correo a la vez', async () => {
+  it('busca cada palabra en el nombre, los apellidos o el correo: vale el nombre completo', async () => {
     const { service, queries } = recordingService();
-    await service.getUsers('COLOMBIA', { search: '  ana  ' });
+    await service.getUsers('COLOMBIA', { search: '  Álvaro   Peña ' });
 
-    const where = queries[0].where as { OR?: unknown[] };
-    expect(where.OR).toHaveLength(3);
-    expect(JSON.stringify(where.OR)).toContain('"ana"');
+    const where = queries[0].where as { AND?: { OR: unknown[] }[] };
+    expect(where.AND).toHaveLength(2);
+    expect(where.AND![0].OR).toHaveLength(3);
+    expect(JSON.stringify(where.AND)).toContain('"Alvaro"');
+    expect(JSON.stringify(where.AND)).toContain('"Pena"');
   });
 
   it('una búsqueda vacía no añade condiciones', async () => {
     const { service, queries } = recordingService();
     await service.getUsers('COLOMBIA', { search: '   ' });
 
-    expect(queries[0].where).not.toHaveProperty('OR');
+    expect(queries[0].where).not.toHaveProperty('AND');
   });
 
   it('ordena por fecha y desempata por identificador', async () => {
@@ -559,9 +595,11 @@ describe('UserService · autorización de tratamiento de datos', () => {
 });
 
 describe('UserService · alta desde el panel', () => {
-  function creationService() {
+  function creationService(pendingRequest: { id: number; status: string; country: string } | null = null) {
     const created: Record<string, unknown>[] = [];
     const welcome: { email: string; password: string; country: string }[] = [];
+    const resolvedRequests: Record<string, unknown>[] = [];
+    const emitted: { event: string; data: unknown; country: string }[] = [];
     const prisma = {
       user: {
         findUnique: async () => null,
@@ -570,6 +608,14 @@ describe('UserService · alta desde el panel', () => {
           return { guid: 'nueva-1', email: data.email, firstName: data.firstName };
         },
       },
+      accessRequest: {
+        findUnique: async () => pendingRequest,
+        updateMany: async ({ where }: { where: Record<string, unknown> }) => {
+          resolvedRequests.push(where);
+          return { count: pendingRequest ? 1 : 0 };
+        },
+      },
+      $transaction: (operations: Promise<unknown>[]) => Promise.all(operations),
     };
     const mail = {
       sendWelcome: async (email: string, _name: string, password: string, country: string) => {
@@ -577,7 +623,9 @@ describe('UserService · alta desde el panel', () => {
         return true;
       },
     };
-    const realtime = { emitToRole: () => undefined };
+    const realtime = {
+      emitToRole: (event: string, data: unknown, country: string) => emitted.push({ event, data, country }),
+    };
     const service = new UserService(
       prisma as never,
       {} as never,
@@ -587,10 +635,23 @@ describe('UserService · alta desde el panel', () => {
       {} as never,
     );
     jest.spyOn(service['logger'], 'log').mockImplementation(() => undefined);
-    return { service, created, welcome };
+    return { service, created, welcome, resolvedRequests, emitted };
   }
 
   const DTO = { firstName: 'Eva', lastName: 'Mora', email: 'eva@pesv.test', role: 'TEACHER' as const };
+
+  it('da por atendida la solicitud pendiente de esa persona, también si era de la otra sede', async () => {
+    const { service, resolvedRequests, emitted } = creationService({ id: 8, status: 'PENDING', country: 'COLOMBIA' });
+
+    await service.createUser(DTO, 'MEXICO');
+
+    expect(resolvedRequests).toEqual([{ email: 'eva@pesv.test', status: 'PENDING' }]);
+    expect(emitted).toContainEqual({
+      event: 'request:resolved',
+      data: { id: 8, action: 'approved' },
+      country: 'COLOMBIA',
+    });
+  });
 
   it('genera la contraseña temporal en el servidor y se la envía por correo a la persona', async () => {
     const { service, created, welcome } = creationService();
@@ -719,5 +780,66 @@ describe('UserService · editar una cuenta', () => {
     await service.updateUser('cuenta-1', 'COLOMBIA', ADMIN_GUID, { role: 'ADMIN' });
 
     expect(updates[0]).toMatchObject({ role: 'ADMIN' });
+  });
+});
+
+describe('UserService · contraseña temporal nueva', () => {
+  function resendService({ usesDefaultPassword = true, mailConfigured = true, mailFails = false } = {}) {
+    const updates: Record<string, unknown>[] = [];
+    const sent: { email: string; password: string }[] = [];
+    const prisma = {
+      user: {
+        findFirst: async () => ({ email: 'eva@pesv.test', firstName: 'Eva', usesDefaultPassword }),
+        update: async ({ data }: { data: Record<string, unknown> }) => updates.push(data),
+      },
+    };
+    const mail = {
+      isConfigured: mailConfigured,
+      sendWelcome: async (email: string, _name: string, password: string) => {
+        if (mailFails) throw new Error('Brevo respondió 401');
+        sent.push({ email, password });
+      },
+    };
+    const service = new UserService(
+      prisma as never,
+      {} as never,
+      {} as never,
+      settings as never,
+      mail as never,
+      {} as never,
+    );
+    jest.spyOn(service['logger'], 'error').mockImplementation(() => undefined);
+    return { service, updates, sent };
+  }
+
+  it('genera otra, la guarda cifrada, cierra la sesión y se la envía', async () => {
+    const { service, updates, sent } = resendService();
+
+    await expect(service.resendTemporaryPassword('eva', 'COLOMBIA')).resolves.toEqual({
+      message: 'Contraseña temporal enviada a eva@pesv.test.',
+    });
+    expect(sent).toEqual([{ email: 'eva@pesv.test', password: expect.any(String) }]);
+    expect(updates[0].password).not.toBe(sent[0].password);
+    expect(updates[0].currentSessionJti).toBeNull();
+  });
+
+  it('no toca una cuenta que ya creó su propia contraseña', async () => {
+    const { service, updates } = resendService({ usesDefaultPassword: false });
+
+    await expect(service.resendTemporaryPassword('eva', 'COLOMBIA')).rejects.toThrow(/Olvidaste tu contraseña/);
+    expect(updates).toEqual([]);
+  });
+
+  it('sin correo configurado no cambia nada: la persona no podría recibirla', async () => {
+    const { service, updates } = resendService({ mailConfigured: false });
+
+    await expect(service.resendTemporaryPassword('eva', 'COLOMBIA')).rejects.toThrow(/no está configurado/);
+    expect(updates).toEqual([]);
+  });
+
+  it('si el envío falla, se lo dice al administrador', async () => {
+    const { service } = resendService({ mailFails: true });
+
+    await expect(service.resendTemporaryPassword('eva', 'COLOMBIA')).rejects.toThrow(/No se pudo enviar el correo/);
   });
 });

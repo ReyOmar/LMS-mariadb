@@ -18,6 +18,7 @@ import { ExceptionsFilter } from './exceptions.filter';
 
 interface CapturedResponse {
   status: number;
+  destroyed?: boolean;
   headers: Record<string, string>;
   body: {
     statusCode: number;
@@ -29,10 +30,18 @@ interface CapturedResponse {
 }
 
 /** Recoge lo que el filtro envía, imitando lo justo de Fastify. */
-function capture(exception: unknown, request: Record<string, unknown> = {}): CapturedResponse {
+function capture(exception: unknown, request: Record<string, unknown> = {}, headersSent = false): CapturedResponse {
   const caught = { headers: {} } as CapturedResponse;
 
   const response = {
+    sent: false,
+    raw: {
+      headersSent,
+      writableEnded: false,
+      destroy() {
+        caught.destroyed = true;
+      },
+    },
     header(name: string, value: string) {
       caught.headers[name] = value;
       return this;
@@ -62,6 +71,10 @@ function prismaError(code: string, meta?: Record<string, unknown>) {
 }
 
 describe('ExceptionsFilter', () => {
+  it('con la respuesta ya empezada no envía otra: corta la conexión', () => {
+    expect(capture(new Error('ERR_STREAM_PREMATURE_CLOSE'), {}, true)).toEqual({ headers: {}, destroyed: true });
+  });
+
   describe('excepciones de Nest', () => {
     it('conserva el código y el mensaje', () => {
       const { status, body } = capture(new NotFoundException('Curso no encontrado.'));
