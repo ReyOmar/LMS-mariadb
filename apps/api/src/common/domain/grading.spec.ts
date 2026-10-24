@@ -108,13 +108,18 @@ describe('escala de calificación', () => {
 
   describe('formato', () => {
     it('muestra la escala completa', () => {
-      expect(formatScore(85)).toBe('85 / 100');
-      expect(formatScore(87.5)).toBe('87.5 / 100');
+      expect(formatScore(85, 'COLOMBIA')).toBe('85 / 100');
+    });
+
+    it('escribe los decimales como la interfaz de cada sede', () => {
+      expect(formatScore(87.5, 'COLOMBIA')).toBe('87,5 / 100');
+      expect(formatScore(87.5, 'MEXICO')).toBe('87.5 / 100');
+      expect(formatPoints(70.25, 'COLOMBIA')).toBe('70,3');
     });
 
     it('indica explícitamente cuando no hay nota', () => {
-      expect(formatScore(null)).toBe('sin calificar');
-      expect(formatPoints(null)).toBe('—');
+      expect(formatScore(null, 'COLOMBIA')).toBe('sin calificar');
+      expect(formatPoints(null, 'MEXICO')).toBe('—');
     });
   });
 });

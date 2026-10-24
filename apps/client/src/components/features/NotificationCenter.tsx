@@ -55,7 +55,8 @@ const COLOR_BY_TYPE: Partial<Record<NotificationType, string>> = {
   BADGE_UNLOCKED: 'text-emerald-500 bg-emerald-500/10',
 };
 
-export function NotificationCenter() {
+/** `onUnreadChange` avisa del recuento para señalarlo donde la campana no se ve, como el menú del móvil. */
+export function NotificationCenter({ onUnreadChange }: { onUnreadChange: (unread: number) => void }) {
   const { user } = useSession();
   const { notify } = useAlerts();
   const router = useRouter();
@@ -96,6 +97,8 @@ export function NotificationCenter() {
   useEffect(() => {
     void loadNotifications();
   }, [loadNotifications]);
+
+  useEffect(() => onUnreadChange(unread), [unread, onUnreadChange]);
 
   // Un aviso nuevo se añade en el momento, sin volver a pedir la lista entera.
   useRealtimeEvent('notification:new', (data) => {

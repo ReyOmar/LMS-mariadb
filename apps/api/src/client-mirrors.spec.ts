@@ -8,6 +8,7 @@ import { MAX_ATTEMPTS, MAX_OPTIONS, MAX_QUESTIONS, MAX_TIME_LIMIT_MINUTES, MIN_O
 import { CERTIFICATE_TEXT, MAX_LEGAL_TEXT_LENGTH } from './certificates/certificate-pdf';
 import { REALTIME_EVENTS } from './realtime/events';
 import { MAX_DURATION_HOURS, MAX_TITLE_LENGTH } from './courses/dto/courses.dto';
+import { RESOURCE_TYPES } from './courses/dto/resources.dto';
 import { UpdateSettingsDto } from './settings/dto/update-settings.dto';
 import { maxLengthOf } from './common/testing/validation-metadata';
 
@@ -119,6 +120,14 @@ describe('Reglas que repite el cliente', () => {
     mirror('src/app/dashboard/admin/certificate-settings/certificate.ts', (source) => {
       expect(entriesIn(source, 'CERTIFICATE_TEXT')).toEqual(CERTIFICATE_TEXT);
       expect(numberIn(source, 'MAX_LEGAL_TEXT_LENGTH')).toBe(MAX_LEGAL_TEXT_LENGTH);
+    }),
+  );
+
+  it(
+    'tipos de recurso',
+    mirror('src/types/models.ts', (source) => {
+      const union = /type ResourceType = ([^;]+);/.exec(source)![1];
+      expect([...union.matchAll(/'(\w+)'/g)].map(([, type]) => type).sort()).toEqual([...RESOURCE_TYPES].sort());
     }),
   );
 

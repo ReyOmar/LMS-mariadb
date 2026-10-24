@@ -173,6 +173,8 @@ enum DifficultyLevel {
   EXPERT       @map("EXPERTO")
 }
 
+/// Un vídeo es un enlace y un documento, un adjunto. VIDEO y PDF no los creó nunca ninguna
+/// versión: se conservan para no tener que alterar la columna.
 enum ResourceType {
   TEXT       @map("TEXTO")
   VIDEO

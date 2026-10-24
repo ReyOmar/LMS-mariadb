@@ -26,6 +26,7 @@ export function Sidebar() {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [pendingRequests, setPendingRequests] = useState(0);
   const [unreadMessages, setUnreadMessages] = useState(0);
+  const [unreadNotifications, setUnreadNotifications] = useState(0);
 
   const menuContainer = useRef<HTMLDivElement>(null);
 
@@ -91,6 +92,8 @@ export function Sidebar() {
   });
 
   const counters = { requests: pendingRequests, messages: unreadMessages };
+  // En el móvil la campana y los contadores quedan dentro del menú cerrado: el botón lo señala.
+  const somethingNew = unreadNotifications + unreadMessages + pendingRequests > 0;
   const name = user ? `${user.firstName} ${user.lastName}`.trim() : 'Usuario';
   const logo = fileUrlFor(config?.logoUrl);
 
@@ -100,9 +103,12 @@ export function Sidebar() {
         type="button"
         onClick={() => setMobileOpen(true)}
         className="lg:hidden fixed top-3 left-3 z-[110] p-2.5 rounded-xl bg-card border border-border/50 shadow-md text-foreground hover:bg-muted transition-colors"
-        aria-label="Abrir menú"
+        aria-label={somethingNew ? 'Abrir menú (hay novedades)' : 'Abrir menú'}
       >
         <Menu className="h-5 w-5" />
+        {somethingNew && (
+          <span className="absolute -top-1 -right-1 h-3 w-3 rounded-full bg-red-600 ring-2 ring-background" />
+        )}
       </button>
 
       {mobileOpen && (
@@ -134,7 +140,7 @@ export function Sidebar() {
           </div>
 
           <div className="shrink-0 flex items-center gap-1">
-            <NotificationCenter />
+            <NotificationCenter onUnreadChange={setUnreadNotifications} />
             <button
               type="button"
               onClick={() => setMobileOpen(false)}

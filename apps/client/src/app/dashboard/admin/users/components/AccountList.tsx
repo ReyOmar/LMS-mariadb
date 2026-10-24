@@ -91,11 +91,7 @@ export function AccountList({ accounts, tab, search, onTabChange, onSearch, onOp
               <Loader2 className="h-4 w-4 animate-spin" /> Cargando cuentas…
             </div>
           ) : accounts.items.length === 0 ? (
-            <p className="px-5 py-8 text-center text-muted-foreground font-medium">
-              {searchQuery(search)
-                ? 'No se encontraron usuarios que coincidan con la búsqueda.'
-                : 'No hay cuentas con este rol.'}
-            </p>
+            <EmptyList searching={Boolean(searchQuery(search))} tab={tab} counts={counts} onTabChange={onTabChange} />
           ) : (
             <>
               <AccountTable users={accounts.items} onOpenDetails={onOpenDetails} />
@@ -117,6 +113,50 @@ export function AccountList({ accounts, tab, search, onTabChange, onSearch, onOp
         </div>
       )}
     </>
+  );
+}
+
+/** Lo buscado puede estar en otra pestaña: se dice en cuál, en lugar de un «no hay» a secas. */
+function EmptyList({
+  searching,
+  tab,
+  counts,
+  onTabChange,
+}: {
+  searching: boolean;
+  tab: UserRole;
+  counts: CountByRole;
+  onTabChange: (tab: UserRole) => void;
+}) {
+  const { country } = useCountry();
+  const elsewhere = searching ? TABS.filter(({ role }) => role !== tab && counts[role] > 0) : [];
+
+  if (!searching)
+    return <p className="px-5 py-8 text-center text-muted-foreground font-medium">No hay cuentas con este rol.</p>;
+
+  return (
+    <div className="px-5 py-8 text-center text-muted-foreground font-medium">
+      <p>
+        {elsewhere.length > 0
+          ? 'En esta pestaña ninguna cuenta coincide con la búsqueda.'
+          : 'No se encontraron usuarios que coincidan con la búsqueda.'}
+      </p>
+      {elsewhere.length > 0 && (
+        <p className="mt-3 flex flex-wrap items-center justify-center gap-x-3 gap-y-1 text-sm">
+          Hay coincidencias en
+          {elsewhere.map(({ role, label }) => (
+            <button
+              key={role}
+              type="button"
+              onClick={() => onTabChange(role)}
+              className="font-bold text-primary hover:underline"
+            >
+              {label} ({formatNumber(counts[role], country)})
+            </button>
+          ))}
+        </p>
+      )}
+    </div>
   );
 }
 

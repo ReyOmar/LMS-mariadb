@@ -13,9 +13,11 @@ import {
   LineChart,
   Pie,
   PieChart,
+  Text,
   Tooltip,
   XAxis,
   YAxis,
+  type XAxisTickContentProps,
 } from 'recharts';
 import { useCountry } from '@/contexts/CountryContext';
 import { formatNumber } from '@/lib/country';
@@ -193,7 +195,7 @@ export function BarsByRange({
   return (
     <BarChart {...FILL} data={ranges} margin={{ top: 10, right: 20, left: -10, bottom: 15 }}>
       <CartesianGrid {...GRID} />
-      <XAxis dataKey="name" {...AXIS} tick={{ ...AXIS.tick, fontWeight: 600 }} dy={8} interval={0} />
+      <XAxis dataKey="name" {...AXIS} tick={RangeTick} interval={0} />
       <YAxis allowDecimals={false} {...AXIS} tickFormatter={format} />
       <Tooltip {...TOOLTIP} formatter={(value) => [`${format(value)} ${unit}`, 'Cantidad']} />
       <Bar dataKey="count" radius={[6, 6, 0, 0]} maxBarSize={60} isAnimationActive={false}>
@@ -202,6 +204,27 @@ export function BarsByRange({
         ))}
       </Bar>
     </BarChart>
+  );
+}
+
+/**
+ * Nombre de un tramo bajo su barra. Se muestran todos, así que en un móvil se parte en líneas
+ * para no montarse con el del tramo de al lado.
+ */
+function RangeTick({ x, y, width, visibleTicksCount, payload }: XAxisTickContentProps) {
+  return (
+    <Text
+      x={x}
+      y={y}
+      width={Number(width) / visibleTicksCount}
+      dy={8}
+      textAnchor="middle"
+      verticalAnchor="start"
+      {...AXIS.tick}
+      fontWeight={600}
+    >
+      {payload.value}
+    </Text>
   );
 }
 

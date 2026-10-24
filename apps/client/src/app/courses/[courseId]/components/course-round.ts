@@ -26,6 +26,8 @@ export type RoundEvent =
   /** Cerró la felicitación o eligió repasar. */
   | { type: 'review' }
   | { type: 'awaiting-grades' }
+  /** Llegó una nota que esperaba (aprobada o no): el aviso ya no dice nada cierto. */
+  | { type: 'grade-arrived' }
   | { type: 'acknowledge-ungraded' };
 
 export const INITIAL_ROUND: RoundState = { stage: 'checking', ungradedNotice: 'unseen' };
@@ -56,6 +58,7 @@ export function roundReducer(state: RoundState, event: RoundEvent): RoundState {
       return state.stage === 'studying' && state.ungradedNotice === 'unseen'
         ? { ...state, ungradedNotice: 'open' }
         : state;
+    case 'grade-arrived':
     case 'acknowledge-ungraded':
       return state.ungradedNotice === 'open' ? { ...state, ungradedNotice: 'seen' } : state;
   }

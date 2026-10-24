@@ -33,6 +33,8 @@ describe('composeCertificate', () => {
     signatureTitle: 'Examinador',
     logo: null,
     signature: null,
+    country: 'COLOMBIA',
+    timeZone: 'America/Bogota',
   };
 
   function isPdf(content: Buffer): boolean {

@@ -5,8 +5,9 @@ import { IsUploadLimitMb } from '../../storage/upload-limit.validator';
 import { MAX_FILE_NAME_LENGTH, shortenFileName } from '../../storage/file-name';
 import { MAX_TITLE_LENGTH } from './courses.dto';
 
-const TYPES = ['TEXT', 'VIDEO', 'PDF', 'LINK', 'ASSIGNMENT'] as const;
-export type ResourceType = (typeof TYPES)[number];
+/** Los que la aplicación crea y sabe mostrar; VIDEO y PDF sólo existen en la base (ver schema.prisma). */
+export const RESOURCE_TYPES = ['TEXT', 'LINK', 'ASSIGNMENT'] as const;
+export type ResourceType = (typeof RESOURCE_TYPES)[number];
 
 /** Tope del contenido enriquecido: una lección larga cabe, un pegado accidental de megas no. */
 const MAX_HTML = 100_000;
@@ -51,7 +52,7 @@ class ResourceContentDto {
 
 /** Un recurso nuevo llega completo: si algo no vale, no se crea nada. */
 export class CreateResourceDto extends ResourceContentDto {
-  @IsIn(TYPES, { message: `El tipo de bloque debe ser uno de: ${TYPES.join(', ')}.` })
+  @IsIn(RESOURCE_TYPES, { message: `El tipo de bloque debe ser uno de: ${RESOURCE_TYPES.join(', ')}.` })
   type: ResourceType;
 
   /** Sin título, el recurso se llama «Nuevo bloque». */

@@ -54,6 +54,19 @@ describe('roundReducer', () => {
     expect(roundReducer(seen, { type: 'awaiting-grades' }).ungradedNotice).toBe('seen');
   });
 
+  it('el aviso de tareas por calificar se cierra si llega una nota mientras está abierto', () => {
+    const open = after({ type: 'checked', finished: false }, { type: 'awaiting-grades' });
+    const graded = roundReducer(open, { type: 'grade-arrived' });
+
+    expect(graded.ungradedNotice).toBe('seen');
+    expect(roundReducer(graded, { type: 'awaiting-grades' }).ungradedNotice).toBe('seen');
+  });
+
+  it('una nota no abre ni cierra un aviso que no estaba abierto', () => {
+    const studying = after({ type: 'checked', finished: false });
+    expect(roundReducer(studying, { type: 'grade-arrived' })).toEqual(studying);
+  });
+
   it('la felicitación sustituye al aviso de tareas por calificar', () => {
     const celebrating = after(
       { type: 'checked', finished: false },

@@ -1,6 +1,6 @@
 'use client';
 
-import type { RefObject } from 'react';
+import { useMemo, type RefObject } from 'react';
 import { useConfig } from '@/contexts/ConfigContext';
 import { fileUrlFor } from '@/lib/api';
 import { platformNameOf } from '@/lib/platform';
@@ -33,6 +33,10 @@ export function EmailCanvas({
   const logo = fileUrlFor(config?.logoUrl);
   const platformName = platformNameOf(config);
   const caretTracking = { onKeyUp: onCaretMove, onMouseUp: onCaretMove, onFocus: onCaretMove, onInput };
+  // React vuelve a escribir el HTML cada vez que recibe otro objeto, aunque diga lo mismo: con uno
+  // nuevo en cada pintado, la primera tecla devolvería la zona editable a su estado inicial.
+  const subjectHtml = useMemo(() => ({ __html: initialSubject }), [initialSubject]);
+  const bodyHtml = useMemo(() => ({ __html: initialBody }), [initialBody]);
 
   return (
     <div className="rounded-xl border border-slate-200 overflow-hidden shadow-sm" style={{ background: '#f8fafc' }}>
@@ -47,7 +51,7 @@ export function EmailCanvas({
           {...caretTracking}
           onKeyDown={(keyEvent) => keyEvent.key === 'Enter' && keyEvent.preventDefault()}
           className="flex-1 text-sm font-bold text-slate-800 outline-none focus:ring-2 focus:ring-primary/40 rounded px-1"
-          dangerouslySetInnerHTML={{ __html: initialSubject }}
+          dangerouslySetInnerHTML={subjectHtml}
         />
       </div>
 
@@ -82,7 +86,7 @@ export function EmailCanvas({
             {...caretTracking}
             className="outline-none focus:ring-2 focus:ring-primary/40 [&_ul]:list-disc [&_ol]:list-decimal [&_ul]:pl-6 [&_ol]:pl-6"
             style={{ padding: 32, color: '#1e293b', minHeight: 180 }}
-            dangerouslySetInnerHTML={{ __html: initialBody }}
+            dangerouslySetInnerHTML={bodyHtml}
           />
 
           <div

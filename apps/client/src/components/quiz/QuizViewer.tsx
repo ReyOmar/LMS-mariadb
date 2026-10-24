@@ -432,7 +432,7 @@ export default function QuizViewer({
                   <button
                     onClick={startAttempt}
                     disabled={starting}
-                    className="text-xl px-16 py-5 rounded-[1.5rem] font-black bg-amber-500 hover:bg-amber-600 text-amber-950 shadow-2xl shadow-amber-500/30 transition-all hover:scale-105 active:scale-95 disabled:opacity-60 disabled:hover:scale-100"
+                    className="text-lg md:text-xl px-10 md:px-16 py-5 whitespace-nowrap rounded-[1.5rem] font-black bg-amber-500 hover:bg-amber-600 text-amber-950 shadow-2xl shadow-amber-500/30 transition-all hover:scale-105 active:scale-95 disabled:opacity-60 disabled:hover:scale-100"
                   >
                     {starting ? 'Preparando…' : 'Comenzar intento'}
                   </button>
@@ -504,7 +504,7 @@ export default function QuizViewer({
             <button
               onClick={() => setConfirmSubmit(true)}
               disabled={submitting}
-              className="bg-primary hover:bg-primary/90 text-primary-foreground px-12 py-5 rounded-[1.5rem] font-black shadow-2xl shadow-primary/30 transition-all hover:scale-105 active:scale-95 flex items-center gap-4 text-xl disabled:opacity-60"
+              className="bg-primary hover:bg-primary/90 text-primary-foreground px-6 md:px-12 py-5 rounded-[1.5rem] font-black shadow-2xl shadow-primary/30 transition-all hover:scale-105 active:scale-95 flex items-center gap-3 md:gap-4 text-lg md:text-xl whitespace-nowrap disabled:opacity-60"
             >
               <Send className="h-6 w-6" />
               {submitting ? 'Enviando…' : 'Finalizar y enviar'}

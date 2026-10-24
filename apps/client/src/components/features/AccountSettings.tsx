@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { AlertCircle, Camera, CheckCircle, Eye, EyeOff, Loader2, Lock, Save, Trash2, User, X } from 'lucide-react';
 import api, { errorMessage, uploadFile } from '@/lib/api';
 import { useSession, type SessionUser } from '@/contexts/SessionContext';
@@ -53,6 +53,12 @@ function AccountSettingsDialog({ user, onClose }: { user: SessionUser; onClose: 
   const [feedback, setFeedback] = useState<Feedback | null>(null);
 
   const photoInput = useRef<HTMLInputElement>(null);
+  const feedbackBox = useRef<HTMLParagraphElement>(null);
+
+  // El aviso sale arriba: quien guarda desde el final del formulario no lo vería sin llevarlo a la vista.
+  useEffect(() => {
+    feedbackBox.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }, [feedback]);
 
   const changesPassword = newPassword.length > 0;
 
@@ -159,6 +165,7 @@ function AccountSettingsDialog({ user, onClose }: { user: SessionUser; onClose: 
         <div className="flex-1 overflow-y-auto p-6 space-y-6">
           {feedback && (
             <p
+              ref={feedbackBox}
               role={feedback.type === 'error' ? 'alert' : 'status'}
               className={`flex items-start gap-2 rounded-xl border px-4 py-3 text-sm font-medium ${
                 feedback.type === 'success'

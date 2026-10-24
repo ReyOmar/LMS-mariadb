@@ -42,7 +42,7 @@ describe('CertificatesService — verificación y descarga', () => {
         issuers.push(country);
         return { country, platformName: 'PESV Education' };
       },
-      compose: jest.fn(async (_snapshot: CertificateSnapshot) => RECOMPOSED),
+      compose: jest.fn(async (_snapshot: CertificateSnapshot, _country: string) => RECOMPOSED),
     };
     const service = new CertificatesService(
       prisma as never,
@@ -117,7 +117,7 @@ describe('CertificatesService — verificación y descarga', () => {
     const pdf = await service.getPdf('certificado-1', ANA);
 
     expect(pdf.content).toBe(RECOMPOSED);
-    expect(data.compose).toHaveBeenCalledWith(expect.objectContaining(snapshot));
+    expect(data.compose).toHaveBeenCalledWith(expect.objectContaining(snapshot), 'MEXICO');
     expect(storage.saveWithKey).toHaveBeenCalledWith('certificados/a.pdf', RECOMPOSED);
   });
 

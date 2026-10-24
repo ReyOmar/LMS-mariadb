@@ -72,7 +72,7 @@ export function useCourseRound(
   }, [round.stage, quizInProgress]);
 
   useEffect(() => {
-    if (onlyAwaitingGrades) dispatch({ type: 'awaiting-grades' });
+    dispatch({ type: onlyAwaitingGrades ? 'awaiting-grades' : 'grade-arrived' });
   }, [onlyAwaitingGrades, round.stage]);
 
   return {

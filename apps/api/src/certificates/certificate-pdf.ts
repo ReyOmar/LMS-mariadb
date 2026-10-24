@@ -1,4 +1,6 @@
 import { formatScore } from '../common/domain/grading';
+import { Country } from '../common/domain/country';
+import { dayInTimeZone } from '../common/domain/time-zone';
 
 // Los tipos de `@types/pdfkit` declaran el módulo como una instancia y no como el
 // constructor, así que con `import` no se puede hacer `new`. Se carga sin tipar.
@@ -57,6 +59,10 @@ export interface CertificateContent {
 export interface CertificateData extends CertificateContent {
   logo: Buffer | null;
   signature: Buffer | null;
+  /** Sede que lo emite: las notas se escriben con su separador decimal. */
+  country: Country;
+  /** Zona de la sede: las fechas son las de allí, no las del servidor. */
+  timeZone: string;
 }
 
 /** Compone el certificado en memoria; quien lo pide decide dónde guardarlo. */
@@ -203,20 +209,20 @@ function drawMetrics(doc: PDFKit.PDFDocument, data: CertificateData, y: number):
   const metrics: { label: string; value: string }[] = [];
 
   if (data.showEnrollmentDate) {
-    metrics.push({ label: 'Fecha de inscripción', value: date(data.startedAt) });
+    metrics.push({ label: 'Fecha de inscripción', value: date(data.startedAt, data.timeZone) });
   }
-  metrics.push({ label: 'Fecha de expedición', value: date(data.completedAt) });
+  metrics.push({ label: 'Fecha de expedición', value: date(data.completedAt, data.timeZone) });
   // «Intensidad horaria» y no «Duración»: son las horas que dura el programa, no las que
   // tardó esta persona en hacerlo. Quien lee el certificado no tiene por qué adivinarlo.
   metrics.push({ label: 'Intensidad horaria', value: `${data.totalHours} horas` });
   if (data.validUntil) {
-    metrics.push({ label: 'Válido hasta', value: date(data.validUntil) });
+    metrics.push({ label: 'Válido hasta', value: date(data.validUntil, data.timeZone) });
   }
 
   if (data.showModules) metrics.push({ label: 'Módulos', value: String(data.totalModules) });
   if (data.showResources) metrics.push({ label: 'Recursos', value: String(data.totalResources) });
   if (data.showScore && data.averageScore !== null) {
-    metrics.push({ label: 'Calificación promedio', value: formatScore(data.averageScore) });
+    metrics.push({ label: 'Calificación promedio', value: formatScore(data.averageScore, data.country) });
   }
 
   const width = (WIDTH - 120) / metrics.length;
@@ -290,8 +296,7 @@ function corner(doc: PDFKit.PDFDocument, x: number, y: number, color: string, fl
     .stroke(color);
 }
 
-function date(value: Date): string {
-  const day = String(value.getDate()).padStart(2, '0');
-  const month = String(value.getMonth() + 1).padStart(2, '0');
-  return `${day}/${month}/${value.getFullYear()}`;
+function date(value: Date, timeZone: string): string {
+  const [year, month, day] = dayInTimeZone(value, timeZone).split('-');
+  return `${day}/${month}/${year}`;
 }

@@ -218,7 +218,7 @@ export class CertificatesService {
           if (!(await this.isEligible(tx, enrollment, courseGuid, userGuid))) return null;
 
           const data = await this.data.gather(tx, courseGuid, userGuid, country);
-          await this.storage.saveWithKey(pdfKey, await this.data.compose(data.certificate));
+          await this.storage.saveWithKey(pdfKey, await this.data.compose(data.certificate, country));
           const certificate = await this.recordIssuance(tx, { courseGuid, userGuid, country, pdfKey, data });
           const retiredFiles = await this.submissionFiles.retireRound(tx, { userGuid, courseGuid });
           return { certificateGuid: certificate.guid, data, retiredFiles };
@@ -369,7 +369,10 @@ export class CertificatesService {
    * El PDF se conserva para descargarlo siempre; si el archivo se perdió (una copia de seguridad
    * restaurada a medias), se recompone con lo que se guardó al emitirlo y se vuelve a guardar.
    */
-  private async recomposePdf(guid: string, certificate: { pdfKey: string; pdfData: string | null }): Promise<Buffer> {
+  private async recomposePdf(
+    guid: string,
+    certificate: { pdfKey: string; pdfData: string | null; country: Country },
+  ): Promise<Buffer> {
     if (!certificate.pdfData) {
       this.logger.error(
         `Falta el PDF del certificado ${guid} (${certificate.pdfKey}) y no hay datos para recomponerlo`,
@@ -379,7 +382,7 @@ export class CertificatesService {
       );
     }
 
-    const pdf = await this.data.compose(parseSnapshot(certificate.pdfData));
+    const pdf = await this.data.compose(parseSnapshot(certificate.pdfData), certificate.country);
     try {
       await this.storage.saveWithKey(certificate.pdfKey, pdf);
       this.logger.warn(`Recompuesto el PDF del certificado ${guid}, que faltaba en ${certificate.pdfKey}`);

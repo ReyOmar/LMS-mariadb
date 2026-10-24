@@ -19,6 +19,7 @@ import {
   lockEnrollment,
 } from '../enrollments/enrollment-lock';
 import { toScore, isPassing, formatScore, normalizeScore, passingThreshold } from '../common/domain/grading';
+import { Country } from '../common/domain/country';
 import { JwtPayload } from '../common/interfaces/jwt-payload.interface';
 import { FileReceiver } from '../storage/multipart';
 import { uploadLimit } from '../storage/upload-limits';
@@ -164,10 +165,10 @@ const OWN_SUBMISSION_SELECT = {
 type OwnSubmission = Prisma.SubmissionGetPayload<{ select: typeof OWN_SUBMISSION_SELECT }>;
 
 /** Una entrega aprobada no se sustituye: respalda una nota ya dada. */
-function ensureReplaceable(previous: OwnSubmission | null, threshold: number): void {
+function ensureReplaceable(previous: OwnSubmission | null, threshold: number, country: Country): void {
   if (previous?.status === 'GRADED' && isPassing(previous.score, threshold)) {
     throw new BadRequestException(
-      `Tu entrega ya fue aprobada con ${formatScore(previous.score)}. No necesitas volver a enviarla.`,
+      `Tu entrega ya fue aprobada con ${formatScore(previous.score, country)}. No necesitas volver a enviarla.`,
     );
   }
 }
@@ -223,7 +224,7 @@ export class AssessmentsService {
 
     // Antes de recibir el archivo, para no aceptar en balde uno que puede pesar varios GB.
     assertRoundOpen(await this.enrollmentOf(user.sub, course.guid), SUBMISSIONS_CLOSED);
-    ensureReplaceable(await this.ownSubmission(this.prisma, assignmentGuid, user.sub), threshold);
+    ensureReplaceable(await this.ownSubmission(this.prisma, assignmentGuid, user.sub), threshold, user.country);
 
     const limit = uploadLimit('entregas', assignment.maxUploadMb ?? (await this.settings.getMaxUploadMb(user.country)));
     const file = await receive(limit);
@@ -232,7 +233,11 @@ export class AssessmentsService {
     const attachment = { attachmentKey: key, attachmentName: file.name };
     const { submission, previous } = await this.files.adoptUpload(
       key,
-      () => this.saveDelivery({ assignmentGuid, courseGuid: course.guid, userGuid: user.sub, threshold }, attachment),
+      () =>
+        this.saveDelivery(
+          { assignmentGuid, courseGuid: course.guid, userGuid: user.sub, country: user.country, threshold },
+          attachment,
+        ),
       (saved) => saved.previous?.attachmentKey,
     );
 
@@ -256,15 +261,15 @@ export class AssessmentsService {
    * al principio del módulo se rechaza.
    */
   private saveDelivery(
-    target: { assignmentGuid: string; courseGuid: string; userGuid: string; threshold: number },
+    target: { assignmentGuid: string; courseGuid: string; userGuid: string; country: Country; threshold: number },
     attachment: { attachmentKey: string; attachmentName: string },
   ) {
-    const { assignmentGuid, courseGuid, userGuid, threshold } = target;
+    const { assignmentGuid, courseGuid, userGuid, country, threshold } = target;
     return this.prisma.$transaction(async (tx) => {
       assertRoundOpen(await lockEnrollment(tx, userGuid, courseGuid), SUBMISSIONS_CLOSED);
       await this.access.ensureUnlocked(courseGuid, assignmentGuid, userGuid, tx);
       const previous = await this.ownSubmission(tx, assignmentGuid, userGuid);
-      ensureReplaceable(previous, threshold);
+      ensureReplaceable(previous, threshold, country);
 
       const delivery = { ...attachment, submittedAt: new Date() };
       const submission = previous

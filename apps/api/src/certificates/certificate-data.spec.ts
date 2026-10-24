@@ -147,7 +147,8 @@ describe('CertificateDataService — composición del PDF', () => {
 
   function setup() {
     const storage = { readFile: jest.fn(async () => null) };
-    const service = new CertificateDataService(storage as never, {} as never, {} as never);
+    const settings = { getSettings: jest.fn(async () => ({ timeZone: 'America/Bogota' })) };
+    const service = new CertificateDataService(storage as never, settings as never, {} as never);
     const warn = jest.spyOn(service['logger'], 'warn').mockImplementation(() => undefined);
     return { service, storage, warn };
   }
@@ -155,7 +156,7 @@ describe('CertificateDataService — composición del PDF', () => {
   it('lee el logotipo y la firma del almacenamiento para incrustarlos', async () => {
     const { service, storage } = setup();
 
-    await service.compose(SNAPSHOT);
+    await service.compose(SNAPSHOT, 'COLOMBIA');
 
     expect(storage.readFile.mock.calls).toEqual([['logos/sede.png'], ['firmas/carlos.png']]);
   });
@@ -163,7 +164,7 @@ describe('CertificateDataService — composición del PDF', () => {
   it('un logotipo SVG no se intenta incrustar y el aviso dice qué formatos sirven', async () => {
     const { service, storage, warn } = setup();
 
-    const pdf = await service.compose({ ...SNAPSHOT, logoKey: 'logos/sede.svg', showSignature: false });
+    const pdf = await service.compose({ ...SNAPSHOT, logoKey: 'logos/sede.svg', showSignature: false }, 'COLOMBIA');
 
     expect(pdf.subarray(0, 5).toString()).toBe('%PDF-');
     expect(storage.readFile).not.toHaveBeenCalled();

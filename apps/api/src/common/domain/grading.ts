@@ -5,6 +5,8 @@
  * umbral o su representación debe importar desde aquí.
  */
 
+import { COUNTRY_METADATA, type Country } from './country';
+
 /** Nota mínima posible. */
 export const MIN_SCORE = 0;
 
@@ -81,18 +83,19 @@ export function averageOfScores(scores: readonly unknown[]): number | null {
  * Representación de una nota para el usuario final: `"85 / 100"`.
  * Se usa en correos, notificaciones y certificados para que el formato no diverja.
  */
-export function formatScore(score: unknown): string {
+export function formatScore(score: unknown, country: Country): string {
   const num = toScore(score);
   if (num === null) return 'sin calificar';
-  return `${formatPoints(num)} / ${MAX_SCORE}`;
+  return `${formatPoints(num, country)} / ${MAX_SCORE}`;
 }
 
 /**
- * Sólo el número, sin decimales innecesarios: `85`, `87.5`.
+ * Sólo el número, sin decimales innecesarios y con el separador de la sede, como lo
+ * escribe la interfaz: `85`, `87,5` en Colombia, `87.5` en México.
  * Pensado para incrustar en frases donde la escala ya está clara por el contexto.
  */
-export function formatPoints(score: unknown): string {
+export function formatPoints(score: unknown, country: Country): string {
   const num = toScore(score);
   if (num === null) return '—';
-  return Number.isInteger(num) ? String(num) : num.toFixed(1);
+  return num.toLocaleString(`es-${COUNTRY_METADATA[country].iso}`, { maximumFractionDigits: 1 });
 }

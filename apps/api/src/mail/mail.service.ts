@@ -478,7 +478,7 @@ export class MailService implements OnModuleInit {
       {
         nombre: name,
         tarea: assignment,
-        calificacion: formatScore(score),
+        calificacion: formatScore(score, country),
         emoji: '🎉',
         mensaje_aprobacion: '<p style="color:#10b981;font-size:14px;font-weight:600">¡Buen trabajo! Sigue así.</p>',
         comentario: feedbackBlock(feedback),
@@ -502,7 +502,7 @@ export class MailService implements OnModuleInit {
       {
         nombre: name,
         tarea: assignment,
-        calificacion: formatScore(score),
+        calificacion: formatScore(score, country),
         comentario: feedbackBlock(feedback),
         url_campus: `${this.appUrl}/dashboard`,
       },
@@ -540,7 +540,7 @@ export class MailService implements OnModuleInit {
         nombre: name,
         quizTitulo: quizTitle,
         moduloTitulo: moduleTitle,
-        nota: formatScore(score),
+        nota: formatScore(score, country),
         url_campus: `${this.appUrl}/dashboard`,
       },
       country,

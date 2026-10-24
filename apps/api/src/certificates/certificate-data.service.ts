@@ -199,12 +199,13 @@ export class CertificateDataService {
   }
 
   /** Compone el PDF con las imágenes que aún estén en el almacenamiento; sin ellas también se emite. */
-  async compose(snapshot: CertificateSnapshot): Promise<Buffer> {
-    const [logo, signature] = await Promise.all([
+  async compose(snapshot: CertificateSnapshot, country: Country): Promise<Buffer> {
+    const [logo, signature, { timeZone }] = await Promise.all([
       this.loadImage(snapshot.logoKey),
       snapshot.showSignature ? this.loadImage(snapshot.signatureKey) : null,
+      this.settings.getSettings(country),
     ]);
-    return composeCertificate({ ...snapshot, logo, signature });
+    return composeCertificate({ ...snapshot, logo, signature, country, timeZone });
   }
 
   /** La plataforma y la sede que emiten los certificados de `country`. */

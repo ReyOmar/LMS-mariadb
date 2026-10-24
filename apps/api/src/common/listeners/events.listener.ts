@@ -53,7 +53,7 @@ export class EventsListener {
         country: event.country,
         type: 'ASSIGNMENT_GRADED',
         title: 'Cuestionario aprobado',
-        message: `Obtuviste ${formatScore(event.score)} en "${event.quizTitle}". ¡Buen trabajo!`,
+        message: `Obtuviste ${formatScore(event.score, event.country)} en "${event.quizTitle}". ¡Buen trabajo!`,
         actionUrl: `/courses/${event.courseGuid}`,
         refType: NOTIFICATION_REF.quiz,
         refGuid: event.resourceGuid,
@@ -83,8 +83,8 @@ export class EventsListener {
           type: 'MODULE_RESET',
           title: 'Cuestionario no superado',
           message:
-            `Obtuviste ${formatScore(event.score)} en "${event.quizTitle}" y se requieren ` +
-            `${formatPoints(event.passingScore)} puntos. Repasa el módulo y vuelve a intentarlo.`,
+            `Obtuviste ${formatScore(event.score, event.country)} en "${event.quizTitle}" y se requieren ` +
+            `${formatPoints(event.passingScore, event.country)} puntos. Repasa el módulo y vuelve a intentarlo.`,
           actionUrl: `/courses/${event.courseGuid}`,
           refType: NOTIFICATION_REF.quiz,
           refGuid: event.resourceGuid,
@@ -94,7 +94,7 @@ export class EventsListener {
           country: event.country,
           type: 'SUBMISSION_REVIEW',
           title: 'Cuestionario no superado',
-          message: `${studentName} obtuvo ${formatScore(event.score)} en "${event.quizTitle}" del curso "${event.courseTitle}".`,
+          message: `${studentName} obtuvo ${formatScore(event.score, event.country)} en "${event.quizTitle}" del curso "${event.courseTitle}".`,
           // El examinador revisa los intentos en su panel, no en la vista del alumno.
           actionUrl: '/dashboard/examiner/quizzes',
           refType: NOTIFICATION_REF.quiz,
@@ -151,7 +151,7 @@ export class EventsListener {
       const studentName = student ? `${student.firstName} ${student.lastName}` : 'Un alumno';
 
       const detail = event.isResubmission
-        ? ` Es un reenvío; la entrega anterior obtuvo ${formatScore(event.previousScore)}.`
+        ? ` Es un reenvío; la entrega anterior obtuvo ${formatScore(event.previousScore, event.country)}.`
         : '';
 
       await this.notifications.create({
@@ -203,9 +203,9 @@ export class EventsListener {
         type: event.passed ? 'ASSIGNMENT_GRADED' : 'SUBMISSION_REJECTED',
         title: event.passed ? 'Tarea aprobada' : 'Tarea no aprobada',
         message: event.passed
-          ? `Tu entrega de "${event.assignmentTitle}" obtuvo ${formatScore(event.score)}.${feedback}`
-          : `Tu entrega de "${event.assignmentTitle}" obtuvo ${formatScore(event.score)} y se requieren ` +
-            `${formatPoints(event.passingScore)} puntos. Puedes subir una nueva versión.${feedback}`,
+          ? `Tu entrega de "${event.assignmentTitle}" obtuvo ${formatScore(event.score, event.country)}.${feedback}`
+          : `Tu entrega de "${event.assignmentTitle}" obtuvo ${formatScore(event.score, event.country)} y se requieren ` +
+            `${formatPoints(event.passingScore, event.country)} puntos. Puedes subir una nueva versión.${feedback}`,
         actionUrl: '/dashboard/student/courses',
         refType: NOTIFICATION_REF.submission,
         refGuid: event.submissionGuid,

@@ -2,10 +2,10 @@ import { COLOR } from '@/components/ui/charts';
 
 /** Tramos de avance, en el orden en que la API cuenta los alumnos de cada uno (`summary.ranges`). */
 export const PROGRESS_BANDS = [
-  { from: 0, name: '0% - 25%', fill: COLOR.failed, text: 'text-red-700 dark:text-red-400' },
-  { from: 26, name: '26% - 50%', fill: COLOR.pending, text: 'text-amber-700 dark:text-amber-400' },
-  { from: 51, name: '51% - 75%', fill: COLOR.secondary, text: 'text-sky-700 dark:text-sky-400' },
-  { from: 76, name: '76% - 100%', fill: COLOR.passed, text: 'text-emerald-700 dark:text-emerald-400' },
+  { from: 0, name: '0–25%', fill: COLOR.failed, text: 'text-red-700 dark:text-red-400' },
+  { from: 26, name: '26–50%', fill: COLOR.pending, text: 'text-amber-700 dark:text-amber-400' },
+  { from: 51, name: '51–75%', fill: COLOR.secondary, text: 'text-sky-700 dark:text-sky-400' },
+  { from: 76, name: '76–100%', fill: COLOR.passed, text: 'text-emerald-700 dark:text-emerald-400' },
 ] as const;
 
 function bandOf(percent: number) {

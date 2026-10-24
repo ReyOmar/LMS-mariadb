@@ -17,7 +17,7 @@ import type { Country } from '@/lib/country';
 export type UserRole = 'ADMIN' | 'TEACHER' | 'STUDENT';
 export type CourseStatus = 'DRAFT' | 'PUBLISHED' | 'ARCHIVED';
 export type DifficultyLevel = 'BEGINNER' | 'INTERMEDIATE' | 'ADVANCED' | 'EXPERT';
-export type ResourceType = 'TEXT' | 'VIDEO' | 'PDF' | 'LINK' | 'ASSIGNMENT';
+export type ResourceType = 'TEXT' | 'LINK' | 'ASSIGNMENT';
 export type SubmissionStatus = 'DRAFT' | 'SUBMITTED' | 'GRADED' | 'IN_REVIEW';
 export type AccessRequestStatus = 'PENDING' | 'ACCEPTED' | 'REJECTED';
 export type NotificationType =
