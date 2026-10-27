@@ -255,7 +255,7 @@ describe('EnrollmentsService · volver a matricular', () => {
 
     await service.enroll(COURSE, STUDENT_ID, ADMIN);
 
-    expect(enrollment()).toEqual({ active: true, unenrolledAt: null });
+    expect(enrollment()).toEqual({ active: true, unenrolledAt: null, type: 'MANUAL' });
   });
 
   it('quien empieza de cero también empieza con el recuento de avance a cero; quien retoma lo conserva', async () => {

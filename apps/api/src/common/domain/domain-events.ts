@@ -61,6 +61,14 @@ export interface ProgressUpdated extends BaseEvent {
   courseGuid: string;
 }
 
+/**
+ * Un curso publicado puede admitir ahora a quien lo esperaba desde otro sistema: se acaba de
+ * publicar, le pusieron código de integración o cambió su cupo.
+ */
+export interface CourseOpened extends BaseEvent {
+  courseGuid: string;
+}
+
 /** Cada evento con sus datos. Es la lista completa de lo que el campus anuncia. */
 export interface DomainEvents {
   'quiz.passed': QuizPassed;
@@ -69,6 +77,7 @@ export interface DomainEvents {
   'submission.received': SubmissionReceived;
   'submission.graded': SubmissionGraded;
   'progress.updated': ProgressUpdated;
+  'course.opened': CourseOpened;
 }
 
 /** Emite un evento de dominio; el compilador comprueba el nombre y los datos. */

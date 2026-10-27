@@ -35,6 +35,7 @@ describe('EventsListener · el certificado va aparte de los avisos', () => {
       email as never,
       certificates as never,
       {} as never,
+      {} as never,
     );
     jest.spyOn(listener['logger'], 'error').mockImplementation(() => undefined);
 
@@ -89,6 +90,7 @@ describe('EventsListener · cuestionario no superado', () => {
       mail as never,
       {} as never,
       {} as never,
+      {} as never,
     );
     return { listener, mail };
   }
@@ -125,6 +127,7 @@ describe('EventsListener · correo de tarea aprobada', () => {
       { create: jest.fn() } as never,
       mail as never,
       { issueIfEligible: jest.fn().mockResolvedValue(undefined) } as never,
+      {} as never,
       {} as never,
     );
 
@@ -169,6 +172,7 @@ describe('EventsListener · enlaces de los avisos de cuestionario', () => {
       {} as never,
       certificates as never,
       {} as never,
+      {} as never,
     );
     return { instance, notifications };
   }
@@ -206,5 +210,39 @@ describe('EventsListener · enlaces de los avisos de cuestionario', () => {
     ]);
     // Al alumno, con el tipo que dice que vuelve al principio del módulo.
     expect(notifications.create.mock.calls[0][0]).toMatchObject({ type: 'MODULE_RESET' });
+  });
+});
+
+/** Publicar un curso, ponerle código o ampliar su cupo deja pasar a quien lo esperaba desde otro sistema. */
+describe('EventsListener · matrículas pedidas por otros sistemas', () => {
+  function listenerWith(attendCourse: jest.Mock) {
+    const listener = new EventsListener(
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      { attendCourse } as never,
+    );
+    const errors = jest.spyOn(listener['logger'], 'error').mockImplementation(() => undefined);
+    return { listener, errors };
+  }
+
+  const opened = { courseGuid: 'curso-1', userGuid: 'admin', country: 'COLOMBIA' as const };
+
+  it('al abrirse un curso se atienden las que lo esperaban', async () => {
+    const attendCourse = jest.fn().mockResolvedValue(undefined);
+    const { listener } = listenerWith(attendCourse);
+
+    await listener.onCourseOpened(opened);
+
+    expect(attendCourse).toHaveBeenCalledWith('curso-1');
+  });
+
+  it('un fallo al atenderlas se registra y no escapa: la publicación ya se guardó', async () => {
+    const { listener, errors } = listenerWith(jest.fn().mockRejectedValue(new Error('Base caída')));
+
+    await expect(listener.onCourseOpened(opened)).resolves.toBeUndefined();
+    expect(errors).toHaveBeenCalled();
   });
 });

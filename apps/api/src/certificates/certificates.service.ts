@@ -293,6 +293,11 @@ export class CertificatesService {
       where: { userGuid, courseGuid },
       data: { completedAt: data.certificate.completedAt },
     });
+    // Lo que otro sistema pidió que hiciera queda hecho: es lo que consulta para habilitarlo de nuevo.
+    await tx.externalEnrollment.updateMany({
+      where: { userGuid, courseGuid, status: 'ENROLLED' },
+      data: { status: 'COMPLETED', certificateGuid: created.guid },
+    });
     return created;
   }
 

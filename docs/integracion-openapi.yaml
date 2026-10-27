@@ -1,0 +1,415 @@
+openapi: 3.1.0
+info:
+  title: Campus PESV Education · API de integración
+  version: 1.0.0
+  summary: Matrículas pedidas por otros sistemas, como el software PESV.
+  description: |
+    Otro sistema pide que una persona haga un curso, identificado por un código acordado, y
+    consulta después si lo terminó. La guía completa, con el flujo y lo que debe construir el
+    sistema que llama, está en `docs/INTEGRACION.md`.
+
+    - La clave de integración va en la cabecera `X-Api-Key` y determina la sede.
+    - `POST` es idempotente por `externalId`: un reintento devuelve la solicitud existente.
+    - Los campos de las respuestas pueden crecer en esta versión: ignora los que no conozcas.
+servers:
+  - url: https://api-lms.investigaciongipia.com/api/integration/v1
+    description: Producción
+  - url: http://localhost:3200/api/integration/v1
+    description: Desarrollo
+security:
+  - apiKey: []
+tags:
+  - name: Matrículas
+paths:
+  /enrollment-requests:
+    post:
+      tags: [Matrículas]
+      operationId: requestEnrollment
+      summary: Pedir que una persona haga un curso
+      description: |
+        Si hay un curso publicado y con plaza que lleve `courseCode`, la persona queda
+        matriculada en el acto (se le crea la cuenta si no la tiene). Si no, la solicitud
+        espera y los administradores de la sede reciben un aviso; quedará matriculada sola en
+        cuanto el curso esté disponible.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EnrollmentRequestInput'
+            example:
+              externalId: INF-2026-000123
+              courseCode: MANEJO-DEFENSIVO
+              firstName: Laura
+              lastName: Gómez
+              email: laura.gomez@example.com
+      responses:
+        '201':
+          description: Solicitud nueva, ya atendida (`ENROLLED`) o en espera (`WAITING`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EnrollmentRequest'
+              examples:
+                waiting:
+                  $ref: '#/components/examples/Waiting'
+                enrolled:
+                  $ref: '#/components/examples/Enrolled'
+        '200':
+          description: Ya existía con ese `externalId`, la misma persona y el mismo curso. Se devuelve en su estado actual.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EnrollmentRequest'
+        '400':
+          $ref: '#/components/responses/InvalidData'
+        '401':
+          $ref: '#/components/responses/InvalidKey'
+        '409':
+          description: |
+            El `externalId` ya se usó con otra persona u otro curso, o el correo pertenece a
+            una cuenta que no puede matricularse en la sede (examinador, administrador u otra
+            sede). No reintentar.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                statusCode: 409
+                error: Conflict
+                message: El identificador INF-2026-000123 ya se usó para otra solicitud (laura.gomez@example.com, MANEJO-DEFENSIVO). Cada solicitud necesita el suyo.
+                timestamp: '2026-10-27T13:02:11.476Z'
+                requestId: 18134d3c-58d6-4b26-8640-9087cf0a9f8d
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /enrollment-requests/{externalId}:
+    get:
+      tags: [Matrículas]
+      operationId: getEnrollmentRequest
+      summary: Consultar en qué punto está una solicitud
+      parameters:
+        - name: externalId
+          in: path
+          required: true
+          description: El identificador con que el sistema la envió.
+          schema:
+            $ref: '#/components/schemas/ExternalId'
+      responses:
+        '200':
+          description: La solicitud en su estado actual.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EnrollmentRequest'
+              examples:
+                waiting:
+                  $ref: '#/components/examples/Waiting'
+                enrolled:
+                  $ref: '#/components/examples/Enrolled'
+                completed:
+                  $ref: '#/components/examples/Completed'
+                cancelled:
+                  $ref: '#/components/examples/Cancelled'
+                rejected:
+                  $ref: '#/components/examples/Rejected'
+        '401':
+          $ref: '#/components/responses/InvalidKey'
+        '404':
+          description: Este sistema no envió ninguna solicitud con ese identificador.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                statusCode: 404
+                error: Not Found
+                message: No hay ninguna solicitud con el identificador INF-2026-000999.
+                timestamp: '2026-10-27T13:02:11.495Z'
+                requestId: 7dd66a4d-f884-4dc5-8cad-a4b17bade22e
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+components:
+  securitySchemes:
+    apiKey:
+      type: apiKey
+      in: header
+      name: X-Api-Key
+      description: Clave emitida por un administrador de la sede en Administración → Integraciones. Se muestra una sola vez.
+  schemas:
+    ExternalId:
+      type: string
+      minLength: 1
+      maxLength: 100
+      pattern: '^[A-Za-z0-9._:-]+$'
+      description: Identificador de la solicitud en el sistema que la envía, como el número de la infracción. Único por solicitud.
+      examples: [INF-2026-000123]
+    CourseCode:
+      type: string
+      maxLength: 50
+      pattern: '^[A-Za-z0-9]+(?:[-_.][A-Za-z0-9]+)*$'
+      description: Código acordado del curso. Se compara en mayúsculas.
+      examples: [MANEJO-DEFENSIVO]
+    EnrollmentRequestInput:
+      type: object
+      additionalProperties: false
+      required: [externalId, courseCode, firstName, lastName, email]
+      properties:
+        externalId:
+          $ref: '#/components/schemas/ExternalId'
+        courseCode:
+          $ref: '#/components/schemas/CourseCode'
+        firstName:
+          type: string
+          minLength: 1
+          maxLength: 100
+        lastName:
+          type: string
+          minLength: 1
+          maxLength: 100
+        email:
+          type: string
+          format: email
+          maxLength: 191
+          pattern: '^[\x21-\x7e]+$'
+          description: Con él entra la persona al campus. Sin espacios ni tildes; un dominio internacional, en su forma `xn--`.
+    Status:
+      type: string
+      enum: [WAITING, ENROLLED, COMPLETED, CANCELLED, REJECTED]
+      description: |
+        - `WAITING`: espera a que el curso esté disponible (ver `waitingReason`).
+        - `ENROLLED`: matriculada; puede hacer el curso.
+        - `COMPLETED`: aprobó el curso y tiene certificado. No cambia más.
+        - `CANCELLED`: ya no está matriculada (baja, curso o cuenta eliminados). Vuelve a `ENROLLED` si un administrador la reactiva.
+        - `REJECTED`: no se atenderá. No cambia más.
+    WaitingReason:
+      type: [string, 'null']
+      enum: [COURSE_NOT_FOUND, COURSE_NOT_PUBLISHED, COURSE_FULL, null]
+      description: |
+        Sólo con `WAITING`:
+        - `COURSE_NOT_FOUND`: ningún curso de la sede lleva el código.
+        - `COURSE_NOT_PUBLISHED`: el curso existe, pero está en borrador.
+        - `COURSE_FULL`: el curso no tiene plazas libres.
+        - `null`: ya está disponible y la persona entra antes de una hora.
+    EnrollmentRequest:
+      type: object
+      required:
+        - id
+        - externalId
+        - status
+        - waitingReason
+        - detail
+        - courseCode
+        - person
+        - course
+        - requestedAt
+        - enrolledAt
+        - certificate
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Identificador de la solicitud en el campus.
+        externalId:
+          $ref: '#/components/schemas/ExternalId'
+        status:
+          $ref: '#/components/schemas/Status'
+        waitingReason:
+          $ref: '#/components/schemas/WaitingReason'
+        detail:
+          type: string
+          description: El estado en una frase en español, para mostrarla a una persona. No es para interpretarla.
+        courseCode:
+          type: string
+          description: El código pedido, en mayúsculas.
+        person:
+          type: object
+          required: [firstName, lastName, email]
+          properties:
+            firstName:
+              type: string
+            lastName:
+              type: string
+            email:
+              type: string
+              format: email
+              description: En minúsculas.
+        course:
+          type: [object, 'null']
+          description: El curso en el que quedó matriculada; `null` mientras espera.
+          required: [title, url]
+          properties:
+            title:
+              type: string
+            url:
+              type: string
+              format: uri
+        requestedAt:
+          type: string
+          format: date-time
+        enrolledAt:
+          type: [string, 'null']
+          format: date-time
+          description: Desde cuándo cuenta la matrícula; `null` mientras espera.
+        certificate:
+          type: [object, 'null']
+          description: Con `COMPLETED`, el certificado obtenido.
+          required: [code, verificationUrl, issuedAt, validUntil]
+          properties:
+            code:
+              type: string
+              examples: [CERT-9F2A61C04B-MH8K2X1Q]
+            verificationUrl:
+              type: string
+              format: uri
+              description: Página pública que confirma que el certificado es auténtico.
+            issuedAt:
+              type: string
+              format: date-time
+            validUntil:
+              type: [string, 'null']
+              format: date-time
+              description: Vencimiento; `null` si no vence.
+    Error:
+      type: object
+      required: [statusCode, error, message, timestamp]
+      properties:
+        statusCode:
+          type: integer
+        error:
+          type: string
+        message:
+          type: string
+          description: En español, para personas. El programa decide por `statusCode`.
+        timestamp:
+          type: string
+          format: date-time
+        requestId:
+          type: string
+          description: Inclúyelo al reportar un problema.
+  responses:
+    InvalidData:
+      description: Datos no válidos. `message` enumera todos los problemas. No reintentar.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            statusCode: 400
+            error: Bad Request
+            message: El campo «sede» no está permitido. El nombre es obligatorio. El correo electrónico no es válido.
+            timestamp: '2026-10-27T13:02:11.484Z'
+            requestId: 63f83db3-9b2f-43bb-acb7-907a431ade6f
+    InvalidKey:
+      description: Falta la clave, no es válida o fue revocada. No reintentar.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            statusCode: 401
+            error: Unauthorized
+            message: La clave de integración no es válida o fue revocada.
+            timestamp: '2026-10-27T13:02:11.500Z'
+            requestId: 5989f5b9-aab0-4168-9d65-b9ef2ce61e4a
+    TooManyRequests:
+      description: Demasiadas peticiones seguidas (120 por minuto desde una IP; 5 por minuto para un mismo correo).
+      headers:
+        Retry-After:
+          description: Segundos que hay que esperar antes de repetir.
+          schema:
+            type: integer
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Unavailable:
+      description: El campus no puede atender ahora (por ejemplo, la base de datos no responde). Reintentar más tarde con el mismo `externalId`.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+  examples:
+    Waiting:
+      summary: En espera de que exista el curso
+      value:
+        id: 335fbb2d-16c5-4155-a6ad-e0fb4f3d2589
+        externalId: INF-2026-000123
+        status: WAITING
+        waitingReason: COURSE_NOT_FOUND
+        detail: 'En espera: todavía no hay ningún curso con ese código (MANEJO-DEFENSIVO). La persona quedará matriculada en cuanto lo haya.'
+        courseCode: MANEJO-DEFENSIVO
+        person: { firstName: Laura, lastName: Gómez, email: laura.gomez@example.com }
+        course: null
+        requestedAt: '2026-10-27T13:02:11.087Z'
+        enrolledAt: null
+        certificate: null
+    Enrolled:
+      summary: Matriculada
+      value:
+        id: 335fbb2d-16c5-4155-a6ad-e0fb4f3d2589
+        externalId: INF-2026-000123
+        status: ENROLLED
+        waitingReason: null
+        detail: La persona está matriculada en «Manejo defensivo» y puede empezar cuando quiera.
+        courseCode: MANEJO-DEFENSIVO
+        person: { firstName: Laura, lastName: Gómez, email: laura.gomez@example.com }
+        course:
+          title: Manejo defensivo
+          url: https://lms.investigaciongipia.com/courses/0d2e2599-30c4-4d7f-868c-6f33ead6f7e8
+        requestedAt: '2026-10-27T13:02:11.087Z'
+        enrolledAt: '2026-10-27T15:40:03.512Z'
+        certificate: null
+    Completed:
+      summary: Completó el curso
+      value:
+        id: 335fbb2d-16c5-4155-a6ad-e0fb4f3d2589
+        externalId: INF-2026-000123
+        status: COMPLETED
+        waitingReason: null
+        detail: La persona completó el curso. Certificado CERT-9F2A61C04B-MH8K2X1Q.
+        courseCode: MANEJO-DEFENSIVO
+        person: { firstName: Laura, lastName: Gómez, email: laura.gomez@example.com }
+        course:
+          title: Manejo defensivo
+          url: https://lms.investigaciongipia.com/courses/0d2e2599-30c4-4d7f-868c-6f33ead6f7e8
+        requestedAt: '2026-10-27T13:02:11.087Z'
+        enrolledAt: '2026-10-27T15:40:03.512Z'
+        certificate:
+          code: CERT-9F2A61C04B-MH8K2X1Q
+          verificationUrl: https://lms.investigaciongipia.com/verify?code=CERT-9F2A61C04B-MH8K2X1Q
+          issuedAt: '2026-11-02T21:15:47.000Z'
+          validUntil: '2027-11-02T21:15:47.000Z'
+    Cancelled:
+      summary: Matrícula dada de baja
+      value:
+        id: 335fbb2d-16c5-4155-a6ad-e0fb4f3d2589
+        externalId: INF-2026-000123
+        status: CANCELLED
+        waitingReason: null
+        detail: Un administrador dio de baja la matrícula.
+        courseCode: MANEJO-DEFENSIVO
+        person: { firstName: Laura, lastName: Gómez, email: laura.gomez@example.com }
+        course:
+          title: Manejo defensivo
+          url: https://lms.investigaciongipia.com/courses/0d2e2599-30c4-4d7f-868c-6f33ead6f7e8
+        requestedAt: '2026-10-27T13:02:11.087Z'
+        enrolledAt: '2026-10-27T15:40:03.512Z'
+        certificate: null
+    Rejected:
+      summary: Descartada por un administrador
+      value:
+        id: 335fbb2d-16c5-4155-a6ad-e0fb4f3d2589
+        externalId: INF-2026-000123
+        status: REJECTED
+        waitingReason: null
+        detail: 'Un administrador la descartó: el curso pedido no se va a ofrecer.'
+        courseCode: MANEJO-DEFENSIVO
+        person: { firstName: Laura, lastName: Gómez, email: laura.gomez@example.com }
+        course: null
+        requestedAt: '2026-10-27T13:02:11.087Z'
+        enrolledAt: null
+        certificate: null

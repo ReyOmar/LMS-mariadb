@@ -12,7 +12,9 @@ apps/
 ├── api/      NestJS 11 + Fastify + Prisma 7 + MariaDB
 └── client/   Next.js 15 (React 19, Tailwind 4)
 docs/
-└── DESPLIEGUE-CPANEL.md   Puesta en producción
+├── DESPLIEGUE-CPANEL.md        Puesta en producción
+├── INTEGRACION.md              Matrículas pedidas por otros sistemas (software PESV)
+└── integracion-openapi.yaml    Su contrato en OpenAPI 3.1
 ```
 
 ---
@@ -221,5 +223,8 @@ SMTP_PORT="1025"
 ## Documentación
 
 - **[docs/DESPLIEGUE-CPANEL.md](docs/DESPLIEGUE-CPANEL.md)** — puesta en producción.
+- **[docs/INTEGRACION.md](docs/INTEGRACION.md)** — cómo otros sistemas, como el software PESV,
+  piden matrículas y consultan si se completaron. El contrato formal está en
+  [docs/integracion-openapi.yaml](docs/integracion-openapi.yaml).
 
 Con `NODE_ENV=development`, la API publica su documentación interactiva en `/docs`.

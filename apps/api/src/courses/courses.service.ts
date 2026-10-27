@@ -1,4 +1,12 @@
-import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { NotificationType, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { StorageService } from '../storage/storage.service';
@@ -14,6 +22,7 @@ import { isAttemptLive } from './quiz.service';
 import { toClientResource } from './resource-view';
 import { Country } from '../common/domain/country';
 import { countRejected, settleWithConcurrency } from '../common/domain/concurrency';
+import { emitEvent } from '../common/domain/domain-events';
 import { percent } from '../common/domain/progress';
 import { plural } from '../common/domain/text';
 import { JwtPayload } from '../common/interfaces/jwt-payload.interface';
@@ -71,11 +80,11 @@ function timeLimitOf(stored: string | null): number {
 }
 
 /**
- * Lo que se puede cambiar de un curso publicado: su estado y su cupo. El resto de la ficha —la
- * nota mínima, el orden, las horas que acredita— rige lo que ya están haciendo sus alumnos, y
- * como el contenido sólo se cambia en Borrador.
+ * Lo que se puede cambiar de un curso publicado: su estado, su cupo y su código de integración.
+ * El resto de la ficha —la nota mínima, el orden, las horas que acredita— rige lo que ya están
+ * haciendo sus alumnos, y como el contenido sólo se cambia en Borrador.
  */
-const LIVE_FIELDS: ReadonlySet<string> = new Set<keyof UpdateCourseDto>(['status', 'maxStudents']);
+const LIVE_FIELDS: ReadonlySet<string> = new Set<keyof UpdateCourseDto>(['status', 'maxStudents', 'integrationCode']);
 
 /** Si el DTO cambia algo de la ficha que sólo se edita en Borrador. */
 function changesDraftOnlyFields(dto: UpdateCourseDto): boolean {
@@ -95,6 +104,7 @@ function courseChanges(dto: UpdateCourseDto): Prisma.CourseUpdateInput {
     ...(dto.passingScore !== undefined && { passingScore: dto.passingScore }),
     ...(dto.strictOrder !== undefined && { strictOrder: dto.strictOrder }),
     ...(dto.maxStudents !== undefined && { maxStudents: dto.maxStudents }),
+    ...(dto.integrationCode !== undefined && { integrationCode: dto.integrationCode }),
   };
 }
 
@@ -116,6 +126,7 @@ export class CoursesService {
     private readonly notifications: NotificationsService,
     private readonly files: FileOwnershipService,
     private readonly removal: ContentRemovalService,
+    private readonly events: EventEmitter2,
   ) {}
 
   // ── Listados ─────────────────────────────────────────────────────────────
@@ -300,6 +311,7 @@ export class CoursesService {
     if (dto.passingScore !== undefined && dto.passingScore !== Number(course.passingScore)) {
       await this.ensureNothingGraded(courseGuid);
     }
+    if (dto.integrationCode !== undefined) await this.ensureIntegrationCodeFree(courseGuid, dto.integrationCode, user);
 
     // Guardar el estado que ya tenía no es un cambio: no se valida ni se avisa a nadie.
     const newStatus = dto.status !== undefined && dto.status !== course.status ? dto.status : null;
@@ -336,6 +348,10 @@ export class CoursesService {
     );
 
     if (change) await this.announceStatusChange(updated.guid, updated.title, change.kind, user.country);
+    // Lo que puede dejar pasar a quien esperaba este curso desde otro sistema.
+    if (updated.status === 'PUBLISHED' && (newStatus || dto.integrationCode || dto.maxStudents !== undefined)) {
+      emitEvent(this.events, 'course.opened', { courseGuid, userGuid: user.sub, country: user.country });
+    }
     return updated;
   }
 
@@ -356,6 +372,23 @@ export class CoursesService {
           ? 'reopening'
           : 'firstRelease';
     return { kind, firstPublishedAt: firstPublishedAt ?? new Date() };
+  }
+
+  /**
+   * El código de integración es el acuerdo de la sede con los sistemas que matriculan en ella: lo
+   * pone un administrador, y ningún otro curso de la sede puede llevar el mismo.
+   */
+  private async ensureIntegrationCodeFree(courseGuid: string, code: string | null, user: JwtPayload): Promise<void> {
+    if (user.role !== 'ADMIN') {
+      throw new ForbiddenException('Sólo un administrador puede cambiar el código de integración del curso.');
+    }
+    if (!code) return;
+
+    const holder = await this.prisma.course.findFirst({
+      where: { country: user.country, integrationCode: code, guid: { not: courseGuid } },
+      select: { title: true },
+    });
+    if (holder) throw new ConflictException(`El código ${code} ya lo lleva el curso «${holder.title}».`);
   }
 
   /**

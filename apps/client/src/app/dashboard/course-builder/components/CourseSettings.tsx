@@ -1,17 +1,20 @@
 'use client';
 
 import { useState, type ReactNode } from 'react';
-import { Award, BookOpen, Clock, ListOrdered, Users, type LucideIcon } from 'lucide-react';
+import { Award, BookOpen, Clock, ListOrdered, Plug, Users, type LucideIcon } from 'lucide-react';
 import { fileUrlFor } from '@/lib/api';
+import { useSession } from '@/contexts/SessionContext';
 import { MAX_SCORE, MIN_SCORE } from '@/lib/grading';
 import type { Course } from '@/types/models';
 import type { CoverEditor } from '../useCoverEditor';
 import { CoverField } from './CoverField';
 import {
+  MAX_COURSE_CODE_LENGTH,
   MAX_DURATION_HOURS,
   isFieldError,
   parseCapacity,
   parseDurationHours,
+  parseIntegrationCode,
   parsePassingScore,
   type FieldInput,
 } from './course-fields';
@@ -30,6 +33,8 @@ interface Props {
 
 /** Ajustes que no dependen de ningún módulo; cada campo se guarda al salir de él. */
 export function CourseSettings({ course, readOnly, cover, onSave }: Props) {
+  const { role } = useSession();
+
   return (
     <div className="max-w-3xl mx-auto w-full flex flex-col items-center justify-center pt-10">
       <h2 className="text-2xl font-bold mb-8 text-foreground">Configuración general del curso</h2>
@@ -108,6 +113,9 @@ export function CourseSettings({ course, readOnly, cover, onSave }: Props) {
             Obligar a seguir el orden del temario
           </label>
         </Setting>
+
+        {/* Lo decide la sede, no el examinador; como el cupo, se cambia también con el curso publicado. */}
+        {role === 'admin' && <IntegrationCodeSetting saved={course.integrationCode ?? null} onSave={onSave} />}
       </div>
 
       <CoverField
@@ -143,6 +151,53 @@ function Setting({ icon: Icon, title, hint, error, children }: SettingProps) {
         <p className="text-xs text-muted-foreground mt-2">{hint}</p>
       )}
     </div>
+  );
+}
+
+/**
+ * Código con el que otros sistemas, como el del PESV, matriculan en el curso. Ponérselo a un curso
+ * publicado deja pasar en el acto a quien lo estaba esperando.
+ */
+function IntegrationCodeSetting({
+  saved,
+  onSave,
+}: {
+  saved: string | null;
+  onSave: (changes: Partial<Course>) => Promise<boolean>;
+}) {
+  const [error, setError] = useState('');
+
+  return (
+    <Setting
+      icon={Plug}
+      title="Código de integración"
+      hint="Los sistemas conectados (como el del PESV) matriculan en este curso indicando este código; quien lo esté esperando entra en cuanto el curso esté publicado. Déjalo vacío si no se usa."
+      error={error}
+    >
+      <input
+        type="text"
+        defaultValue={saved ?? ''}
+        maxLength={MAX_COURSE_CODE_LENGTH}
+        aria-label="Código de integración"
+        aria-invalid={error !== ''}
+        placeholder="Ej: MANEJO-DEFENSIVO"
+        autoCapitalize="characters"
+        spellCheck={false}
+        onBlur={async (e) => {
+          const input = e.currentTarget;
+          const parsed = parseIntegrationCode(input.value);
+          if (isFieldError(parsed)) {
+            setError(parsed.error);
+            return;
+          }
+          setError('');
+          input.value = parsed.integrationCode ?? '';
+          if (parsed.integrationCode === saved) return;
+          if (!(await onSave(parsed))) input.value = saved ?? '';
+        }}
+        className={`w-full sm:w-80 uppercase ${INPUT}`}
+      />
+    </Setting>
   );
 }
 

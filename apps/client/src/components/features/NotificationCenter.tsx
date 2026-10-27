@@ -42,6 +42,7 @@ const ICON_BY_TYPE: Partial<Record<NotificationType, LucideIcon>> = {
   COURSE_ANNOUNCEMENT: BookOpen,
   GLOBAL_ANNOUNCEMENT: Bell,
   BADGE_UNLOCKED: Award,
+  ENROLLMENT_WAITING: Clock,
 };
 
 const COLOR_BY_TYPE: Partial<Record<NotificationType, string>> = {
@@ -53,6 +54,7 @@ const COLOR_BY_TYPE: Partial<Record<NotificationType, string>> = {
   COURSE_REACTIVATED: 'text-emerald-500 bg-emerald-500/10',
   INACTIVITY_REMINDER: 'text-amber-500 bg-amber-500/10',
   BADGE_UNLOCKED: 'text-emerald-500 bg-emerald-500/10',
+  ENROLLMENT_WAITING: 'text-amber-500 bg-amber-500/10',
 };
 
 /** `onUnreadChange` avisa del recuento para señalarlo donde la campana no se ve, como el menú del móvil. */

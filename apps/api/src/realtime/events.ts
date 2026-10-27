@@ -16,9 +16,10 @@ export const REALTIME_EVENTS = [
   'user:created',
   'user:updated',
   'user:deleted',
-  // Solicitudes de acceso
+  // Solicitudes de acceso y matrículas pedidas por otros sistemas
   'request:new',
   'request:resolved',
+  'integration:changed',
   // Cursos
   'course:created',
   'course:updated',

@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
+import { ExternalEnrollmentsService } from '../integrations/external-enrollments.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { MAIL_CONCURRENCY, MailService } from '../mail/mail.service';
 import { recordCompletion, refreshCompletedResourcesOf } from '../courses/resource-progress';
@@ -48,6 +49,7 @@ export class MaintenanceService {
     private readonly prisma: PrismaService,
     private readonly notifications: NotificationsService,
     private readonly mail: MailService,
+    private readonly externalEnrollments: ExternalEnrollmentsService,
   ) {}
 
   /** Ejecuta una tarea evitando solapes y registrando su resultado. */
@@ -306,6 +308,22 @@ export class MaintenanceService {
       select: { userGuid: true, courseGuid: true },
     });
     return new Set(enrollments.map((row) => `${row.userGuid}|${row.courseGuid}`));
+  }
+
+  // ── Matrículas pedidas por otros sistemas ────────────────────────────────
+
+  /**
+   * Atiende las matrículas que otros sistemas pidieron y siguen esperando un curso, a la media de
+   * cada hora. Publicar el curso, ponerle código o ampliar su cupo ya las atiende en el acto; esto
+   * cubre lo que no avisa —una plaza que queda libre al certificarse alguien— y recuerda cada día
+   * a los administradores lo que sigue faltando.
+   */
+  @Cron('30 * * * *', { timeZone: SCHEDULE_TIME_ZONE })
+  attendWaitingEnrollments(): Promise<void> {
+    return this.run('matrículas en espera', async () => {
+      const enrolled = await this.externalEnrollments.attendAllWaiting();
+      if (enrolled > 0) return `${enrolled} ${plural(enrolled, 'persona matriculada', 'personas matriculadas')}`;
+    });
   }
 
   // ── Recuento de avance ───────────────────────────────────────────────────

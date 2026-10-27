@@ -13,7 +13,10 @@ import { UpdateTemplateDto } from './mail/dto/update-template.dto';
 import { UpdateSettingsDto } from './settings/dto/update-settings.dto';
 import { UpdateCertificateSettingsDto } from './settings/dto/update-certificate-settings.dto';
 import { UpdateSignatureDto } from './settings/dto/update-signature.dto';
+import { ExternalEnrollmentDto } from './integrations/dto/external-enrollment.dto';
+import { CreateIntegrationClientDto } from './integrations/dto/integration-client.dto';
 import { maxLengthOf } from './common/testing/validation-metadata';
+import { EMAIL_TEMPLATES } from '../prisma/email-templates';
 
 /**
  * Lo que admite cada DTO cabe en su columna. Un texto que la validación deja pasar y la base
@@ -97,6 +100,9 @@ const COLUMNS: Column[] = [
   // Cada versión publicada de los textos legales guarda una copia de los de la sede.
   [UpdateSettingsDto, LEGAL, 'LegalVersion'],
   [UpdateCertificateSettingsDto, ['certCustomTitle', 'certSubtitle', 'certLegalText'], 'CountrySettings'],
+  [UpdateCourseDto, ['integrationCode'], 'Course'],
+  [ExternalEnrollmentDto, ['externalId', 'courseCode', 'email', 'firstName', 'lastName'], 'ExternalEnrollment'],
+  [CreateIntegrationClientDto, ['name'], 'IntegrationClient'],
 ];
 
 describe('Los textos que admite la API caben en la base', () => {
@@ -117,6 +123,23 @@ describe('Los textos que admite la API caben en la base', () => {
     expect(limit).toBeDefined();
     expect(limit).toBeLessThanOrEqual(capacity(column));
   });
+
+  it.each(EMAIL_TEMPLATES.map((event) => [event.key, event]))(
+    'la plantilla de serie %s cabe al sembrarla',
+    (_, event) => {
+      const fits: [string, string][] = [
+        [event.key, 'EmailEvent.key'],
+        [event.displayName, 'EmailEvent.displayName'],
+        [event.description, 'EmailEvent.description'],
+        [event.template.internalName, 'EmailTemplate.internalName'],
+        [event.template.subject, 'EmailTemplate.subject'],
+        [event.template.bodyHtml, 'EmailTemplate.bodyHtml'],
+      ];
+      const tooLong = fits.filter(([text, column]) => text.length > capacity(column)).map(([, column]) => column);
+
+      expect(tooLong).toEqual([]);
+    },
+  );
 
   it('el nombre completo cabe en el certificado y en el aviso de un mensaje nuevo', () => {
     const fullName = maxLengthOf(CreateUserDto, 'firstName')! + 1 + maxLengthOf(CreateUserDto, 'lastName')!;

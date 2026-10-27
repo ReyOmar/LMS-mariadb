@@ -35,7 +35,8 @@ export type NotificationType =
   | 'SUBMISSION_REJECTED'
   | 'COURSE_REACTIVATED'
   | 'INACTIVITY_REMINDER'
-  | 'NEW_MESSAGE';
+  | 'NEW_MESSAGE'
+  | 'ENROLLMENT_WAITING';
 
 // ── Personas ───────────────────────────────────────────────────────────────
 
@@ -84,6 +85,8 @@ export interface Course {
   passingScore: number;
   strictOrder?: boolean;
   maxStudents?: number | null;
+  /** Con el que otros sistemas piden matricular en el curso (ver la página de Integraciones). */
+  integrationCode?: string | null;
   teacherGuid: string;
   teacher?: Pick<User, 'guid' | 'firstName' | 'lastName' | 'role'>;
   modules?: CourseModule[];
@@ -398,4 +401,45 @@ export interface Message {
   createdAt: string;
   /** Lo calcula el servidor para no tener que comparar con el usuario en cada render. */
   isMine: boolean;
+}
+
+// ── Integración con otros sistemas ─────────────────────────────────────────
+
+/** Un sistema externo conectado a la sede, como el del PESV. Su clave sólo se ve al generarla. */
+export interface IntegrationClient {
+  id: number;
+  name: string;
+  /** Comienzo de la clave vigente; nulo si se revocó. */
+  keyPrefix: string | null;
+  keyIssuedAt: string | null;
+  lastUsedAt: string | null;
+  createdAt: string;
+}
+
+export interface IssuedIntegrationKey {
+  client: IntegrationClient;
+  key: string;
+}
+
+/** Por qué espera una matrícula pedida por otro sistema. */
+export type WaitingReason = 'COURSE_NOT_FOUND' | 'COURSE_NOT_PUBLISHED' | 'COURSE_FULL';
+
+export interface WaitingRequest {
+  guid: string;
+  externalId: string;
+  firstName: string;
+  lastName: string;
+  email: string;
+  createdAt: string;
+  /** El sistema que la pidió. */
+  system: string;
+}
+
+/** Las solicitudes que esperan un mismo código de curso. */
+export interface WaitingCourse {
+  courseCode: string;
+  course: Pick<Course, 'guid' | 'title' | 'status'> | null;
+  /** Nulo si el curso ya las admite: la siguiente pasada las matricula. */
+  reason: WaitingReason | null;
+  requests: WaitingRequest[];
 }

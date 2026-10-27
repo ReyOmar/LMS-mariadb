@@ -36,6 +36,7 @@ variables de la API en _Setup Node.js App_.
 | Sesiones               | Varias por cuenta                            | Una por cuenta. **Todo el mundo tendrá que volver a entrar** después de actualizar                                     |
 | Protección de datos    | —                                            | Cada persona acepta la política de datos la primera vez que entra; queda registrada la fecha y la versión              |
 | Cuentas desactivadas   | Existían                                     | No existen: una cuenta desactivada en julio podrá volver a entrar (el diagnóstico las lista)                           |
+| Otros sistemas         | —                                            | Piden matrículas por API, con una clave por sede, como el software PESV ([INTEGRACION.md](INTEGRACION.md))             |
 
 La base se migra con un script incluido en el paquete (`apps/api/prisma/migracion-julio/migrar.js`).
 Se ha ensayado sobre una copia con datos de julio: el resultado tiene **exactamente** la
@@ -241,7 +242,9 @@ node prisma/migracion-julio/migrar.js despues
     (se calcula al vuelo), `lms_token_revocations` y `_migracion_julio` (la marca del paso
     anterior);
   - cambios de tipo de las notas a `Decimal(5,2)`, que con valores de 0 a 100 no pierden nada, y
-    de columnas de texto que se amplían (`MEDIUMTEXT`, `VARCHAR(255)` o `VARCHAR(500)`).
+    de columnas de texto que se amplían (`MEDIUMTEXT`, `VARCHAR(255)` o `VARCHAR(500)`);
+  - una restricción única sobre `pais` y `codigo_integracion` de `lms_cursos`: la columna es
+    nueva y está vacía, así que no puede fallar.
 
   Debe terminar con «_Your database is now in sync with your Prisma schema_». Si se detuviera
   con `errno: 121 "Duplicate key on write or update"`, ejecútalo otra vez: aplica lo que falta.
@@ -358,6 +361,9 @@ Después, en cada sede:
   3,0). La de los cursos nuevos es 80.
 - Si el diagnóstico avisó de cuentas desactivadas, elimínalas desde _Usuarios_ si no deben
   entrar.
+- Si el software PESV va a conectarse: en _Integraciones_, conecta el sistema y entrega la
+  clave a su equipo, y pon a cada curso el código acordado con ellos (ver
+  [INTEGRACION.md](INTEGRACION.md#antes-de-conectar)).
 
 Por último, aplica lo de _Seguridad_ (Parte 2) y avisa a los usuarios de que tendrán que volver a
 iniciar sesión. Cuando el campus lleve unos días sin problemas, descarga `~/respaldo-julio` a un
@@ -457,10 +463,11 @@ el campus sigue funcionando: los datos se refrescan al navegar.
 
 ## La API corre en un solo proceso
 
-No subas el número de procesos de la API. El tiempo real, el bloqueo de edición de cursos y
-el límite de peticiones viven en la memoria del proceso: con varios, un aviso sólo llegaría a
-quien esté conectado al mismo proceso, dos administradores podrían editar el mismo curso a la
-vez y el tope de intentos de acceso se multiplicaría. Un proceso aguanta de sobra este uso
+No subas el número de procesos de la API. El tiempo real, el bloqueo de edición de cursos, el
+límite de peticiones y la cola que atiende las matrículas de otros sistemas viven en la memoria
+del proceso: con varios, un aviso sólo llegaría a quien esté conectado al mismo proceso, dos
+administradores podrían editar el mismo curso a la vez, el tope de intentos de acceso se
+multiplicaría y una misma solicitud podría atenderse dos veces. Un proceso aguanta de sobra este uso
 (medido: 60 personas a la vez, 375 peticiones por segundo, el 95 % por debajo de 280 ms).
 
 ## Variables de la API
@@ -472,7 +479,7 @@ vez y el tope de intentos de acceso se multiplicaría. Un proceso aguanta de sob
 | `JWT_SECRET`                                       | Sí             | 32 caracteres o más; la API no arranca con uno corto o de ejemplo                      |
 | `STORAGE_DIR`                                      | Sí             | Carpeta de archivos, fuera de la aplicación                                            |
 | `CORS_ORIGIN`                                      | Sí             | Dominio del cliente, exacto; varios separados por comas                                |
-| `APP_URL`                                          | Sí             | Dominio del cliente, para los enlaces de los correos                                   |
+| `APP_URL`                                          | Sí             | Dominio del cliente, para los enlaces de los correos y de la API de integración        |
 | `API_PUBLIC_URL`                                   | Sí             | Dominio de la API, para las imágenes de los correos                                    |
 | `MAIL_FROM`                                        | Para el correo | Dirección remitente, de un dominio verificado en Brevo; sin ella no sale ningún correo |
 | `MAIL_FROM_NAME`                                   | No             | Nombre del remitente (por defecto, «Campus Virtual»)                                   |
@@ -549,6 +556,7 @@ source /home/investig/nodevenv/lms-pesv-project/apps/api/20/bin/activate && cd a
 npm install --include=dev
 npx prisma generate
 npx prisma db push      # sólo si cambió el esquema; nunca con --accept-data-loss sin leer qué pierde
+npx prisma db seed      # añade los correos nuevos sin tocar los que ya existen
 ```
 
 **Reiniciar** las dos aplicaciones. Despliega siempre las dos partes juntas: comparten rutas y
@@ -568,6 +576,13 @@ Esta actualización pide, además:
   el mensaje de bienvenida, el motivo de rechazo, la URL de referencia, el nombre del titular de
   los certificados y el título de los avisos), añade a los cursos la fecha de su primera
   publicación y un índice a los avisos.
+- **Integración con otros sistemas**: `db push` crea `lms_clientes_integracion`,
+  `lms_matriculas_externas` y la columna `lms_cursos.codigo_integracion`, y avisa de que
+  añadirá una restricción única sobre `[pais,codigo_integracion]` («_If there are existing
+  duplicate values, this will fail_»). La columna es nueva y está vacía: no puede fallar ni
+  perder nada. Si es lo único que enumera, además de lo anterior, ejecuta
+  `npx prisma db push --accept-data-loss`. Después, `npx prisma db seed` añade el correo
+  _Curso solicitado no disponible_.
 
 ## Problemas frecuentes
 

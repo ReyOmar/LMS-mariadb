@@ -16,6 +16,7 @@ import { Transform } from 'class-transformer';
 import { StrictBoolean } from '../../common/validation/transforms';
 import { MAX_SCORE, MIN_SCORE } from '../../common/domain/grading';
 import { IsStorageKey } from '../../storage/storage-key.validator';
+import { CourseCode } from '../../common/validation/course-code';
 
 /**
  * Los estados que se le pueden dar a un curso. La base admite además ARCHIVED, sólo para leer
@@ -102,6 +103,14 @@ export class UpdateCourseDto {
   @IsInt({ message: 'El cupo debe ser un número entero de estudiantes.' })
   @Min(1, { message: 'El cupo debe ser al menos 1.' })
   maxStudents?: number | null;
+
+  /**
+   * Código con el que otros sistemas piden matricular en este curso, como `MANEJO-DEFENSIVO`
+   * (ver `ExternalEnrollmentsService`). Sólo lo cambia un administrador; `null` lo quita.
+   */
+  @IsOptional()
+  @CourseCode()
+  integrationCode?: string | null;
 }
 
 export class CreateModuleDto {

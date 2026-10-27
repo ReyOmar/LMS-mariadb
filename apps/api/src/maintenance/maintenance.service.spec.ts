@@ -2,6 +2,9 @@ import 'reflect-metadata';
 import { MaintenanceService } from './maintenance.service';
 import { StorageService } from '../storage/storage.service';
 
+/** Las matrículas en espera las atiende su propio servicio, que tiene sus propias pruebas. */
+const waitingEnrollments = { attendAllWaiting: async () => 0 };
+
 /**
  * Ninguna tarea programada borra archivos.
  *
@@ -75,6 +78,7 @@ describe('MaintenanceService — ninguna tarea borra archivos ni información de
     // Una tarea nueva hace fallar esta prueba a propósito: antes de añadirla a la lista hay
     // que comprobar que tampoco toca archivos ni las filas que los referencian.
     expect(scheduledTasks().sort()).toEqual([
+      'attendWaitingEnrollments',
       'cleanHiddenMessages',
       'cleanTemporaryData',
       'reconcileCompletedResources',
@@ -105,7 +109,12 @@ describe('MaintenanceService — ninguna tarea borra archivos ni información de
     const notifications = { create: async () => undefined };
     const mail = { sendInactivityReminder: async () => undefined };
 
-    const service = new MaintenanceService(base as never, notifications as never, mail as never);
+    const service = new MaintenanceService(
+      base as never,
+      notifications as never,
+      mail as never,
+      waitingEnrollments as never,
+    );
     const failures = jest.spyOn(service['logger'], 'error').mockImplementation(() => undefined);
     jest.spyOn(service['logger'], 'log').mockImplementation(() => undefined);
 
@@ -252,7 +261,12 @@ describe('MaintenanceService — desbloqueo por espera', () => {
         notified.push(userGuid);
       },
     };
-    const service = new MaintenanceService(base as never, notifications as never, {} as never);
+    const service = new MaintenanceService(
+      base as never,
+      notifications as never,
+      {} as never,
+      waitingEnrollments as never,
+    );
     jest.spyOn(service['logger'], 'log').mockImplementation(() => undefined);
     return service;
   }
@@ -411,7 +425,12 @@ describe('MaintenanceService — recordatorio de inactividad', () => {
       },
     };
 
-    const service = new MaintenanceService(base as never, notifications as never, mail as never);
+    const service = new MaintenanceService(
+      base as never,
+      notifications as never,
+      mail as never,
+      waitingEnrollments as never,
+    );
     jest.spyOn(service['logger'], 'log').mockImplementation(() => undefined);
     const warnings = jest.spyOn(service['logger'], 'warn').mockImplementation(() => undefined);
     return { service, queries, mailed, reminded, warnings, maxInFlight: () => maxInFlight };

@@ -9,6 +9,8 @@ import { CERTIFICATE_TEXT, MAX_LEGAL_TEXT_LENGTH } from './certificates/certific
 import { REALTIME_EVENTS } from './realtime/events';
 import { MAX_DURATION_HOURS, MAX_TITLE_LENGTH } from './courses/dto/courses.dto';
 import { RESOURCE_TYPES } from './courses/dto/resources.dto';
+import { COURSE_CODE_PATTERN, MAX_COURSE_CODE_LENGTH } from './common/validation/course-code';
+import { WAITING_REASONS } from './integrations/external-status';
 import { UpdateSettingsDto } from './settings/dto/update-settings.dto';
 import { maxLengthOf } from './common/testing/validation-metadata';
 
@@ -128,6 +130,22 @@ describe('Reglas que repite el cliente', () => {
     mirror('src/types/models.ts', (source) => {
       const union = /type ResourceType = ([^;]+);/.exec(source)![1];
       expect([...union.matchAll(/'(\w+)'/g)].map(([, type]) => type).sort()).toEqual([...RESOURCE_TYPES].sort());
+    }),
+  );
+
+  it(
+    'código de integración de un curso',
+    mirror('src/app/dashboard/course-builder/components/course-fields.ts', (source) => {
+      expect(numberIn(source, 'MAX_COURSE_CODE_LENGTH')).toBe(MAX_COURSE_CODE_LENGTH);
+      expect(source).toContain(`COURSE_CODE_PATTERN = ${COURSE_CODE_PATTERN}`);
+    }),
+  );
+
+  it(
+    'motivos por los que espera una matrícula pedida por otro sistema',
+    mirror('src/types/models.ts', (source) => {
+      const union = /type WaitingReason = ([^;]+);/.exec(source)![1];
+      expect([...union.matchAll(/'(\w+)'/g)].map(([, reason]) => reason).sort()).toEqual([...WAITING_REASONS].sort());
     }),
   );
 

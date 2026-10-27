@@ -6,6 +6,7 @@ import { SettingsService } from '../settings/settings.service';
 import { StorageService } from '../storage/storage.service';
 import { Country, countryName } from '../common/domain/country';
 import { formatScore } from '../common/domain/grading';
+import { campusUrl } from '../common/http/campus-url';
 import { UserRole } from '../common/interfaces/jwt-payload.interface';
 import { UpdateTemplateDto } from './dto/update-template.dto';
 
@@ -121,7 +122,7 @@ export class MailService implements OnModuleInit {
   ) {
     this.sender = this.setting('MAIL_FROM');
     this.senderName = this.setting('MAIL_FROM_NAME') ?? 'Campus Virtual';
-    this.appUrl = (this.setting('APP_URL') ?? 'http://localhost:3100').replace(/\/+$/, '');
+    this.appUrl = campusUrl(config);
     // Los correos necesitan URLs absolutas: una clave de almacenamiento relativa se ve
     // como una imagen rota en el cliente de correo.
     this.apiUrl = (this.setting('API_PUBLIC_URL') ?? 'http://localhost:3200').replace(/\/+$/, '');
@@ -405,6 +406,30 @@ export class MailService implements OnModuleInit {
         url_solicitudes: `${this.appUrl}/dashboard/admin/access-requests`,
       },
       requester.country,
+    );
+  }
+
+  /**
+   * Aviso a un administrador de que otro sistema espera un curso que todavía no se puede
+   * ofrecer: no existe, no está publicado o no tiene plaza.
+   */
+  sendEnrollmentWaiting(
+    adminEmail: string,
+    adminName: string,
+    waiting: { courseCode: string; people: string; reason: string },
+    country: Country,
+  ) {
+    return this.sendTemplate(
+      'MATRICULA_EN_ESPERA',
+      adminEmail,
+      {
+        adminNombre: adminName,
+        codigoCurso: waiting.courseCode,
+        personas: waiting.people,
+        causa: waiting.reason,
+        url_integraciones: `${this.appUrl}/dashboard/admin/integrations`,
+      },
+      country,
     );
   }
 

@@ -8,5 +8,6 @@ import { CertificatesModule } from '../certificates/certificates.module';
   imports: [CoursesModule, CertificatesModule],
   controllers: [EnrollmentsController],
   providers: [EnrollmentsService],
+  exports: [EnrollmentsService],
 })
 export class EnrollmentsModule {}

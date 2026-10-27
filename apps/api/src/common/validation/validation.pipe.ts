@@ -94,6 +94,11 @@ const FIELD_LABELS: Record<string, string> = {
   accept: 'respuesta a la solicitud',
   attachmentKey: 'archivo adjunto',
   attachmentName: 'nombre del adjunto',
+  // Integración con otros sistemas
+  externalId: 'identificador externo',
+  courseCode: 'código del curso',
+  integrationCode: 'código de integración',
+  name: 'nombre',
   // Configuración de la sede
   platformName: 'nombre de la plataforma',
   welcomeMessage: 'mensaje de bienvenida',

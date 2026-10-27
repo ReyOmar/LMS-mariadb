@@ -80,6 +80,7 @@ model User {
   certificates        Certificate[]
   archivedSubmissions ArchivedSubmission[]
   studySessions       StudySession[]
+  externalEnrollments ExternalEnrollment[]
   sentMessages        Message[]            @relation("SentMessages")
   receivedMessages    Message[]            @relation("ReceivedMessages")
   hiddenConversations HiddenConversation[] @relation("HiddenConversationOwner")
@@ -197,6 +198,9 @@ model Course {
   firstPublishedAt DateTime?       @map("fecha_primera_publicacion")
   durationHours    Int?            @map("duracion_horas")
   maxStudents      Int?            @map("max_estudiantes")
+  /// Con el que un sistema externo pide matricular en este curso (ver `ExternalEnrollment`).
+  /// Lo pone el administrador; único en su sede, en mayúsculas (ver `common/domain/course-code.ts`).
+  integrationCode  String?         @map("codigo_integracion") @db.VarChar(50)
 
   // Reglas de negocio
   // Nota mínima para aprobar, en escala 0–100 (ver common/domain/grading.ts)
@@ -215,7 +219,9 @@ model Course {
   chatContacts  ChatContact[]
 
   archivedSubmissions ArchivedSubmission[]
+  externalEnrollments ExternalEnrollment[]
 
+  @@unique([country, integrationCode])
   @@index([teacherGuid])
   @@index([country, status])
   // Comprobar si una portada sustituida sigue en uso (`FileOwnershipService`).
@@ -349,12 +355,13 @@ model ResourceProgress {
 
 // ── Matrículas ─────────────────────────────────────────────────────────────
 
-/// Toda matrícula la hace el personal (MANUAL). Las otras dos son de la versión de julio y se
-/// conservan para leer sus matrículas.
+/// Quién abrió la estancia actual: el personal (MANUAL) o un sistema externo (INTEGRATION).
+/// ACCESS_CODE y SYSTEM son de la versión de julio y se conservan para leer sus matrículas.
 enum EnrollmentType {
   MANUAL
   ACCESS_CODE @map("CODIGO_ACCESO")
   SYSTEM      @map("SISTEMA")
+  INTEGRATION @map("INTEGRACION")
 }
 
 model Enrollment {
@@ -412,6 +419,7 @@ enum NotificationType {
   COURSE_REACTIVATED  @map("CURSO_REACTIVADO")
   INACTIVITY_REMINDER @map("RECORDATORIO_INACTIVIDAD")
   NEW_MESSAGE         @map("MENSAJE_NUEVO")
+  ENROLLMENT_WAITING  @map("MATRICULA_EN_ESPERA")
 }
 
 model Notification {
@@ -590,6 +598,8 @@ model Certificate {
   averageScore     Decimal?  @map("nota_promedio") @db.Decimal(5, 2)
   createdAt        DateTime  @default(now()) @map("created_at")
 
+  externalEnrollments ExternalEnrollment[]
+
   // La restricción única sirve también de índice por alumno: empieza por `usuario_guid`.
   @@unique([userGuid, courseGuid, attempt])
   @@index([courseGuid])
@@ -753,6 +763,80 @@ model ArchivedSubmission {
   @@index([userGuid, courseGuid])
   @@index([courseGuid])
   @@map("lms_entregas_archivadas")
+}
+
+// ── Integración con otros sistemas ─────────────────────────────────────────
+
+/// Sistema externo autorizado a pedir matrículas en una sede, como el software del PESV.
+///
+/// De la clave sólo se guarda su resumen SHA-256: se muestra una vez al generarla y no se puede
+/// recuperar, sólo sustituir. Sin clave, el sistema queda desconectado y conserva su historial.
+model IntegrationClient {
+  id          Int       @id @default(autoincrement())
+  country     Country   @map("pais")
+  name        String    @map("nombre") @db.VarChar(100)
+  keyHash     String?   @unique @map("clave_hash") @db.Char(64)
+  /// Comienzo de la clave, para reconocerla en el panel sin poder usarla.
+  keyPrefix   String?   @map("clave_prefijo") @db.VarChar(20)
+  keyIssuedAt DateTime? @map("clave_emitida")
+  lastUsedAt  DateTime? @map("ultimo_uso")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  requests ExternalEnrollment[]
+
+  @@index([country])
+  @@map("lms_clientes_integracion")
+}
+
+enum ExternalEnrollmentStatus {
+  WAITING   @map("EN_ESPERA")
+  ENROLLED  @map("MATRICULADA")
+  COMPLETED @map("COMPLETADA")
+  REJECTED  @map("RECHAZADA")
+}
+
+/// Matrícula pedida por un sistema externo: el PESV, al bloquear a un conductor, pide que haga
+/// el curso que lo vuelve a habilitar.
+///
+/// Espera mientras el curso no exista, no esté publicado o no tenga plaza, y se atiende sola en
+/// cuanto lo esté. Se completa en la misma transacción que emite el certificado de su vuelta; si
+/// la matrícula se da de baja, lo dice la propia matrícula (ver `external-status.ts`).
+model ExternalEnrollment {
+  guid            String                   @id @default(uuid())
+  clientId        Int                      @map("cliente_id")
+  client          IntegrationClient        @relation(fields: [clientId], references: [id], onDelete: Restrict)
+  country         Country                  @map("pais")
+  /// Identificador de la solicitud en el sistema que la envió: repetirla no crea otra.
+  externalId      String                   @map("id_externo") @db.VarChar(100)
+  courseCode      String                   @map("codigo_curso") @db.VarChar(50)
+  email           String                   @db.VarChar(191)
+  firstName       String                   @map("nombre")
+  lastName        String                   @map("apellido")
+  status          ExternalEnrollmentStatus @default(WAITING) @map("estado")
+  /// Por qué no se pudo atender. Lo lee el sistema que la envió.
+  rejectionReason String?                  @map("motivo") @db.VarChar(500)
+
+  userGuid        String?      @map("usuario_guid")
+  user            User?        @relation(fields: [userGuid], references: [guid], onDelete: SetNull)
+  courseGuid      String?      @map("curso_guid")
+  course          Course?      @relation(fields: [courseGuid], references: [guid], onDelete: SetNull)
+  /// Inicio de la vuelta en la que quedó matriculado.
+  roundStartedAt  DateTime?    @map("inicio_vuelta")
+  /// El que cerró esa vuelta. Sigue acreditándolo aunque después se borre la cuenta o el curso.
+  certificateGuid String?      @map("certificado_guid")
+  certificate     Certificate? @relation(fields: [certificateGuid], references: [guid], onDelete: SetNull)
+  /// Último aviso a los administradores de que el curso falta; agrupa los avisos de un mismo código.
+  adminNotifiedAt DateTime?    @map("aviso_administrador")
+  createdAt       DateTime     @default(now()) @map("created_at")
+  updatedAt       DateTime     @updatedAt @map("updated_at")
+
+  @@unique([clientId, externalId])
+  // Las que esperan un código: al publicar el curso, al avisar y en el panel.
+  @@index([country, status, courseCode])
+  @@index([userGuid])
+  @@index([courseGuid])
+  @@map("lms_matriculas_externas")
 }
 
 // ── Registro de subidas ────────────────────────────────────────────────────

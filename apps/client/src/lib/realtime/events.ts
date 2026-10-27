@@ -12,6 +12,7 @@ export const REALTIME_EVENTS = [
   'user:deleted',
   'request:new',
   'request:resolved',
+  'integration:changed',
   'course:created',
   'course:updated',
   'course:deleted',

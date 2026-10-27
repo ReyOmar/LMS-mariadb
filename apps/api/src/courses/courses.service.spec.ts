@@ -51,6 +51,7 @@ function serviceWith(prisma: Record<string, unknown>, course: Record<string, unk
       typeof work === 'function' ? work(client) : Promise.all(work),
   };
   const removal = { remove: jest.fn(async () => undefined) };
+  const events = { emit: jest.fn() };
   const service = new CoursesService(
     client as never,
     access as never,
@@ -60,8 +61,9 @@ function serviceWith(prisma: Record<string, unknown>, course: Record<string, unk
     notifications as never,
     ownership.files,
     removal as never,
+    events as never,
   );
-  return { service, files: ownership, emitted, notifications, mail, removal, deletedFiles: ownership.retired };
+  return { service, files: ownership, emitted, notifications, mail, removal, events, deletedFiles: ownership.retired };
 }
 
 /** Espera a que terminen los avisos que el servicio lanza sin bloquear la respuesta. */
@@ -384,6 +386,72 @@ describe('CoursesService · ficha de un curso publicado', () => {
   });
 });
 
+/**
+ * El código de integración es lo que otros sistemas usan para matricular en el curso: lo decide la
+ * sede, no se repite y, en un curso publicado, avisa a quien lo esperaba.
+ */
+describe('CoursesService · código de integración', () => {
+  const TEACHER = sessionFor('TEACHER', 'COLOMBIA', 'profe');
+
+  function courseWith(holder: { title: string } | null, course = PUBLISHED) {
+    const update = jest.fn(async (args: { data: Record<string, unknown> }) => ({ ...course, ...args.data }));
+    const findFirst = jest.fn(async () => holder);
+    const { service, events } = serviceWith(
+      {
+        $queryRaw: async () => [{ maxStudents: null }],
+        enrollment: { findMany: async () => [], count: async () => 0 },
+        course: { update, findFirst },
+      },
+      course,
+    );
+    return { service, update, findFirst, events };
+  }
+
+  it('sólo lo cambia un administrador', async () => {
+    const { service, update } = courseWith(null);
+
+    await expect(service.updateCourse('curso-1', { integrationCode: 'MANEJO' }, TEACHER)).rejects.toBeInstanceOf(
+      ForbiddenException,
+    );
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('no se repite dentro de la sede', async () => {
+    const { service, update, findFirst } = courseWith({ title: 'Manejo defensivo' });
+
+    await expect(service.updateCourse('curso-1', { integrationCode: 'MANEJO' }, ADMIN)).rejects.toThrow(
+      'El código MANEJO ya lo lleva el curso «Manejo defensivo».',
+    );
+    expect(findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { country: 'COLOMBIA', integrationCode: 'MANEJO', guid: { not: 'curso-1' } } }),
+    );
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('se cambia con el curso publicado y avisa a quien esperaba ese código', async () => {
+    const { service, update, events } = courseWith(null);
+
+    await service.updateCourse('curso-1', { integrationCode: 'MANEJO' }, ADMIN);
+
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({ data: { integrationCode: 'MANEJO' } }));
+    expect(events.emit).toHaveBeenCalledWith('course.opened', {
+      courseGuid: 'curso-1',
+      userGuid: ADMIN.sub,
+      country: 'COLOMBIA',
+    });
+  });
+
+  it('quitarlo o tocar un borrador no avisa a nadie', async () => {
+    const published = courseWith(null);
+    await published.service.updateCourse('curso-1', { integrationCode: null }, ADMIN);
+    expect(published.events.emit).not.toHaveBeenCalled();
+
+    const draft = courseWith(null, DRAFT);
+    await draft.service.updateCourse('curso-1', { integrationCode: 'MANEJO' }, ADMIN);
+    expect(draft.events.emit).not.toHaveBeenCalled();
+  });
+});
+
 /** La nota mínima decide quién aprobó: una vez aplicada a algo calificado, ya no se cambia. */
 describe('CoursesService · nota mínima', () => {
   function draftWith(graded: boolean) {
@@ -539,7 +607,7 @@ describe('CoursesService · avisos de mantenimiento', () => {
   });
 
   it('la primera publicación no habla de mantenimiento: avisa de que el curso ya está disponible', async () => {
-    const { service, notifications, mail, update } = publish();
+    const { service, notifications, mail, update, events } = publish();
 
     await service.updateCourse('curso-1', { status: 'PUBLISHED' }, ADMIN);
     await flushPromises();
@@ -553,5 +621,7 @@ describe('CoursesService · avisos de mantenimiento', () => {
     expect(update.mock.calls[0]).toEqual([
       expect.objectContaining({ data: { status: 'PUBLISHED', firstPublishedAt: expect.any(Date) } }),
     ]);
+    // Y quien lo esperaba desde otro sistema puede entrar ya.
+    expect(events.emit).toHaveBeenCalledWith('course.opened', expect.objectContaining({ courseGuid: 'curso-1' }));
   });
 });

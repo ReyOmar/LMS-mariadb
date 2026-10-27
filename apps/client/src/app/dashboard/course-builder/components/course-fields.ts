@@ -41,3 +41,17 @@ export function parseDurationHours(typed: string): FieldInput<{ durationHours: n
   }
   return { durationHours: Math.round(hours) };
 }
+
+/** Las mismas reglas del código de integración que aplica la API (`common/validation/course-code.ts`). */
+export const MAX_COURSE_CODE_LENGTH = 50;
+export const COURSE_CODE_PATTERN = /^[A-Z0-9]+(?:[-_.][A-Z0-9]+)*$/;
+
+/** Código con el que otros sistemas matriculan en el curso: en mayúsculas, y vacío lo quita. */
+export function parseIntegrationCode(typed: string): FieldInput<{ integrationCode: string | null }> {
+  const code = typed.trim().toUpperCase();
+  if (!code) return { integrationCode: null };
+  if (code.length > MAX_COURSE_CODE_LENGTH || !COURSE_CODE_PATTERN.test(code)) {
+    return { error: 'Usa letras sin tilde y cifras, separadas por guiones, como MANEJO-DEFENSIVO.' };
+  }
+  return { integrationCode: code };
+}

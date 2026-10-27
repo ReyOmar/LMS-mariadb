@@ -213,9 +213,9 @@ export class UserService {
   // ── Alta ─────────────────────────────────────────────────────────────────
 
   /**
-   * Crea una cuenta directamente, sin pasar por la solicitud de acceso.
-   * Hereda la sede del administrador que la crea: no hay forma de dar de alta a alguien
-   * en la otra sede.
+   * Crea una cuenta directamente, sin pasar por la solicitud de acceso: la pide un
+   * administrador o un sistema externo al matricular a alguien nuevo. Va a la sede de quien
+   * la pide: no hay forma de dar de alta a alguien en la otra sede.
    *
    * La contraseña temporal la genera el servidor, distinta en cada cuenta, y sólo la
    * conoce la persona, que la recibe por correo: ni el administrador llega a verla.
@@ -259,7 +259,7 @@ export class UserService {
     if (request?.status === 'PENDING') {
       this.realtime.emitToRole('request:resolved', { id: request.id, action: 'approved' }, request.country, 'ADMIN');
     }
-    this.logger.log(`Cuenta creada por un administrador: ${dto.email} (${dto.role}, ${country})`);
+    this.logger.log(`Cuenta creada sin solicitud de acceso: ${dto.email} (${dto.role}, ${country})`);
 
     this.mail
       .sendWelcome(user.email, user.firstName, temporaryPassword, country)

@@ -18,6 +18,7 @@ import { StudentsModule } from './students/students.module';
 import { EnrollmentsModule } from './enrollments/enrollments.module';
 import { DashboardsModule } from './dashboards/dashboards.module';
 import { CertificatesModule } from './certificates/certificates.module';
+import { IntegrationsModule } from './integrations/integrations.module';
 import { MaintenanceModule } from './maintenance/maintenance.module';
 import { HealthModule } from './health/health.module';
 import { ListenersModule } from './common/listeners/listeners.module';
@@ -72,6 +73,7 @@ const TOKEN_VALIDITY = '24h';
     EnrollmentsModule,
     DashboardsModule,
     CertificatesModule,
+    IntegrationsModule,
 
     // Procesos de fondo y diagnóstico
     ListenersModule,

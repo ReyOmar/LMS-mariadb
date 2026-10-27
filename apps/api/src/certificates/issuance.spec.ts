@@ -101,6 +101,7 @@ describe('CertificatesService — emisión del certificado', () => {
     const saved: string[] = [];
     const deleted: string[] = [];
     const enrollmentWrites: { where: unknown; data: unknown }[] = [];
+    const externalWrites: { where: unknown; data: unknown }[] = [];
     const created: Record<string, unknown>[] = [];
     const notifications: Record<string, unknown>[] = [];
     const staffEvents: unknown[][] = [];
@@ -145,6 +146,12 @@ describe('CertificatesService — emisión del certificado', () => {
           updateMany: async (query: { where: unknown; data: { completedAt: Date } }) => {
             enrollmentWrites.push(query);
             state.completedAt = query.data.completedAt;
+            return { count: 1 };
+          },
+        },
+        externalEnrollment: {
+          updateMany: async (query: { where: unknown; data: unknown }) => {
+            externalWrites.push(query);
             return { count: 1 };
           },
         },
@@ -263,6 +270,7 @@ describe('CertificatesService — emisión del certificado', () => {
       saved,
       deleted,
       enrollmentWrites,
+      externalWrites,
       created,
       notifications,
       staffEvents,
@@ -311,6 +319,19 @@ describe('CertificatesService — emisión del certificado', () => {
 
     expect(deleted).toEqual(['entregas/informe.pdf', 'entregas/mapa.pdf']);
     expect(submissions()).toEqual(expect.arrayContaining([otherCourse, otherStudent]));
+  });
+
+  it('la matrícula que pidió otro sistema queda completada con el certificado, en la misma transacción', async () => {
+    const { service, externalWrites } = setup();
+
+    await service.issueIfEligible('curso-1', 'ana', 'COLOMBIA');
+
+    expect(externalWrites).toEqual([
+      {
+        where: { userGuid: 'ana', courseGuid: 'curso-1', status: 'ENROLLED' },
+        data: { status: 'COMPLETED', certificateGuid: 'certificado-1' },
+      },
+    ]);
   });
 
   it('el PDF del certificado nunca se borra', async () => {

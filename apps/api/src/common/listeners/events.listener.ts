@@ -5,12 +5,14 @@ import { NotificationsService } from '../../notifications/notifications.service'
 import { MailService } from '../../mail/mail.service';
 import { CertificatesService } from '../../certificates/certificates.service';
 import { RealtimeService } from '../../realtime/realtime.service';
+import { ExternalEnrollmentsService } from '../../integrations/external-enrollments.service';
 import { formatScore, formatPoints } from '../domain/grading';
 import {
   SubmissionGraded,
   SubmissionReceived,
   BaseEvent,
   AttemptEnabled,
+  CourseOpened,
   DomainEvents,
   ProgressUpdated,
   QuizPassed,
@@ -39,6 +41,7 @@ export class EventsListener {
     private readonly mail: MailService,
     private readonly certificates: CertificatesService,
     private readonly realtime: RealtimeService,
+    private readonly externalEnrollments: ExternalEnrollmentsService,
   ) {}
 
   // ── Cuestionarios ────────────────────────────────────────────────────────
@@ -238,6 +241,17 @@ export class EventsListener {
   @OnEvent('progress.updated')
   async onProgressUpdated(event: ProgressUpdated): Promise<void> {
     await this.checkCertificate('progress.updated', event);
+  }
+
+  // ── Matrículas pedidas por otros sistemas ────────────────────────────────
+
+  @OnEvent('course.opened')
+  async onCourseOpened(event: CourseOpened): Promise<void> {
+    await this.runSafely(
+      'course.opened',
+      () => this.externalEnrollments.attendCourse(event.courseGuid),
+      'matrículas en espera',
+    );
   }
 
   /**

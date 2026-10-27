@@ -9,5 +9,6 @@ import { SettingsModule } from '../settings/settings.module';
   imports: [StorageModule, SettingsModule],
   controllers: [AuthController],
   providers: [AuthService, UserService],
+  exports: [UserService],
 })
 export class AuthModule {}
