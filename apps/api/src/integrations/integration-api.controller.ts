@@ -1,4 +1,4 @@
-import { Body, Controller, Get, HttpStatus, Param, Post, Res } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpStatus, Param, Post, Res } from '@nestjs/common';
 import type { FastifyReply } from 'fastify';
 import { Caller, IntegrationAuth, type IntegrationCaller } from './integration-auth';
 import { ExternalEnrollmentsService } from './external-enrollments.service';
@@ -28,5 +28,11 @@ export class IntegrationApiController {
   @Get(':externalId')
   status(@Caller() caller: IntegrationCaller, @Param('externalId') externalId: string) {
     return this.requests.status(externalId, caller);
+  }
+
+  /** Retira una solicitud que ya no hace falta, mientras espera. */
+  @Delete(':externalId')
+  withdraw(@Caller() caller: IntegrationCaller, @Param('externalId') externalId: string) {
+    return this.requests.withdraw(externalId, caller);
   }
 }

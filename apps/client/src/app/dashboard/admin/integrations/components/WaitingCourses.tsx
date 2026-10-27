@@ -9,7 +9,7 @@ import { plural } from '@/lib/text';
 /** Qué falta para que entren quienes esperan, dicho como lo que tiene que hacer el administrador. */
 const NEXT_STEP: Record<WaitingReason, string> = {
   COURSE_NOT_FOUND: 'Ningún curso lleva este código. Ponlo en la ficha de un curso y publícalo.',
-  COURSE_NOT_PUBLISHED: 'El curso con este código está en borrador: entrarán en cuanto lo publiques.',
+  COURSE_NOT_PUBLISHED: 'El curso con este código no está publicado: entrarán en cuanto lo publiques.',
   COURSE_FULL: 'El curso con este código no tiene plazas: amplía su cupo para que entren.',
 };
 
@@ -75,6 +75,7 @@ export function WaitingCourses({ courses, isBusy, onDiscard }: Props) {
                   type="button"
                   onClick={() => onDiscard(course, request)}
                   disabled={isBusy(request.guid)}
+                  aria-label={`Descartar la solicitud de ${request.firstName} ${request.lastName}`}
                   className="self-start sm:self-center inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-bold text-destructive hover:bg-destructive/10 transition-colors disabled:opacity-50"
                 >
                   <Trash2 className="h-3.5 w-3.5" /> Descartar

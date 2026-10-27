@@ -23,9 +23,9 @@ export function ConnectionGuide() {
         <dt className="font-bold">Qué hace</dt>
         <dd className="text-muted-foreground mt-0.5">
           <span className="font-mono text-xs">POST</span> pide matricular a una persona (nombre, apellido, correo y
-          código del curso) y <span className="font-mono text-xs">GET …/{'{identificador}'}</span> consulta si ya lo
-          terminó y con qué certificado. El equipo técnico tiene el contrato completo en la documentación de integración
-          del proyecto.
+          código del curso), <span className="font-mono text-xs">GET …/{'{identificador}'}</span> consulta si ya lo
+          terminó y con qué certificado, y <span className="font-mono text-xs">DELETE</span> la retira mientras espera.
+          El equipo técnico tiene el contrato completo en la documentación de integración del proyecto.
         </dd>
       </div>
     </dl>

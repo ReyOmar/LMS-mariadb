@@ -416,7 +416,7 @@ export class MailService implements OnModuleInit {
   sendEnrollmentWaiting(
     adminEmail: string,
     adminName: string,
-    waiting: { courseCode: string; people: string; reason: string },
+    waiting: { courseCode: string; people: string; reason: string; fix: string },
     country: Country,
   ) {
     return this.sendTemplate(
@@ -427,6 +427,7 @@ export class MailService implements OnModuleInit {
         codigoCurso: waiting.courseCode,
         personas: waiting.people,
         causa: waiting.reason,
+        solucion: waiting.fix,
         url_integraciones: `${this.appUrl}/dashboard/admin/integrations`,
       },
       country,

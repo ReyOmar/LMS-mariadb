@@ -10,6 +10,7 @@ info:
 
     - La clave de integración va en la cabecera `X-Api-Key` y determina la sede.
     - `POST` es idempotente por `externalId`: un reintento devuelve la solicitud existente.
+    - `DELETE` retira una solicitud mientras espera (por ejemplo, si se anula la infracción).
     - Los campos de las respuestas pueden crecer en esta versión: ignora los que no conozcas.
 servers:
   - url: https://api-lms.investigaciongipia.com/api/integration/v1
@@ -132,6 +133,55 @@ paths:
           $ref: '#/components/responses/TooManyRequests'
         '503':
           $ref: '#/components/responses/Unavailable'
+    delete:
+      tags: [Matrículas]
+      operationId: withdrawEnrollmentRequest
+      summary: Retirar una solicitud que ya no hace falta
+      description: |
+        Sólo mientras espera: queda `REJECTED` y la persona no llega a matricularse. Si ya no
+        esperaba porque se había retirado o rechazado antes, devuelve la solicitud tal cual. Un
+        identificador retirado no se reutiliza.
+      parameters:
+        - name: externalId
+          in: path
+          required: true
+          description: El identificador con que el sistema la envió.
+          schema:
+            $ref: '#/components/schemas/ExternalId'
+      responses:
+        '200':
+          description: La solicitud, ya fuera de la espera.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EnrollmentRequest'
+              examples:
+                withdrawn:
+                  $ref: '#/components/examples/Withdrawn'
+        '401':
+          $ref: '#/components/responses/InvalidKey'
+        '404':
+          description: Este sistema no envió ninguna solicitud con ese identificador.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Ya se atendió (la persona está matriculada o terminó el curso) y no se puede retirar.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                statusCode: 409
+                error: Conflict
+                message: 'La solicitud ya se atendió y no se puede retirar: la persona está matriculada o ya terminó el curso.'
+                timestamp: '2026-10-27T13:02:11.476Z'
+                requestId: 2c1f5e0a-7b55-4d0e-9a51-0c9f3d8b6a11
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '503':
+          $ref: '#/components/responses/Unavailable'
 components:
   securitySchemes:
     apiKey:
@@ -145,7 +195,7 @@ components:
       minLength: 1
       maxLength: 100
       pattern: '^[A-Za-z0-9._:-]+$'
-      description: Identificador de la solicitud en el sistema que la envía, como el número de la infracción. Único por solicitud.
+      description: Identificador de la solicitud en el sistema que la envía, como el número de la infracción. Único por solicitud, sin distinguir mayúsculas.
       examples: [INF-2026-000123]
     CourseCode:
       type: string
@@ -182,18 +232,18 @@ components:
       description: |
         - `WAITING`: espera a que el curso esté disponible (ver `waitingReason`).
         - `ENROLLED`: matriculada; puede hacer el curso.
-        - `COMPLETED`: aprobó el curso y tiene certificado. No cambia más.
+        - `COMPLETED`: aprobó el curso después de pedirse y tiene certificado. No cambia más.
         - `CANCELLED`: ya no está matriculada (baja, curso o cuenta eliminados). Vuelve a `ENROLLED` si un administrador la reactiva.
-        - `REJECTED`: no se atenderá. No cambia más.
+        - `REJECTED`: no se atenderá (correo del personal o de otra sede, descartada por un administrador o retirada por el propio sistema). No cambia más.
     WaitingReason:
       type: [string, 'null']
       enum: [COURSE_NOT_FOUND, COURSE_NOT_PUBLISHED, COURSE_FULL, null]
       description: |
         Sólo con `WAITING`:
         - `COURSE_NOT_FOUND`: ningún curso de la sede lleva el código.
-        - `COURSE_NOT_PUBLISHED`: el curso existe, pero está en borrador.
-        - `COURSE_FULL`: el curso no tiene plazas libres.
-        - `null`: ya está disponible y la persona entra antes de una hora.
+        - `COURSE_NOT_PUBLISHED`: el curso existe, pero no está publicado.
+        - `COURSE_FULL`: el curso no tiene plazas libres (quien ya lo está cursando no espera por esto).
+        - `null`: ya se puede atender y se atiende antes de una hora.
     EnrollmentRequest:
       type: object
       required:
@@ -253,7 +303,7 @@ components:
         enrolledAt:
           type: [string, 'null']
           format: date-time
-          description: Desde cuándo cuenta la matrícula; `null` mientras espera.
+          description: Desde cuándo cuenta la matrícula; `null` mientras espera, o si ya había completado el curso antes de atenderse.
         certificate:
           type: [object, 'null']
           description: Con `COMPLETED`, el certificado obtenido.
@@ -316,7 +366,7 @@ components:
             timestamp: '2026-10-27T13:02:11.500Z'
             requestId: 5989f5b9-aab0-4168-9d65-b9ef2ce61e4a
     TooManyRequests:
-      description: Demasiadas peticiones seguidas (120 por minuto desde una IP; 5 por minuto para un mismo correo).
+      description: Demasiadas peticiones seguidas (120 por minuto en cada ruta desde una misma IP; al pedir, 5 por minuto para un mismo correo).
       headers:
         Retry-After:
           description: Segundos que hay que esperar antes de repetir.
@@ -407,6 +457,20 @@ components:
         status: REJECTED
         waitingReason: null
         detail: 'Un administrador la descartó: el curso pedido no se va a ofrecer.'
+        courseCode: MANEJO-DEFENSIVO
+        person: { firstName: Laura, lastName: Gómez, email: laura.gomez@example.com }
+        course: null
+        requestedAt: '2026-10-27T13:02:11.087Z'
+        enrolledAt: null
+        certificate: null
+    Withdrawn:
+      summary: Retirada por el sistema que la pidió
+      value:
+        id: 335fbb2d-16c5-4155-a6ad-e0fb4f3d2589
+        externalId: INF-2026-000123
+        status: REJECTED
+        waitingReason: null
+        detail: La retiró el sistema que la envió.
         courseCode: MANEJO-DEFENSIVO
         person: { firstName: Laura, lastName: Gómez, email: laura.gomez@example.com }
         course: null

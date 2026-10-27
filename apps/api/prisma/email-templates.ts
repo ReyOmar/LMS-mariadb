@@ -134,14 +134,14 @@ export const EMAIL_TEMPLATES: SeedTemplate[] = [
     displayName: 'Curso Solicitado no Disponible',
     description:
       'Avisa a los administradores de que otro sistema pidió un curso que no existe, no está publicado o no tiene plazas. Se repite cada día mientras alguien espere.',
-    variables: JSON.stringify(['adminNombre', 'codigoCurso', 'personas', 'causa', 'url_integraciones']),
+    variables: JSON.stringify(['adminNombre', 'codigoCurso', 'personas', 'causa', 'solucion', 'url_integraciones']),
     template: {
       internalName: 'Plantilla por defecto - Matrícula en Espera',
       subject: 'Curso solicitado no disponible: {{codigoCurso}}',
       bodyHtml: `<h2 style="color:#1e293b;margin:0 0 16px">⏳ Personas esperando un curso</h2>
 <p style="color:#64748b;font-size:15px;line-height:1.6">Hola <strong>{{adminNombre}}</strong>, hay <strong>{{personas}}</strong> esperando matricularse en el curso con código <strong>{{codigoCurso}}</strong>, pero {{causa}}.</p>
 <div style="background:#fffbeb;border:1px solid #fcd34d;border-radius:12px;padding:20px;margin:20px 0">
-<p style="color:#92400e;font-size:14px;line-height:1.6;margin:0">Para resolverlo, abre el curso (o créalo), escribe <strong>{{codigoCurso}}</strong> en el campo «Código de integración» de su ficha y publícalo. Cada persona en espera quedará matriculada sola y recibirá un correo para empezar.</p>
+<p style="color:#92400e;font-size:14px;line-height:1.6;margin:0">Para resolverlo, {{solucion}}. Cada persona en espera quedará matriculada sola y recibirá un correo para empezar.</p>
 </div>
 <div style="text-align:center;margin:24px 0">
 <a href="{{url_integraciones}}" style="display:inline-block;background:#4f46e5;color:#fff;font-weight:700;padding:14px 36px;border-radius:12px;text-decoration:none;font-size:15px">Ver solicitudes en espera</a>

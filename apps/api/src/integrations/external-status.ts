@@ -35,6 +35,14 @@ export const WAITING_REASON_TEXT: Record<WaitingReason, string> = {
   COURSE_FULL: 'el curso con ese código no tiene plazas libres',
 };
 
+/** Lo que tiene que hacer un administrador para que entren, para su aviso. */
+export const WAITING_REASON_FIX: Record<WaitingReason, string> = {
+  COURSE_NOT_FOUND:
+    'abre el curso que corresponde (o créalo), escribe el código en el campo «Código de integración» de su ficha y publícalo',
+  COURSE_NOT_PUBLISHED: 'publica el curso que lleva ese código',
+  COURSE_FULL: 'amplía el cupo del curso que lleva ese código',
+};
+
 /** Lo guardado de una solicitud que interesa para contar en qué punto está. */
 export interface StoredRequest {
   status: ExternalEnrollmentStatus;
@@ -78,7 +86,7 @@ export function statusReport(request: StoredRequest, facts: CurrentFacts): Statu
           )
         : report(
             'WAITING',
-            'El curso ya está disponible: la persona quedará matriculada en la siguiente pasada, antes de una hora.',
+            'El curso ya está disponible: la solicitud se atenderá en la siguiente pasada, antes de una hora.',
           );
     case 'REJECTED':
       return report('REJECTED', request.rejectionReason ?? 'La solicitud no se pudo atender.');

@@ -19,6 +19,7 @@ import {
   CourseForCode,
   ExternalStatus,
   statusReport,
+  WAITING_REASON_FIX,
   WAITING_REASON_TEXT,
   WaitingReason,
   waitingReasonFor,
@@ -29,6 +30,9 @@ const REMINDER_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
 /** Donde los administradores ven lo que espera. */
 export const INTEGRATIONS_PAGE = '/dashboard/admin/integrations';
+
+/** Motivo con el que queda la solicitud que retira el propio sistema que la envió. */
+const WITHDRAWN = 'La retiró el sistema que la envió.';
 
 /** Lo que se lee de una solicitud para atenderla y para contestar por ella. */
 const REQUEST_FIELDS = {
@@ -55,7 +59,7 @@ type ExternalRequest = Prisma.ExternalEnrollmentGetPayload<{ select: typeof REQU
 type CodedCourse = CourseAccessInfo & CourseForCode;
 
 /** Cómo terminó el intento de atender una solicitud. */
-type Outcome = 'enrolled' | 'waiting' | 'rejected';
+type Outcome = 'enrolled' | 'completed' | 'rejected' | 'waiting';
 
 /** Lo que se responde al otro sistema por cada solicitud. Forma parte del contrato (`docs/INTEGRACION.md`). */
 export interface ExternalEnrollmentView {
@@ -82,7 +86,8 @@ export interface ExternalEnrollmentView {
  * al publicar el curso, al ponerle el código o ampliar su cupo, y cada hora.
  *
  * Todo lo que saca una solicitud de la espera pasa por `serially`: el envío del otro sistema, la
- * publicación del curso, la tarea horaria y el descarte de un administrador no se pisan entre sí.
+ * publicación del curso, la tarea horaria, el descarte de un administrador y la retirada del otro
+ * sistema no se pisan entre sí.
  * En cPanel corre una sola instancia del proceso, así que basta una cola en memoria (como el
  * candado de `MaintenanceService`); con varias, habría que llevarla a la base de datos.
  */
@@ -156,9 +161,22 @@ export class ExternalEnrollmentsService {
 
   /** En qué punto está una solicitud del sistema que la consulta. */
   async status(externalId: string, caller: IntegrationCaller): Promise<ExternalEnrollmentView> {
-    const request = await this.findOwn(caller, externalId);
-    if (!request) throw new NotFoundException(`No hay ninguna solicitud con el identificador ${externalId}.`);
-    return this.describe(request);
+    return this.describe(await this.findOwnOrFail(caller, externalId));
+  }
+
+  /**
+   * Retira una solicitud que ya no hace falta, como la de una infracción anulada. Sólo mientras
+   * espera: una ya retirada o descartada se devuelve tal cual, y una ya atendida no se retira
+   * porque la matrícula sigue su curso.
+   */
+  async withdraw(externalId: string, caller: IntegrationCaller): Promise<ExternalEnrollmentView> {
+    const request = await this.findOwnOrFail(caller, externalId);
+    if (request.status !== 'REJECTED' && !(await this.closeWaiting(request, WITHDRAWN))) {
+      throw new ConflictException(
+        'La solicitud ya se atendió y no se puede retirar: la persona está matriculada o ya terminó el curso.',
+      );
+    }
+    return this.describe(await this.load(request.guid));
   }
 
   // ── Atención de las que esperan ──────────────────────────────────────────
@@ -184,28 +202,24 @@ export class ExternalEnrollmentsService {
   }
 
   /**
-   * Recorre las que esperan, por orden de llegada y agrupadas por curso: si una no puede pasar
-   * porque el curso falta o está lleno, las siguientes del mismo código tampoco.
+   * Recorre las que esperan por orden de llegada, así que las plazas libres se las llevan las que
+   * llegaron antes. Cada una se mira por separado: aunque el curso esté lleno, puede pasar quien
+   * ya lo está cursando o ya lo completó.
    */
   private async attendWaiting(where: Prisma.ExternalEnrollmentWhereInput): Promise<number> {
     const waiting = await this.prisma.externalEnrollment.findMany({
       where: { ...where, status: 'WAITING' },
-      select: { guid: true, country: true, courseCode: true },
+      select: { guid: true, country: true },
       orderBy: { createdAt: 'asc' },
     });
 
-    const blocked = new Set<string>();
     const changed = new Set<Country>();
     let enrolled = 0;
     for (const request of waiting) {
-      const course = `${request.country}:${request.courseCode}`;
-      if (blocked.has(course)) continue;
-
       try {
         const outcome = await this.serially(() => this.attend(request.guid));
-        if (outcome === 'waiting') blocked.add(course);
         if (outcome === 'enrolled') enrolled++;
-        if (outcome === 'enrolled' || outcome === 'rejected') changed.add(request.country);
+        if (outcome && outcome !== 'waiting') changed.add(request.country);
       } catch (error) {
         this.logger.error(`No se pudo atender la solicitud externa ${request.guid}`, error);
       }
@@ -216,19 +230,20 @@ export class ExternalEnrollmentsService {
   }
 
   /**
-   * Intenta matricular a quien pide la solicitud. Si el curso aún no lo admite, la deja esperando
-   * y avisa a los administradores; si la persona no puede matricularse en la sede, la rechaza.
+   * Intenta matricular a quien pide la solicitud. Si ya terminó el curso después de pedirse, la da
+   * por cumplida; si el curso aún no lo admite, la deja esperando y avisa a los administradores; y
+   * si la persona no puede matricularse en la sede, la rechaza.
    */
   private async attend(guid: string): Promise<Outcome | null> {
     const request = await this.load(guid);
     if (request.status !== 'WAITING') return null;
 
     const course = await this.courseForCode(request.country, request.courseCode);
-    const reason = waitingReasonFor(course);
-    if (!course || reason) {
-      await this.remindAdmins(request, reason ?? 'COURSE_NOT_FOUND');
-      return 'waiting';
-    }
+    if (!course) return this.keepWaiting(request, 'COURSE_NOT_FOUND');
+    if (await this.completeIfEarned(request, course.guid)) return 'completed';
+
+    const blocker = await this.blockerFor(request.email, course);
+    if (blocker) return this.keepWaiting(request, blocker);
 
     const student = await this.studentFor(request);
     if (!student) {
@@ -247,13 +262,52 @@ export class ExternalEnrollmentsService {
     } catch (error) {
       // Se llenó entre la comprobación y la matrícula: espera como cualquier otra.
       if (!(error instanceof CourseFullException)) throw error;
-      await this.remindAdmins(request, 'COURSE_FULL');
-      return 'waiting';
+      return this.keepWaiting(request, 'COURSE_FULL');
     }
   }
 
+  /** La deja esperando y avisa a los administradores de lo que falta. */
+  private async keepWaiting(request: ExternalRequest, reason: WaitingReason): Promise<'waiting'> {
+    await this.remindAdmins(request, reason);
+    return 'waiting';
+  }
+
+  /**
+   * Da por cumplida la solicitud si la persona obtuvo el certificado del curso después de pedirse
+   * —por ejemplo, porque la matricularon a mano mientras esperaba—: no tiene por qué repetirlo.
+   */
+  private async completeIfEarned(request: ExternalRequest, courseGuid: string): Promise<boolean> {
+    const certificate = await this.prisma.certificate.findFirst({
+      where: { courseGuid, user: { email: request.email }, completedAt: { gte: request.createdAt } },
+      select: { guid: true, userGuid: true },
+      orderBy: { completedAt: 'asc' },
+    });
+    if (!certificate) return false;
+
+    await this.prisma.externalEnrollment.update({
+      where: { guid: request.guid },
+      data: { status: 'COMPLETED', userGuid: certificate.userGuid, courseGuid, certificateGuid: certificate.guid },
+    });
+    this.logger.log(`Solicitud ${request.externalId}: ${request.email} ya había completado el curso`);
+    return true;
+  }
+
+  /**
+   * Lo que impide todavía matricular a esa persona en el curso, o `null` si nada. Un curso lleno no
+   * detiene a quien ya lo está cursando: sigue en él sin ocupar otra plaza.
+   */
+  private async blockerFor(email: string, course: CodedCourse): Promise<WaitingReason | null> {
+    const reason = waitingReasonFor(course);
+    if (reason !== 'COURSE_FULL') return reason;
+
+    const studying = await this.prisma.enrollment.count({
+      where: { courseGuid: course.guid, active: true, completedAt: null, user: { email } },
+    });
+    return studying > 0 ? null : reason;
+  }
+
   /** La cuenta de la persona en la sede, o una nueva con contraseña temporal; `null` si su correo es de otra. */
-  private async studentFor(request: ExternalRequest): Promise<Student | null> {
+  private async studentFor(request: ExternalRequest, retried = false): Promise<Student | null> {
     const account = await this.prisma.user.findUnique({
       where: { email: request.email },
       select: { guid: true, email: true, firstName: true, role: true, country: true },
@@ -268,7 +322,9 @@ export class ExternalEnrollmentsService {
       return user;
     } catch (error) {
       // Alguien creó la cuenta entre la consulta y el alta: se usa esa.
-      if (error instanceof ConflictException) return this.studentFor(request);
+      if (!retried && (error instanceof ConflictException || isUniqueViolation(error))) {
+        return this.studentFor(request, true);
+      }
       throw error;
     }
   }
@@ -276,7 +332,7 @@ export class ExternalEnrollmentsService {
   /**
    * Avisa a los administradores de la sede de que falta un curso, como mucho una vez al día por
    * código: si llegan cien solicitudes seguidas del mismo, reciben un aviso con el recuento y no
-   * cien. Un aviso que no sale no impide nada: la solicitud sigue esperando.
+   * cien.
    */
   private async remindAdmins(request: ExternalRequest, reason: WaitingReason): Promise<void> {
     const { country, courseCode } = request;
@@ -301,10 +357,24 @@ export class ExternalEnrollmentsService {
         select: { guid: true, email: true, firstName: true },
       }),
     ]);
+    // Sin esperarlo: un correo lento no retiene la respuesta al otro sistema ni las demás solicitudes.
+    void this.notifyAdmins(admins, request, waiting, reason);
+  }
+
+  /**
+   * El aviso, en la campana y por correo. Uno que no sale no impide nada: queda anotado y la
+   * solicitud sigue esperando.
+   */
+  private async notifyAdmins(
+    admins: { guid: string; email: string; firstName: string }[],
+    { country, courseCode }: ExternalRequest,
+    waiting: number,
+    reason: WaitingReason,
+  ): Promise<void> {
     const people = `${waiting} ${plural(waiting, 'persona', 'personas')}`;
     const why = WAITING_REASON_TEXT[reason];
 
-    const notices = await Promise.allSettled(
+    const notices = Promise.allSettled(
       admins.map((admin) =>
         this.notifications.create({
           userGuid: admin.guid,
@@ -316,10 +386,15 @@ export class ExternalEnrollmentsService {
         }),
       ),
     );
-    const mails = await settleWithConcurrency(admins, MAIL_CONCURRENCY, (admin) =>
-      this.mail.sendEnrollmentWaiting(admin.email, admin.firstName, { courseCode, people, reason: why }, country),
+    const mails = settleWithConcurrency(admins, MAIL_CONCURRENCY, (admin) =>
+      this.mail.sendEnrollmentWaiting(
+        admin.email,
+        admin.firstName,
+        { courseCode, people, reason: why, fix: WAITING_REASON_FIX[reason] },
+        country,
+      ),
     );
-    const failed = countRejected(notices) + countRejected(mails);
+    const failed = countRejected(await notices) + countRejected(await mails);
     if (failed > 0) this.logger.error(`No se pudo avisar de ${courseCode} en ${failed} caso(s) (${country})`);
   }
 
@@ -368,17 +443,11 @@ export class ExternalEnrollmentsService {
 
   /** Retira de la espera una solicitud cuyo curso no se va a ofrecer; el otro sistema la verá rechazada. */
   async discard(guid: string, country: Country) {
-    const { count } = await this.serially(() =>
-      this.prisma.externalEnrollment.updateMany({
-        where: { guid, country, status: 'WAITING' },
-        data: {
-          status: 'REJECTED',
-          rejectionReason: 'Un administrador la descartó: el curso pedido no se va a ofrecer.',
-        },
-      }),
+    const discarded = await this.closeWaiting(
+      { guid, country },
+      'Un administrador la descartó: el curso pedido no se va a ofrecer.',
     );
-    if (count === 0) throw new NotFoundException('No hay ninguna solicitud en espera con ese identificador.');
-    this.announceChange(country);
+    if (!discarded) throw new NotFoundException('No hay ninguna solicitud en espera con ese identificador.');
     return { message: 'Solicitud descartada. El sistema que la envió la verá como rechazada.' };
   }
 
@@ -394,11 +463,33 @@ export class ExternalEnrollmentsService {
     return run;
   }
 
+  /**
+   * Saca de la espera la solicitud, como rechazada por `reason`, si sigue esperando.
+   *
+   * @returns Si esperaba.
+   */
+  private async closeWaiting({ guid, country }: { guid: string; country: Country }, reason: string) {
+    const { count } = await this.serially(() =>
+      this.prisma.externalEnrollment.updateMany({
+        where: { guid, country, status: 'WAITING' },
+        data: { status: 'REJECTED', rejectionReason: reason },
+      }),
+    );
+    if (count > 0) this.announceChange(country);
+    return count > 0;
+  }
+
   private findOwn(caller: IntegrationCaller, externalId: string) {
     return this.prisma.externalEnrollment.findUnique({
       where: { clientId_externalId: { clientId: caller.id, externalId } },
       select: REQUEST_FIELDS,
     });
+  }
+
+  private async findOwnOrFail(caller: IntegrationCaller, externalId: string): Promise<ExternalRequest> {
+    const request = await this.findOwn(caller, externalId);
+    if (!request) throw new NotFoundException(`No hay ninguna solicitud con el identificador ${externalId}.`);
+    return request;
   }
 
   private load(guid: string): Promise<ExternalRequest> {
@@ -434,9 +525,7 @@ export class ExternalEnrollmentsService {
 
   private async describe(request: ExternalRequest): Promise<ExternalEnrollmentView> {
     const [waitingReason, enrollmentActive] = await Promise.all([
-      request.status === 'WAITING'
-        ? this.courseForCode(request.country, request.courseCode).then(waitingReasonFor)
-        : Promise.resolve(null),
+      request.status === 'WAITING' ? this.waitingReasonOf(request) : Promise.resolve(null),
       this.isEnrolled(request),
     ]);
     const report = statusReport(request, {
@@ -466,6 +555,12 @@ export class ExternalEnrollmentsService {
         validUntil: certificate.validUntil,
       },
     };
+  }
+
+  /** Por qué sigue esperando, o `null` si ya se puede atender. */
+  private async waitingReasonOf(request: ExternalRequest): Promise<WaitingReason | null> {
+    const course = await this.courseForCode(request.country, request.courseCode);
+    return course ? this.blockerFor(request.email, course) : 'COURSE_NOT_FOUND';
   }
 
   private async isEnrolled({ status, userGuid, courseGuid }: ExternalRequest): Promise<boolean> {

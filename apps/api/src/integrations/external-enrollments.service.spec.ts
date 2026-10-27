@@ -1,4 +1,5 @@
 import { ConflictException, NotFoundException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { ExternalEnrollmentsService } from './external-enrollments.service';
 import { CourseFullException } from '../enrollments/course-capacity';
 import type { IntegrationCaller } from './integration-auth';
@@ -55,6 +56,15 @@ const ADMIN: UserRow = {
   country: 'COLOMBIA',
 };
 
+/** Ana ya tiene cuenta de estudiante en la sede. */
+const ANA: UserRow = {
+  guid: 'ana',
+  email: 'ana@empresa.com',
+  firstName: 'Ana',
+  role: 'STUDENT',
+  country: 'COLOMBIA',
+};
+
 const request = (fields: Partial<Record<string, string>> = {}) => ({
   externalId: 'INF-1',
   courseCode: 'MANEJO',
@@ -67,7 +77,9 @@ const request = (fields: Partial<Record<string, string>> = {}) => ({
 /** El campus en memoria: sólo lo que consultan las matrículas externas. */
 function campus({ courses = [] as CourseRow[], users = [ADMIN] as UserRow[] } = {}) {
   const rows: Record<string, unknown>[] = [];
-  const enrollments = new Map<string, { active: boolean; enrolledAt: Date }>();
+  const enrollments = new Map<string, { active: boolean; enrolledAt: Date; completedAt: Date | null }>();
+  const certificates: { guid: string; userGuid: string; courseGuid: string; completedAt: Date }[] = [];
+  const accountOf = (email: string) => users.find((u) => u.email === email);
   let clock = Date.parse('2026-10-01T08:00:00Z');
   jest.setSystemTime(clock);
 
@@ -140,10 +152,27 @@ function campus({ courses = [] as CourseRow[], users = [ADMIN] as UserRow[] } = 
       findMany: async ({ where }: { where: Partial<UserRow> }) => users.filter((u) => matches({ ...u }, where)),
     },
     enrollment: {
-      count: async ({ where }: { where: { courseGuid: string } }) =>
-        courses.find((c) => c.guid === where.courseGuid)?.occupied ?? 0,
+      // Sin `user`, las plazas ocupadas del curso; con él, si esa persona lo está cursando.
+      count: async ({ where }: { where: { courseGuid: string; user?: { email: string } } }) => {
+        if (!where.user) return courses.find((c) => c.guid === where.courseGuid)?.occupied ?? 0;
+        const current = enrollments.get(`${accountOf(where.user.email)?.guid}|${where.courseGuid}`);
+        return current?.active && !current.completedAt ? 1 : 0;
+      },
       findUnique: async ({ where }: { where: { userGuid_courseGuid: { userGuid: string; courseGuid: string } } }) =>
         enrollments.get(`${where.userGuid_courseGuid.userGuid}|${where.userGuid_courseGuid.courseGuid}`) ?? null,
+    },
+    certificate: {
+      findFirst: async ({
+        where,
+      }: {
+        where: { courseGuid: string; user: { email: string }; completedAt: { gte: Date } };
+      }) =>
+        certificates.find(
+          (c) =>
+            c.courseGuid === where.courseGuid &&
+            c.userGuid === accountOf(where.user.email)?.guid &&
+            c.completedAt >= where.completedAt.gte,
+        ) ?? null,
     },
   };
 
@@ -164,6 +193,10 @@ function campus({ courses = [] as CourseRow[], users = [ADMIN] as UserRow[] } = 
   };
   const enrollmentService = {
     enrollFromIntegration: jest.fn(async (target: CourseRow, student: { guid: string; email: string }) => {
+      // Quien ya lo está cursando sigue en su vuelta, sin ocupar otra plaza.
+      const current = enrollments.get(`${student.guid}|${target.guid}`);
+      if (current?.active && !current.completedAt) return current.enrolledAt;
+
       // Recibe una copia del curso: las plazas se cuentan en el original, como en la base.
       const original = courses.find((c) => c.guid === target.guid)!;
       if (original.maxStudents !== null && original.occupied >= original.maxStudents) {
@@ -171,7 +204,7 @@ function campus({ courses = [] as CourseRow[], users = [ADMIN] as UserRow[] } = 
       }
       original.occupied++;
       const enrolledAt = new Date((clock += 1000));
-      enrollments.set(`${student.guid}|${target.guid}`, { active: true, enrolledAt });
+      enrollments.set(`${student.guid}|${target.guid}`, { active: true, enrolledAt, completedAt: null });
       return enrolledAt;
     }),
   };
@@ -197,10 +230,26 @@ function campus({ courses = [] as CourseRow[], users = [ADMIN] as UserRow[] } = 
     service,
     rows,
     courses,
+    users,
     accountsCreated,
+    createUser: userService.createUser,
     enrollFromIntegration: enrollmentService.enrollFromIntegration,
     mail,
     notifications,
+    /** Un administrador matricula a mano, desde el panel, a quien ya tiene cuenta. */
+    enroll: (email: string, courseGuid: string) => {
+      const enrolledAt = new Date((clock += 1000));
+      enrollments.set(`${accountOf(email)!.guid}|${courseGuid}`, { active: true, enrolledAt, completedAt: null });
+      courses.find((c) => c.guid === courseGuid)!.occupied++;
+    },
+    /** Quien lo estaba cursando lo aprueba y recibe su certificado: deja libre su plaza. */
+    certify: (email: string, courseGuid: string) => {
+      const userGuid = accountOf(email)!.guid;
+      const completedAt = new Date((clock += 1000));
+      enrollments.get(`${userGuid}|${courseGuid}`)!.completedAt = completedAt;
+      courses.find((c) => c.guid === courseGuid)!.occupied--;
+      certificates.push({ guid: `cert-${certificates.length + 1}`, userGuid, courseGuid, completedAt });
+    },
     /** Pasa el reloj, para los recordatorios diarios. */
     advanceHours: (hours: number) => {
       clock += hours * 3600_000;
@@ -232,14 +281,7 @@ describe('ExternalEnrollmentsService · recepción', () => {
   });
 
   it('quien ya tiene cuenta de estudiante en la sede entra con ella', async () => {
-    const ana: UserRow = {
-      guid: 'ana',
-      email: 'ana@empresa.com',
-      firstName: 'Ana',
-      role: 'STUDENT',
-      country: 'COLOMBIA',
-    };
-    const { service, accountsCreated, enrollFromIntegration } = campus({ courses: [course()], users: [ADMIN, ana] });
+    const { service, accountsCreated, enrollFromIntegration } = campus({ courses: [course()], users: [ADMIN, ANA] });
 
     await service.receive(request(), PESV);
 
@@ -291,6 +333,19 @@ describe('ExternalEnrollmentsService · recepción', () => {
     expect(staff.rows).toHaveLength(0);
   });
 
+  it('si la cuenta se crea a la vez por otra vía, entra con esa en lugar de fallar', async () => {
+    const { service, users, createUser } = campus({ courses: [course()] });
+    createUser.mockImplementationOnce(async () => {
+      users.push(ANA);
+      throw new Prisma.PrismaClientKnownRequestError('Unique constraint failed', { code: 'P2002', clientVersion: '7' });
+    });
+
+    const { view } = await service.receive(request(), PESV);
+
+    expect(view.status).toBe('ENROLLED');
+    expect(createUser).toHaveBeenCalledTimes(1);
+  });
+
   it('sólo se consulta lo que pidió el mismo sistema', async () => {
     const { service } = campus({ courses: [course()] });
     await service.receive(request(), PESV);
@@ -319,9 +374,35 @@ describe('ExternalEnrollmentsService · espera de un curso', () => {
     expect(mail.sendEnrollmentWaiting).toHaveBeenCalledWith(
       'admin@pesv.test',
       'Admin',
-      { courseCode: 'MANEJO', people: '1 persona', reason: 'todavía no hay ningún curso con ese código' },
+      {
+        courseCode: 'MANEJO',
+        people: '1 persona',
+        reason: 'todavía no hay ningún curso con ese código',
+        fix: expect.stringContaining('escribe el código en el campo «Código de integración»'),
+      },
       'COLOMBIA',
     );
+  });
+
+  it('el aviso dice qué hacer según lo que falte: publicar el curso o ampliar su cupo', async () => {
+    const draft = campus({ courses: [course({ status: 'DRAFT' })] });
+    await draft.service.receive(request(), PESV);
+    const full = campus({ courses: [course({ maxStudents: 1, occupied: 1 })] });
+    await full.service.receive(request(), PESV);
+
+    const fixOf = (mail: typeof draft.mail) => (mail.sendEnrollmentWaiting.mock.calls[0] as unknown[])[2];
+    expect(fixOf(draft.mail)).toMatchObject({ fix: 'publica el curso que lleva ese código' });
+    expect(fixOf(full.mail)).toMatchObject({ fix: 'amplía el cupo del curso que lleva ese código' });
+  });
+
+  it('un correo que tarda no retiene la respuesta al otro sistema', async () => {
+    const { service, mail } = campus();
+    mail.sendEnrollmentWaiting.mockImplementation(() => new Promise<undefined>(() => undefined));
+
+    const { view } = await service.receive(request(), PESV);
+
+    expect(view.status).toBe('WAITING');
+    expect(mail.sendEnrollmentWaiting).toHaveBeenCalledTimes(1);
   });
 
   it('cien solicitudes del mismo curso en un día dan un solo aviso, y se recuerda al día siguiente', async () => {
@@ -381,6 +462,31 @@ describe('ExternalEnrollmentsService · espera de un curso', () => {
       status: 'WAITING',
       waitingReason: 'COURSE_FULL',
     });
+  });
+
+  it('un curso lleno no detiene a quien ya lo está cursando: sigue en él sin ocupar otra plaza', async () => {
+    const { service, courses } = campus({ courses: [course({ maxStudents: 1 })] });
+    await service.receive(request(), PESV);
+
+    const { view } = await service.receive(request({ externalId: 'INF-2' }), PESV);
+
+    expect(view).toMatchObject({ status: 'ENROLLED', waitingReason: null });
+    expect(courses[0].occupied).toBe(1);
+  });
+
+  it('al abrirse un curso lleno entra quien ya lo cursaba, aunque otros esperen plaza delante', async () => {
+    const { service, rows, courses, enroll } = campus({
+      courses: [course({ integrationCode: null, maxStudents: 1 })],
+      users: [ADMIN, ANA],
+    });
+    enroll(ANA.email, 'curso-1');
+    await service.receive(request({ externalId: 'INF-1', email: 'pedro@empresa.com', firstName: 'Pedro' }), PESV);
+    await service.receive(request({ externalId: 'INF-2' }), PESV);
+
+    courses[0].integrationCode = 'MANEJO';
+    await service.attendCourse('curso-1');
+
+    expect(rows.map((row) => row.status)).toEqual(['WAITING', 'ENROLLED']);
   });
 
   it('dos pasadas a la vez no matriculan dos veces a la misma persona', async () => {
@@ -465,5 +571,63 @@ describe('ExternalEnrollmentsService · finalización', () => {
         validUntil: null,
       },
     });
+  });
+});
+
+describe('ExternalEnrollmentsService · curso ya completado', () => {
+  it('si lo completó después de pedirse (la matricularon a mano), la solicitud se cumple sin repetirlo', async () => {
+    const { service, rows, courses, enroll, certify, enrollFromIntegration } = campus({
+      courses: [course({ integrationCode: null })],
+      users: [ADMIN, ANA],
+    });
+    await service.receive(request(), PESV);
+    enroll(ANA.email, 'curso-1');
+    certify(ANA.email, 'curso-1');
+
+    courses[0].integrationCode = 'MANEJO';
+    await service.attendCourse('curso-1');
+
+    expect(rows[0]).toMatchObject({ status: 'COMPLETED', certificateGuid: 'cert-1', userGuid: 'ana' });
+    expect(enrollFromIntegration).not.toHaveBeenCalled();
+  });
+
+  it('un certificado de antes de la infracción no la cumple: vuelve a hacer el curso', async () => {
+    const { service, enroll, certify, enrollFromIntegration } = campus({ courses: [course()], users: [ADMIN, ANA] });
+    enroll(ANA.email, 'curso-1');
+    certify(ANA.email, 'curso-1');
+
+    const { view } = await service.receive(request(), PESV);
+
+    expect(view.status).toBe('ENROLLED');
+    expect(enrollFromIntegration).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('ExternalEnrollmentsService · retirada por el sistema que la pidió', () => {
+  it('una solicitud en espera se retira: deja de esperar y queda rechazada, también al repetirlo', async () => {
+    const { service } = campus();
+    await service.receive(request(), PESV);
+
+    const withdrawn = await service.withdraw('INF-1', PESV);
+    const again = await service.withdraw('INF-1', PESV);
+
+    expect(withdrawn).toMatchObject({ status: 'REJECTED', detail: 'La retiró el sistema que la envió.' });
+    expect(again).toEqual(withdrawn);
+    await expect(service.waitingByCourse('COLOMBIA')).resolves.toEqual([]);
+  });
+
+  it('una ya atendida no se retira: la matrícula sigue su curso', async () => {
+    const { service } = campus({ courses: [course()] });
+    await service.receive(request(), PESV);
+
+    await expect(service.withdraw('INF-1', PESV)).rejects.toBeInstanceOf(ConflictException);
+    await expect(service.status('INF-1', PESV)).resolves.toMatchObject({ status: 'ENROLLED' });
+  });
+
+  it('sólo retira las suyas', async () => {
+    const { service } = campus();
+    await service.receive(request(), PESV);
+
+    await expect(service.withdraw('INF-1', { ...PESV, id: 2 })).rejects.toBeInstanceOf(NotFoundException);
   });
 });

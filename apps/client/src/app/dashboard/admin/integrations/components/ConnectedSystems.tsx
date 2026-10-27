@@ -56,6 +56,7 @@ export function ConnectedSystems({ clients, isBusy, onConnect, onRenewKey, onRev
                     type="button"
                     onClick={() => onRenewKey(client)}
                     disabled={busy}
+                    aria-label={`${client.keyPrefix ? 'Nueva clave para' : 'Volver a conectar'} ${client.name}`}
                     className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-bold hover:bg-muted transition-colors disabled:opacity-50"
                   >
                     <KeyRound className="h-3.5 w-3.5" /> {client.keyPrefix ? 'Nueva clave' : 'Volver a conectar'}
@@ -65,6 +66,7 @@ export function ConnectedSystems({ clients, isBusy, onConnect, onRenewKey, onRev
                       type="button"
                       onClick={() => onRevokeKey(client)}
                       disabled={busy}
+                      aria-label={`Desconectar ${client.name}`}
                       className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-bold text-destructive hover:bg-destructive/10 transition-colors disabled:opacity-50"
                     >
                       <Unplug className="h-3.5 w-3.5" /> Desconectar

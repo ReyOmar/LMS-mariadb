@@ -121,13 +121,13 @@ cookies.
 }
 ```
 
-| Campo        | Reglas                                                                                                                                                                  |
-| ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `externalId` | Identificador de la solicitud en el PESV, como el número de la infracción. Hasta 100 caracteres: letras sin tilde, cifras, `.`, `_`, `:` y `-`. **Único por solicitud** |
-| `courseCode` | Código acordado del curso (ver arriba)                                                                                                                                  |
-| `firstName`  | Nombre, hasta 100 caracteres                                                                                                                                            |
-| `lastName`   | Apellidos, hasta 100 caracteres                                                                                                                                         |
-| `email`      | Correo de la persona: con él entra al campus. Hasta 191 caracteres, sin espacios ni tildes (un dominio internacional va en su forma `xn--`)                             |
+| Campo        | Reglas                                                                                                                                                                                                                              |
+| ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `externalId` | Identificador de la solicitud en el PESV, como el número de la infracción. Hasta 100 caracteres: letras sin tilde, cifras, `.`, `_`, `:` y `-`. **Único por solicitud**, sin distinguir mayúsculas (`inf-1` e `INF-1` son el mismo) |
+| `courseCode` | Código acordado del curso (ver arriba)                                                                                                                                                                                              |
+| `firstName`  | Nombre, hasta 100 caracteres                                                                                                                                                                                                        |
+| `lastName`   | Apellidos, hasta 100 caracteres                                                                                                                                                                                                     |
+| `email`      | Correo de la persona: con él entra al campus. Hasta 191 caracteres, sin espacios ni tildes (un dominio internacional va en su forma `xn--`)                                                                                         |
 
 Los cinco son obligatorios. Un campo que no esté en la lista se rechaza (`400`): así un error
 de nombre (`curso` en lugar de `courseCode`) no pasa inadvertido. La sede no se envía: es la de
@@ -146,6 +146,18 @@ Respuestas:
 
 Devuelve `200` con la [solicitud](#la-solicitud), o `404` si este sistema no envió ninguna con
 ese identificador.
+
+### Retirar una solicitud
+
+`DELETE /enrollment-requests/{externalId}`
+
+Para una solicitud que ya no hace falta, como la de una infracción anulada. Sólo se retira
+mientras espera (`WAITING`): queda `REJECTED` y la persona no llega a matricularse. Responde `200`
+con la [solicitud](#la-solicitud), también si ya no esperaba porque se había retirado o
+rechazado antes. Si ya se atendió (`ENROLLED` o `COMPLETED`), responde `409`: la matrícula sigue
+en pie, y quitarla lo decide un administrador del campus.
+
+Un identificador retirado no se reutiliza: si más adelante hace falta el curso, se pide con otro.
 
 ### La solicitud
 
@@ -175,44 +187,47 @@ Lo que devuelven las dos rutas:
 }
 ```
 
-| Campo           | Qué es                                                                                      |
-| --------------- | ------------------------------------------------------------------------------------------- |
-| `id`            | Identificador de la solicitud en el campus                                                  |
-| `externalId`    | El del PESV                                                                                 |
-| `status`        | En qué punto está (tabla siguiente)                                                         |
-| `waitingReason` | Por qué espera, sólo con `WAITING`; si no, `null`                                           |
-| `detail`        | Lo mismo en una frase en español, para mostrarla a una persona. No es para interpretarla    |
-| `courseCode`    | El código pedido, en mayúsculas                                                             |
-| `person`        | Los datos recibidos, con el correo en minúsculas                                            |
-| `course`        | El curso en el que quedó y su enlace; `null` mientras espera                                |
-| `requestedAt`   | Cuándo llegó la solicitud                                                                   |
-| `enrolledAt`    | Desde cuándo cuenta la matrícula; `null` mientras espera                                    |
-| `certificate`   | Con `COMPLETED`: código, enlace de verificación, emisión y vencimiento (`null` si no vence) |
+| Campo           | Qué es                                                                                                         |
+| --------------- | -------------------------------------------------------------------------------------------------------------- |
+| `id`            | Identificador de la solicitud en el campus                                                                     |
+| `externalId`    | El del PESV                                                                                                    |
+| `status`        | En qué punto está (tabla siguiente)                                                                            |
+| `waitingReason` | Por qué espera, sólo con `WAITING`; si no, `null`                                                              |
+| `detail`        | Lo mismo en una frase en español, para mostrarla a una persona. No es para interpretarla                       |
+| `courseCode`    | El código pedido, en mayúsculas                                                                                |
+| `person`        | Los datos recibidos, con el correo en minúsculas                                                               |
+| `course`        | El curso en el que quedó y su enlace; `null` mientras espera                                                   |
+| `requestedAt`   | Cuándo llegó la solicitud                                                                                      |
+| `enrolledAt`    | Desde cuándo cuenta la matrícula; `null` mientras espera, o si ya había completado el curso antes de atenderse |
+| `certificate`   | Con `COMPLETED`: código, enlace de verificación, emisión y vencimiento (`null` si no vence)                    |
 
 Las fechas van en ISO 8601, en UTC.
 
 ### Estados
 
-| `status`    | Significado                                                                                                                     | ¿Cambia?                               |
-| ----------- | ------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------- |
-| `WAITING`   | Espera a que el curso esté disponible. `waitingReason` dice qué falta                                                           | Sí, en cuanto el curso esté disponible |
-| `ENROLLED`  | Matriculada; la persona puede hacer el curso                                                                                    | Sí, al aprobar o si se da de baja      |
-| `COMPLETED` | Aprobó el curso y tiene certificado                                                                                             | No                                     |
-| `CANCELLED` | Ya no está matriculada: un administrador le dio de baja, o se eliminó el curso o la cuenta. `detail` dice cuál                  | Sólo si un administrador la reactiva   |
-| `REJECTED`  | No se atenderá: el correo es de un examinador o de otra sede, o un administrador la descartó porque el curso no se va a ofrecer | No                                     |
+| `status`    | Significado                                                                                                                                                  | ¿Cambia?                               |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------- |
+| `WAITING`   | Espera a que el curso esté disponible. `waitingReason` dice qué falta                                                                                        | Sí, en cuanto el curso esté disponible |
+| `ENROLLED`  | Matriculada; la persona puede hacer el curso                                                                                                                 | Sí, al aprobar o si se da de baja      |
+| `COMPLETED` | Aprobó el curso y tiene certificado                                                                                                                          | No                                     |
+| `CANCELLED` | Ya no está matriculada: un administrador le dio de baja, o se eliminó el curso o la cuenta. `detail` dice cuál                                               | Sólo si un administrador la reactiva   |
+| `REJECTED`  | No se atenderá: el correo es de un examinador o de otra sede, un administrador la descartó porque el curso no se va a ofrecer, o el propio sistema la retiró | No                                     |
 
-| `waitingReason`        | Qué falta                                   |
-| ---------------------- | ------------------------------------------- |
-| `COURSE_NOT_FOUND`     | Ningún curso de la sede lleva ese código    |
-| `COURSE_NOT_PUBLISHED` | El curso existe, pero está en borrador      |
-| `COURSE_FULL`          | El curso no tiene plazas libres             |
-| `null`                 | Ya está disponible: entra antes de una hora |
+| `waitingReason`        | Qué falta                                         |
+| ---------------------- | ------------------------------------------------- |
+| `COURSE_NOT_FOUND`     | Ningún curso de la sede lleva ese código          |
+| `COURSE_NOT_PUBLISHED` | El curso existe, pero no está publicado           |
+| `COURSE_FULL`          | El curso no tiene plazas libres                   |
+| `null`                 | Ya se puede atender: se atiende antes de una hora |
 
 Detalles que conviene saber:
 
 - **Cada infracción es un curso completo.** Si la persona ya lo había aprobado antes, empieza de
   cero y obtiene un certificado nuevo. Si lo está haciendo cuando llega otra infracción del
-  mismo curso, sigue donde iba, y al aprobar se completan las dos solicitudes.
+  mismo curso, sigue donde iba (aunque el curso esté lleno: no ocupa otra plaza), y al aprobar
+  se completan las dos solicitudes.
+- **Cuenta terminarlo después de la solicitud.** Si mientras esperaba la matricularon a mano y
+  lo aprobó, la solicitud queda `COMPLETED` con ese certificado, sin repetirlo.
 - **Una solicitud `COMPLETED` no vuelve atrás**, aunque el certificado venza después. Si el PESV
   necesita que la persona lo repita, envía una solicitud nueva.
 - El campus vuelve a intentar las que esperan al publicar un curso, al ponerle el código o
@@ -235,20 +250,21 @@ Todos los errores tienen la misma forma:
 `message` está en español y es para personas: el programa decide por `statusCode`. Al reportar
 un problema al equipo del campus, incluye el `requestId`.
 
-| Código | Cuándo                                                                                                                                                                                | Qué hacer                                                   |
-| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
-| `400`  | Datos no válidos: falta un campo, sobra uno o un formato no se cumple. `message` enumera todos los problemas                                                                          | Corregir los datos. No reintentar                           |
-| `401`  | Falta la clave, no es válida o fue revocada                                                                                                                                           | Revisar la configuración y avisar. No reintentar            |
-| `404`  | (Consulta) Este sistema no envió ninguna solicitud con ese `externalId`                                                                                                               | Revisar el identificador                                    |
-| `409`  | El `externalId` ya se usó con otra persona u otro curso, o el correo es de una cuenta que no puede matricularse en la sede (un examinador, un administrador, alguien de la otra sede) | Revisar los datos. No reintentar                            |
-| `429`  | Demasiadas peticiones seguidas                                                                                                                                                        | Esperar los segundos de la cabecera `Retry-After` y repetir |
-| `5xx`  | Fallo del campus (`503` si la base de datos no está disponible) o del servidor                                                                                                        | Reintentar más tarde (ver abajo)                            |
+| Código | Cuándo                                                                                                                                                                                                                              | Qué hacer                                                   |
+| ------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| `400`  | Datos no válidos: falta un campo, sobra uno o un formato no se cumple. `message` enumera todos los problemas                                                                                                                        | Corregir los datos. No reintentar                           |
+| `401`  | Falta la clave, no es válida o fue revocada                                                                                                                                                                                         | Revisar la configuración y avisar. No reintentar            |
+| `404`  | (Consulta o retirada) Este sistema no envió ninguna solicitud con ese `externalId`                                                                                                                                                  | Revisar el identificador                                    |
+| `409`  | El `externalId` ya se usó con otra persona u otro curso; el correo es de una cuenta que no puede matricularse en la sede (un examinador, un administrador, alguien de la otra sede), o se intenta retirar una solicitud ya atendida | Revisar los datos. No reintentar                            |
+| `429`  | Demasiadas peticiones seguidas                                                                                                                                                                                                      | Esperar los segundos de la cabecera `Retry-After` y repetir |
+| `5xx`  | Fallo del campus (`503` si la base de datos no está disponible) o del servidor                                                                                                                                                      | Reintentar más tarde (ver abajo)                            |
 
 ### Límites
 
-Las peticiones desde una misma IP comparten un tope de **120 por minuto**, y las de un mismo
-correo, de **5 por minuto**. Es holgado para este uso; si un envío masivo lo alcanzara, la
-respuesta `429` dice en `Retry-After` cuántos segundos esperar.
+Desde una misma IP se admiten **120 peticiones por minuto en cada ruta** (pedir, consultar y
+retirar se cuentan por separado) y, al pedir, **5 por minuto para un mismo correo**. Es holgado
+para este uso; si un envío masivo lo alcanzara, la respuesta `429` dice en `Retry-After` cuántos
+segundos esperar.
 
 ## Lo que tiene que construir el PESV
 
@@ -295,7 +311,13 @@ ninguna dirección en Internet ni verificar firmas, y si estuvo caído, al volve
 real. Si más adelante hiciera falta inmediatez, se añadiría en una versión nueva sin cambiar
 esta.
 
-### 4. Verificar el certificado (opcional)
+### 4. Si se anula la infracción
+
+Si se anula antes de que la persona quede matriculada, el PESV retira la solicitud con `DELETE`.
+Si responde `409`, ya está matriculada o terminó el curso: la matrícula sigue en pie, y quitarla
+lo decide un administrador del campus.
+
+### 5. Verificar el certificado (opcional)
 
 `verificationUrl` es la página pública del campus que confirma que el certificado es auténtico,
 para enlazarla desde el PESV. Para comprobarlo sin pasar por la página:
@@ -313,6 +335,10 @@ curl -sS https://api-lms.investigaciongipia.com/api/integration/v1/enrollment-re
 
 # Consultar en qué punto está
 curl -sS https://api-lms.investigaciongipia.com/api/integration/v1/enrollment-requests/INF-2026-000123 \
+  -H "X-Api-Key: $LMS_API_KEY"
+
+# Retirarla si se anula la infracción
+curl -sS -X DELETE https://api-lms.investigaciongipia.com/api/integration/v1/enrollment-requests/INF-2026-000123 \
   -H "X-Api-Key: $LMS_API_KEY"
 ```
 
@@ -337,6 +363,10 @@ cada hora, para cada pendiente en WAITING o ENROLLED:
     si COMPLETED:            guardar respuesta.certificate; desbloquear conductor
     si CANCELLED o REJECTED: avisar a una persona con respuesta.detail
     si 404:                  estado = POR_ENVIAR
+
+al anular(infracción):
+    si su pendiente sigue POR_ENVIAR: descartarla sin enviarla
+    si no: DELETE /enrollment-requests/{externalId}; si 409, avisar a una persona
 ```
 
 ## Lo que hace el campus
@@ -357,8 +387,8 @@ como todos.
 
 ### Seguridad
 
-- La clave sólo sirve para crear solicitudes y consultar las propias: no da acceso a ningún otro
-  dato del campus ni a solicitudes de otros sistemas o de la otra sede.
+- La clave sólo sirve para pedir, consultar y retirar las solicitudes propias: no da acceso a
+  ningún otro dato del campus ni a solicitudes de otros sistemas o de la otra sede.
 - El campus guarda sólo su huella (SHA-256), no la clave: ni una copia de la base permite
   usarla. Por eso no se puede volver a mostrar; si se pierde, se emite otra.
 - La cuenta que se crea es siempre de alumno, y sólo en la sede de la clave. Un correo que ya
