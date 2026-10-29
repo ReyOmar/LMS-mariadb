@@ -60,6 +60,15 @@ export function PageLoader({ message = 'Cargando…' }: PageLoaderProps) {
   );
 }
 
+/** La espera cuando todavía no hay marco en el que pintarla: ocupa la ventana entera. */
+export function FullScreenLoader({ message }: PageLoaderProps) {
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-muted/20">
+      <PageLoader message={message} />
+    </div>
+  );
+}
+
 /**
  * El indicador en sí: logotipo, barra y mensaje. Lo comparten la pantalla de carga y la
  * capa de cierre para que el relevo entre ambas no se note.

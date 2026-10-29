@@ -63,7 +63,7 @@ export interface ProgressUpdated extends BaseEvent {
 
 /**
  * Un curso publicado puede admitir ahora a quien lo esperaba desde otro sistema: se acaba de
- * publicar, le pusieron código de integración o cambió su cupo.
+ * publicar o cambió su cupo o su título, con el que se busca curso a las infracciones.
  */
 export interface CourseOpened extends BaseEvent {
   courseGuid: string;

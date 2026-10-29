@@ -4,6 +4,7 @@ import { IsStorageKey } from '../../storage/storage-key.validator';
 import { IsUploadLimitMb } from '../../storage/upload-limit.validator';
 import { MAX_FILE_NAME_LENGTH, shortenFileName } from '../../storage/file-name';
 import { MAX_TITLE_LENGTH } from './courses.dto';
+import { Omittable } from '../../common/validation/omittable';
 
 /** Los que la aplicación crea y sabe mostrar; VIDEO y PDF sólo existen en la base (ver schema.prisma). */
 export const RESOURCE_TYPES = ['TEXT', 'LINK', 'ASSIGNMENT'] as const;
@@ -17,7 +18,7 @@ class ResourceContentDto {
   @IsOptional()
   @IsString()
   @MaxLength(MAX_HTML, { message: 'El contenido no puede superar los 100 000 caracteres.' })
-  contentHtml?: string;
+  contentHtml?: string | null;
 
   @IsOptional()
   @IsUrl({ require_protocol: true }, { message: 'El enlace de referencia debe ser una URL completa (https://…).' })
@@ -56,7 +57,7 @@ export class CreateResourceDto extends ResourceContentDto {
   type: ResourceType;
 
   /** Sin título, el recurso se llama «Nuevo bloque». */
-  @IsOptional()
+  @Omittable()
   @IsString()
   @MaxLength(MAX_TITLE_LENGTH)
   @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
@@ -64,7 +65,7 @@ export class CreateResourceDto extends ResourceContentDto {
 }
 
 export class UpdateResourceDto extends ResourceContentDto {
-  @IsOptional()
+  @Omittable()
   @IsString()
   @IsNotEmpty({ message: 'El título no puede quedar vacío.' })
   @MaxLength(MAX_TITLE_LENGTH)

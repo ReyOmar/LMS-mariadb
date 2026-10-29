@@ -125,15 +125,14 @@ plantillas de correo. La configuración de cada sede la crea la API al arrancar.
 
 ## Cómo funciona el tiempo real
 
-Sobre **Server-Sent Events**, no WebSocket. El motivo está explicado en
-[docs/DESPLIEGUE-CPANEL.md](docs/DESPLIEGUE-CPANEL.md#tiempo-real-sin-websockets):
-en cPanel, Apache no propaga la cabecera `Upgrade` y la conexión WebSocket nunca llega a
-establecerse.
+Cada pestaña pregunta cada pocos segundos qué ha pasado (`GET /api/realtime/events?after=…`) y la
+API le contesta con los avisos recientes que le tocan. No hay conexiones abiertas: en cPanel,
+Apache no deja pasar los WebSockets y, con CloudLinux, un flujo abierto por pestaña agotaría los
+procesos de la cuenta. El motivo está explicado en
+[docs/DESPLIEGUE-CPANEL.md](docs/DESPLIEGUE-CPANEL.md#tiempo-real-sin-conexiones-abiertas).
 
-El flujo es de servidor a cliente (`GET /api/realtime/stream`). Ningún evento cruza entre
-sedes: todo envío exige un destino con país.
-
-Las conexiones viven en la memoria del proceso, así que la API debe correr en **un solo
+Ningún evento cruza entre sedes: todo envío exige un destino con país. Los avisos recientes y
+quién está en línea viven en la memoria del proceso, así que la API debe correr en **un solo
 proceso**: ver [docs/DESPLIEGUE-CPANEL.md](docs/DESPLIEGUE-CPANEL.md#la-api-corre-en-un-solo-proceso).
 
 ---

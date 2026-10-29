@@ -13,9 +13,10 @@ import {
 import { IsStorageKey } from '../../storage/storage-key.validator';
 import { IsUploadLimitMb } from '../../storage/upload-limit.validator';
 import { EmptyToNull } from '../../common/validation/transforms';
+import { Omittable } from '../../common/validation/omittable';
 
 /** Tope de cada texto legal: cabe una política extensa, no un pegado accidental de megas. */
-export const MAX_LEGAL_DOCUMENT_LENGTH = 100_000;
+const MAX_LEGAL_DOCUMENT_LENGTH = 100_000;
 
 /**
  * Configuración editable de una sede.
@@ -29,32 +30,32 @@ export const MAX_LEGAL_DOCUMENT_LENGTH = 100_000;
  */
 export class UpdateSettingsDto {
   // ── Identidad visual ──
-  @IsOptional() @IsString() @MaxLength(120) platformName?: string;
+  @Omittable() @IsString() @MaxLength(120) platformName?: string;
 
   // Claves de almacenamiento tal como las devuelve la subida, o `null` para quitarlas.
   @IsOptional() @IsString() @IsStorageKey(['logos']) @MaxLength(191) logoUrl?: string | null;
   @IsOptional() @IsString() @IsStorageKey(['logos']) @MaxLength(191) faviconUrl?: string | null;
   @IsOptional() @IsString() @IsStorageKey(['fondos']) @MaxLength(191) loginBackgroundUrl?: string | null;
 
-  @IsOptional()
+  @Omittable()
   @IsHexColor({ message: 'El color primario debe ser hexadecimal (#RRGGBB).' })
   primaryColor?: string;
 
-  @IsOptional()
+  @Omittable()
   @IsHexColor({ message: 'El color secundario debe ser hexadecimal (#RRGGBB).' })
   secondaryColor?: string;
 
-  @IsOptional() @IsString() @MaxLength(60) font?: string;
+  @Omittable() @IsString() @MaxLength(60) font?: string;
 
-  @IsOptional()
+  @Omittable()
   @IsInt()
   @Min(0, { message: 'El redondeo de bordes no puede ser negativo.' })
   @Max(40, { message: 'El redondeo de bordes no puede superar 40 px.' })
   borderRadius?: number;
 
   // ── Operativa ──
-  @IsOptional() @IsString() @MaxLength(500) welcomeMessage?: string;
-  @IsOptional() @IsTimeZone({ message: 'La zona horaria no es válida.' }) timeZone?: string;
+  @Omittable() @IsString() @MaxLength(500) welcomeMessage?: string;
+  @Omittable() @IsTimeZone({ message: 'La zona horaria no es válida.' }) timeZone?: string;
 
   /**
    * Límite general de subida de la sede: el de las tareas sin límite propio y el del
@@ -65,17 +66,17 @@ export class UpdateSettingsDto {
   maxFileMb?: number;
 
   // ── Portada ──
-  @IsOptional() @IsString() @MaxLength(120) landingHeroTitle1?: string;
-  @IsOptional() @IsString() @MaxLength(120) landingHeroTitle2?: string;
-  @IsOptional() @IsString() @MaxLength(1000) landingHeroSubtitle?: string;
+  @Omittable() @IsString() @MaxLength(120) landingHeroTitle1?: string;
+  @Omittable() @IsString() @MaxLength(120) landingHeroTitle2?: string;
+  @Omittable() @IsString() @MaxLength(1000) landingHeroSubtitle?: string;
 
-  @IsOptional() @IsString() @MaxLength(60) landingPhone?: string;
-  @IsOptional() @IsString() @MaxLength(120) landingPhoneSub?: string;
-  @IsOptional() @IsString() @MaxLength(191) landingEmail?: string;
-  @IsOptional() @IsString() @MaxLength(120) landingEmailSub?: string;
-  @IsOptional() @IsString() @MaxLength(191) landingOffice?: string;
-  @IsOptional() @IsString() @MaxLength(191) landingOfficeSub?: string;
-  @IsOptional() @IsString() @MaxLength(1000) landingFooterText?: string;
+  @Omittable() @IsString() @MaxLength(60) landingPhone?: string;
+  @Omittable() @IsString() @MaxLength(120) landingPhoneSub?: string;
+  @Omittable() @IsString() @MaxLength(191) landingEmail?: string;
+  @Omittable() @IsString() @MaxLength(120) landingEmailSub?: string;
+  @Omittable() @IsString() @MaxLength(191) landingOffice?: string;
+  @Omittable() @IsString() @MaxLength(191) landingOfficeSub?: string;
+  @Omittable() @IsString() @MaxLength(1000) landingFooterText?: string;
 
   // ── Legal: responsable del tratamiento y textos ──
   @EmptyToNull() @IsOptional() @IsString() @MaxLength(191) legalEntityName?: string | null;

@@ -386,54 +386,27 @@ describe('CoursesService · ficha de un curso publicado', () => {
   });
 });
 
-/**
- * El código de integración es lo que otros sistemas usan para matricular en el curso: lo decide la
- * sede, no se repite y, en un curso publicado, avisa a quien lo esperaba.
- */
-describe('CoursesService · código de integración', () => {
-  const TEACHER = sessionFor('TEACHER', 'COLOMBIA', 'profe');
-
-  function courseWith(holder: { title: string } | null, course = PUBLISHED) {
+/** Ampliar el cupo de un curso publicado puede dejar pasar a quien lo esperaba desde otro sistema. */
+describe('CoursesService · cupo y matrículas en espera', () => {
+  function courseWith(course = PUBLISHED) {
     const update = jest.fn(async (args: { data: Record<string, unknown> }) => ({ ...course, ...args.data }));
-    const findFirst = jest.fn(async () => holder);
     const { service, events } = serviceWith(
       {
         $queryRaw: async () => [{ maxStudents: null }],
         enrollment: { findMany: async () => [], count: async () => 0 },
-        course: { update, findFirst },
+        course: { update },
       },
       course,
     );
-    return { service, update, findFirst, events };
+    return { service, update, events };
   }
 
-  it('sólo lo cambia un administrador', async () => {
-    const { service, update } = courseWith(null);
+  it('al ampliar el cupo de un curso publicado, avisa a quien esperaba', async () => {
+    const { service, update, events } = courseWith();
 
-    await expect(service.updateCourse('curso-1', { integrationCode: 'MANEJO' }, TEACHER)).rejects.toBeInstanceOf(
-      ForbiddenException,
-    );
-    expect(update).not.toHaveBeenCalled();
-  });
+    await service.updateCourse('curso-1', { maxStudents: 30 }, ADMIN);
 
-  it('no se repite dentro de la sede', async () => {
-    const { service, update, findFirst } = courseWith({ title: 'Manejo defensivo' });
-
-    await expect(service.updateCourse('curso-1', { integrationCode: 'MANEJO' }, ADMIN)).rejects.toThrow(
-      'El código MANEJO ya lo lleva el curso «Manejo defensivo».',
-    );
-    expect(findFirst).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { country: 'COLOMBIA', integrationCode: 'MANEJO', guid: { not: 'curso-1' } } }),
-    );
-    expect(update).not.toHaveBeenCalled();
-  });
-
-  it('se cambia con el curso publicado y avisa a quien esperaba ese código', async () => {
-    const { service, update, events } = courseWith(null);
-
-    await service.updateCourse('curso-1', { integrationCode: 'MANEJO' }, ADMIN);
-
-    expect(update).toHaveBeenCalledWith(expect.objectContaining({ data: { integrationCode: 'MANEJO' } }));
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({ data: { maxStudents: 30 } }));
     expect(events.emit).toHaveBeenCalledWith('course.opened', {
       courseGuid: 'curso-1',
       userGuid: ADMIN.sub,
@@ -441,13 +414,9 @@ describe('CoursesService · código de integración', () => {
     });
   });
 
-  it('quitarlo o tocar un borrador no avisa a nadie', async () => {
-    const published = courseWith(null);
-    await published.service.updateCourse('curso-1', { integrationCode: null }, ADMIN);
-    expect(published.events.emit).not.toHaveBeenCalled();
-
-    const draft = courseWith(null, DRAFT);
-    await draft.service.updateCourse('curso-1', { integrationCode: 'MANEJO' }, ADMIN);
+  it('en un borrador no avisa a nadie: todavía no se puede matricular en él', async () => {
+    const draft = courseWith(DRAFT);
+    await draft.service.updateCourse('curso-1', { maxStudents: 30 }, ADMIN);
     expect(draft.events.emit).not.toHaveBeenCalled();
   });
 });

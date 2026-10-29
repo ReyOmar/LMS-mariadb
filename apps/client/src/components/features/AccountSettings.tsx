@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { AlertCircle, Camera, CheckCircle, Eye, EyeOff, Loader2, Lock, Save, Trash2, User, X } from 'lucide-react';
+import { AlertCircle, Camera, CheckCircle, Loader2, Lock, Save, Trash2, User, X } from 'lucide-react';
 import api, { errorMessage, uploadFile } from '@/lib/api';
 import { useSession, type SessionUser } from '@/contexts/SessionContext';
 import { useAlerts } from '@/contexts/AlertContext';
@@ -9,6 +9,7 @@ import { COUNTRY_INFO } from '@/lib/country';
 import { PASSWORD_HINT, passwordProblem } from '@/lib/password';
 import { uploadLimit } from '@/lib/upload-limits';
 import { CountryFlag } from '@/components/ui/CountryFlag';
+import { Field, INPUT_CLASS, PasswordInput } from '@/components/ui/FormFields';
 import { PhotoOrInitials } from '@/components/ui/UserAvatar';
 import { useDialog } from '@/hooks/useDialog';
 
@@ -45,8 +46,6 @@ function AccountSettingsDialog({ user, onClose }: { user: SessionUser; onClose: 
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmation, setConfirmation] = useState('');
-  const [showCurrent, setShowCurrent] = useState(false);
-  const [showNew, setShowNew] = useState(false);
 
   const [saving, setSaving] = useState(false);
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
@@ -243,8 +242,24 @@ function AccountSettingsDialog({ user, onClose }: { user: SessionUser; onClose: 
             </h3>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <TextInput id="settings-first-name" label="Nombre" value={firstName} onChange={setFirstName} />
-              <TextInput id="settings-last-name" label="Apellido" value={lastName} onChange={setLastName} />
+              <Field label="Nombre" htmlFor="settings-first-name">
+                <input
+                  id="settings-first-name"
+                  value={firstName}
+                  onChange={(event) => setFirstName(event.target.value)}
+                  autoComplete="given-name"
+                  className={INPUT_CLASS}
+                />
+              </Field>
+              <Field label="Apellido" htmlFor="settings-last-name">
+                <input
+                  id="settings-last-name"
+                  value={lastName}
+                  onChange={(event) => setLastName(event.target.value)}
+                  autoComplete="family-name"
+                  className={INPUT_CLASS}
+                />
+              </Field>
             </div>
 
             <p className="text-xs text-muted-foreground">
@@ -259,34 +274,30 @@ function AccountSettingsDialog({ user, onClose }: { user: SessionUser; onClose: 
               <Lock className="h-4 w-4 text-muted-foreground" /> Cambiar contraseña
             </h3>
 
-            <PasswordInput
-              id="settings-current-password"
-              label="Contraseña actual"
-              value={currentPassword}
-              onChange={setCurrentPassword}
-              visible={showCurrent}
-              onToggle={() => setShowCurrent((value) => !value)}
-              autoComplete="current-password"
-            />
-            <PasswordInput
-              id="settings-new-password"
-              label="Nueva contraseña"
-              value={newPassword}
-              onChange={setNewPassword}
-              visible={showNew}
-              onToggle={() => setShowNew((value) => !value)}
-              autoComplete="new-password"
-              hint={PASSWORD_HINT}
-            />
-            <PasswordInput
-              id="settings-confirm-password"
-              label="Repite la nueva contraseña"
-              value={confirmation}
-              onChange={setConfirmation}
-              visible={showNew}
-              onToggle={() => setShowNew((value) => !value)}
-              autoComplete="new-password"
-            />
+            <Field label="Contraseña actual" htmlFor="settings-current-password">
+              <PasswordInput
+                id="settings-current-password"
+                value={currentPassword}
+                onChange={(event) => setCurrentPassword(event.target.value)}
+                autoComplete="current-password"
+              />
+            </Field>
+            <Field label="Nueva contraseña" htmlFor="settings-new-password" hint={PASSWORD_HINT}>
+              <PasswordInput
+                id="settings-new-password"
+                value={newPassword}
+                onChange={(event) => setNewPassword(event.target.value)}
+                autoComplete="new-password"
+              />
+            </Field>
+            <Field label="Repite la nueva contraseña" htmlFor="settings-confirm-password">
+              <PasswordInput
+                id="settings-confirm-password"
+                value={confirmation}
+                onChange={(event) => setConfirmation(event.target.value)}
+                autoComplete="new-password"
+              />
+            </Field>
 
             {changesPassword && (
               <p className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-xs text-amber-700 dark:text-amber-400">
@@ -315,80 +326,6 @@ function AccountSettingsDialog({ user, onClose }: { user: SessionUser; onClose: 
           </button>
         </div>
       </div>
-    </div>
-  );
-}
-
-function TextInput({
-  id,
-  label,
-  value,
-  onChange,
-}: {
-  id: string;
-  label: string;
-  value: string;
-  onChange: (value: string) => void;
-}) {
-  return (
-    <div className="space-y-1.5">
-      <label htmlFor={id} className="text-xs font-bold text-muted-foreground">
-        {label}
-      </label>
-      <input
-        id={id}
-        type="text"
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        className="h-11 w-full rounded-xl border border-input bg-background px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-      />
-    </div>
-  );
-}
-
-function PasswordInput({
-  id,
-  label,
-  value,
-  onChange,
-  visible,
-  onToggle,
-  autoComplete,
-  hint,
-}: {
-  id: string;
-  label: string;
-  value: string;
-  onChange: (value: string) => void;
-  visible: boolean;
-  onToggle: () => void;
-  autoComplete: string;
-  hint?: string;
-}) {
-  return (
-    <div className="space-y-1.5">
-      <label htmlFor={id} className="text-xs font-bold text-muted-foreground">
-        {label}
-      </label>
-      <div className="relative">
-        <input
-          id={id}
-          type={visible ? 'text' : 'password'}
-          value={value}
-          onChange={(event) => onChange(event.target.value)}
-          autoComplete={autoComplete}
-          className="h-11 w-full rounded-xl border border-input bg-background px-3 pr-11 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-        />
-        <button
-          type="button"
-          onClick={onToggle}
-          aria-label={visible ? 'Ocultar contraseña' : 'Mostrar contraseña'}
-          className="absolute right-3 top-3 text-muted-foreground hover:text-foreground transition-colors"
-        >
-          {visible ? <EyeOff className="h-4.5 w-4.5" /> : <Eye className="h-4.5 w-4.5" />}
-        </button>
-      </div>
-      {hint && <p className="text-xs text-muted-foreground">{hint}</p>}
     </div>
   );
 }

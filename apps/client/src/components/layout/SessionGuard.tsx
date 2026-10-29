@@ -6,8 +6,9 @@ import { Role, useSession } from '@/contexts/SessionContext';
 import { useCountry } from '@/contexts/CountryContext';
 import { isCountry } from '@/lib/country';
 import { loginUrl } from '@/lib/api';
-import { PageLoader } from '@/components/ui/PageLoader';
+import { FullScreenLoader, PageLoader } from '@/components/ui/PageLoader';
 import { DashboardShell } from '@/components/layout/DashboardShell';
+import { Sidebar } from '@/components/layout/Sidebar';
 
 /**
  * Qué rol puede entrar en cada zona del panel.
@@ -27,8 +28,8 @@ const PERMISSIONS: Record<string, Role[]> = {
  * servidor va a rechazar de todas formas. La autorización real la aplica la API en cada
  * petición, así que saltarse esto no da acceso a ningún dato.
  *
- * Mientras se restaura la sesión guardada no se pinta el contenido: hacerlo mostraría por
- * un instante el panel a quien no ha entrado.
+ * Con una sesión guardada, el menú aparece en el acto y sólo el contenido espera a que el
+ * servidor la confirme. Sin sesión no se pinta nada del panel: se lleva al acceso.
  */
 export function SessionGuard({ children }: { children: ReactNode }) {
   const { authenticated, ready, role, user } = useSession();
@@ -58,17 +59,13 @@ export function SessionGuard({ children }: { children: ReactNode }) {
     }
   }, [ready, authenticated, allowed, router]);
 
-  // La espera se pinta ya dentro del marco del panel, donde las pantallas ponen la suya.
-  const checking = !ready || !authenticated;
-  if (checking || !allowed) {
-    return (
-      <DashboardShell>
-        <PageLoader message={checking ? 'Comprobando tu sesión…' : 'Redirigiendo…'} />
-      </DashboardShell>
-    );
-  }
+  if (!authenticated) return <FullScreenLoader message="Comprobando tu sesión…" />;
 
-  return <>{children}</>;
+  return (
+    <DashboardShell sidebar={<Sidebar />}>
+      {ready && allowed ? children : <PageLoader message={ready ? 'Redirigiendo…' : 'Comprobando tu sesión…'} />}
+    </DashboardShell>
+  );
 }
 
 /** Aplica el permiso del prefijo más específico que coincida con la ruta. */

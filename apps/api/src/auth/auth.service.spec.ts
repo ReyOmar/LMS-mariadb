@@ -37,7 +37,7 @@ describe('AuthService · restablecer contraseña', () => {
     const realtime = { revokeSession: jest.fn() };
     const service = new AuthService(prisma as never, {} as never, {} as never, realtime as never, {} as never);
 
-    await service.resetPassword('enlace-valido', 'NuevaClave1');
+    await service.resetPassword('enlace-valido', 'NuevaClave1!');
 
     // En la misma escritura que la contraseña nueva: si una fallara, no quedaría la clave
     // cambiada con la sesión anterior aún abierta.

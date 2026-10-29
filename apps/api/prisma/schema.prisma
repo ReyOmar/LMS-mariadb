@@ -198,9 +198,6 @@ model Course {
   firstPublishedAt DateTime?       @map("fecha_primera_publicacion")
   durationHours    Int?            @map("duracion_horas")
   maxStudents      Int?            @map("max_estudiantes")
-  /// Con el que un sistema externo pide matricular en este curso (ver `ExternalEnrollment`).
-  /// Lo pone el administrador; único en su sede, en mayúsculas (ver `common/domain/course-code.ts`).
-  integrationCode  String?         @map("codigo_integracion") @db.VarChar(50)
 
   // Reglas de negocio
   // Nota mínima para aprobar, en escala 0–100 (ver common/domain/grading.ts)
@@ -220,8 +217,8 @@ model Course {
 
   archivedSubmissions ArchivedSubmission[]
   externalEnrollments ExternalEnrollment[]
+  infractions         Infraction[]
 
-  @@unique([country, integrationCode])
   @@index([teacherGuid])
   @@index([country, status])
   // Comprobar si una portada sustituida sigue en uso (`FileOwnershipService`).
@@ -772,16 +769,22 @@ model ArchivedSubmission {
 /// De la clave sólo se guarda su resumen SHA-256: se muestra una vez al generarla y no se puede
 /// recuperar, sólo sustituir. Sin clave, el sistema queda desconectado y conserva su historial.
 model IntegrationClient {
-  id          Int       @id @default(autoincrement())
-  country     Country   @map("pais")
-  name        String    @map("nombre") @db.VarChar(100)
-  keyHash     String?   @unique @map("clave_hash") @db.Char(64)
+  id           Int       @id @default(autoincrement())
+  country      Country   @map("pais")
+  name         String    @map("nombre") @db.VarChar(100)
+  keyHash      String?   @unique @map("clave_hash") @db.Char(64)
   /// Comienzo de la clave, para reconocerla en el panel sin poder usarla.
-  keyPrefix   String?   @map("clave_prefijo") @db.VarChar(20)
-  keyIssuedAt DateTime? @map("clave_emitida")
-  lastUsedAt  DateTime? @map("ultimo_uso")
-  createdAt   DateTime  @default(now()) @map("created_at")
-  updatedAt   DateTime  @updatedAt @map("updated_at")
+  keyPrefix    String?   @map("clave_prefijo") @db.VarChar(20)
+  keyIssuedAt  DateTime? @map("clave_emitida")
+  lastUsedAt   DateTime? @map("ultimo_uso")
+  /// Dirección https a la que se le avisa de cada cambio en sus solicitudes (ver `IntegrationWebhooks`).
+  /// Mientras no la tenga, consulta el estado y los avisos esperan a que la tenga.
+  callbackUrl  String?   @map("url_avisos") @db.VarChar(500)
+  /// El último intento de aviso y, si falló, por qué: lo que el panel enseña de los avisos.
+  lastNoticeAt DateTime? @map("ultimo_aviso")
+  noticeError  String?   @map("error_aviso") @db.VarChar(255)
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
 
   requests ExternalEnrollment[]
 
@@ -793,6 +796,17 @@ enum ExternalEnrollmentStatus {
   WAITING   @map("EN_ESPERA")
   ENROLLED  @map("MATRICULADA")
   COMPLETED @map("COMPLETADA")
+  REJECTED  @map("RECHAZADA")
+}
+
+/// En qué punto está una solicitud tal como se le cuenta al sistema que la envió: lo guardado y,
+/// además, CANCELLED, que lo dice la propia matrícula (ver `external-status.ts`). Es el contrato de
+/// la integración (`docs/INTEGRACION.md`): estos valores no se renombran.
+enum ExternalStatus {
+  WAITING   @map("EN_ESPERA")
+  ENROLLED  @map("MATRICULADA")
+  COMPLETED @map("COMPLETADA")
+  CANCELLED @map("CANCELADA")
   REJECTED  @map("RECHAZADA")
 }
 
@@ -809,7 +823,9 @@ model ExternalEnrollment {
   country         Country                  @map("pais")
   /// Identificador de la solicitud en el sistema que la envió: repetirla no crea otra.
   externalId      String                   @map("id_externo") @db.VarChar(100)
-  courseCode      String                   @map("codigo_curso") @db.VarChar(50)
+  /// Por la que se pide el curso: de ella sale cuál.
+  infractionId    Int                      @map("infraccion_id")
+  infraction      Infraction               @relation(fields: [infractionId], references: [id], onDelete: Restrict)
   email           String                   @db.VarChar(191)
   firstName       String                   @map("nombre")
   lastName        String                   @map("apellido")
@@ -817,26 +833,60 @@ model ExternalEnrollment {
   /// Por qué no se pudo atender. Lo lee el sistema que la envió.
   rejectionReason String?                  @map("motivo") @db.VarChar(500)
 
-  userGuid        String?      @map("usuario_guid")
-  user            User?        @relation(fields: [userGuid], references: [guid], onDelete: SetNull)
-  courseGuid      String?      @map("curso_guid")
-  course          Course?      @relation(fields: [courseGuid], references: [guid], onDelete: SetNull)
+  userGuid        String?         @map("usuario_guid")
+  user            User?           @relation(fields: [userGuid], references: [guid], onDelete: SetNull)
+  courseGuid      String?         @map("curso_guid")
+  course          Course?         @relation(fields: [courseGuid], references: [guid], onDelete: SetNull)
   /// Inicio de la vuelta en la que quedó matriculado.
-  roundStartedAt  DateTime?    @map("inicio_vuelta")
+  roundStartedAt  DateTime?       @map("inicio_vuelta")
   /// El que cerró esa vuelta. Sigue acreditándolo aunque después se borre la cuenta o el curso.
-  certificateGuid String?      @map("certificado_guid")
-  certificate     Certificate? @relation(fields: [certificateGuid], references: [guid], onDelete: SetNull)
-  /// Último aviso a los administradores de que el curso falta; agrupa los avisos de un mismo código.
-  adminNotifiedAt DateTime?    @map("aviso_administrador")
-  createdAt       DateTime     @default(now()) @map("created_at")
-  updatedAt       DateTime     @updatedAt @map("updated_at")
+  certificateGuid String?         @map("certificado_guid")
+  certificate     Certificate?    @relation(fields: [certificateGuid], references: [guid], onDelete: SetNull)
+  /// Último aviso a los administradores de que espera; agrupa los avisos de una misma infracción.
+  adminNotifiedAt DateTime?       @map("aviso_administrador")
+  /// Lo último que se le contó de ella al sistema que la envió, al responder a su envío o con un
+  /// aviso. Si su estado ya es otro, tiene un aviso pendiente.
+  notifiedStatus  ExternalStatus? @map("estado_avisado")
+  /// Cuándo se vuelve a intentar un aviso que no se pudo entregar.
+  noticeRetryAt   DateTime?       @map("aviso_reintento")
+  createdAt       DateTime        @default(now()) @map("created_at")
+  updatedAt       DateTime        @updatedAt @map("updated_at")
 
   @@unique([clientId, externalId])
-  // Las que esperan un código: al publicar el curso, al avisar y en el panel.
-  @@index([country, status, courseCode])
+  // Las que esperan por una infracción: al asignarle curso, al avisar y en el panel.
+  @@index([infractionId, status])
+  // Todas las que esperan, por orden de llegada: la pasada de cada hora.
+  @@index([status, createdAt])
   @@index([userGuid])
   @@index([courseGuid])
   @@map("lms_matriculas_externas")
+}
+
+/// Infracción por la que otro sistema, como el del PESV, pide que alguien haga un curso, y el
+/// curso que la atiende en la sede.
+///
+/// El campus las registra al recibirlas, con el código y la descripción que envía el otro sistema,
+/// y les busca el curso por su título (ver `course-match.ts`); si no lo encuentra, lo elige un
+/// administrador. Desde entonces, cada solicitud por esa infracción se matricula en él. Las de cada
+/// sede son independientes.
+model Infraction {
+  id           Int      @id @default(autoincrement())
+  country      Country  @map("pais")
+  /// Normalizado (ver `common/validation/infraction-code.ts`): único en la sede.
+  code         String   @map("codigo") @db.VarChar(50)
+  description  String?  @map("descripcion") @db.VarChar(255)
+  courseGuid   String?  @map("curso_guid")
+  course       Course?  @relation(fields: [courseGuid], references: [guid], onDelete: SetNull)
+  /// Si el curso lo eligió el campus por su título y no un administrador.
+  autoAssigned Boolean  @default(false) @map("curso_por_titulo")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  requests ExternalEnrollment[]
+
+  @@unique([country, code])
+  @@index([courseGuid])
+  @@map("lms_infracciones")
 }
 
 // ── Registro de subidas ────────────────────────────────────────────────────

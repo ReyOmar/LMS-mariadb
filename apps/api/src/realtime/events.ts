@@ -2,7 +2,7 @@ import { Country } from '../common/domain/country';
 import { UserRole } from '../common/interfaces/jwt-payload.interface';
 
 /**
- * Catálogo de eventos que el servidor empuja al navegador.
+ * Catálogo de eventos que el navegador recibe al preguntar qué ha pasado (ver `RealtimeService`).
  *
  * Mantenerlo como unión de literales —y no como `string`— hace que un evento mal escrito
  * sea un error de compilación en lugar de un mensaje que nadie recibe. El mismo catálogo
@@ -11,7 +11,6 @@ import { UserRole } from '../common/interfaces/jwt-payload.interface';
 export const REALTIME_EVENTS = [
   // Sesión
   'session:revoked',
-  'stream:superseded',
   // Usuarios
   'user:created',
   'user:updated',
@@ -47,7 +46,7 @@ export const REALTIME_EVENTS = [
 
 export type EventName = (typeof REALTIME_EVENTS)[number];
 
-/** Trama que viaja en cada `data:` del flujo SSE. */
+/** Un evento tal como lo recibe el navegador. */
 export interface EventMessage {
   event: EventName;
   data: unknown;

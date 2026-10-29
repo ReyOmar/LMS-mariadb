@@ -1,6 +1,7 @@
 import { Type } from 'class-transformer';
-import { IsIn, IsInt, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
+import { IsIn, IsInt, IsString, Max, MaxLength, Min } from 'class-validator';
 import { MAX_PER_PAGE } from '../../common/domain/pagination';
+import { Omittable } from '../../common/validation/omittable';
 
 /** Qué parte de la cola se pide. Sin valor, la cola entera del curso. */
 const QUEUE_STATUSES = ['pending', 'graded'] as const;
@@ -20,18 +21,18 @@ class ExaminerQueue {
   @MaxLength(191)
   course: string;
 
-  @IsOptional()
+  @Omittable()
   @IsString()
   @MaxLength(100)
   search?: string;
 
   /** Marca de la última fila recibida. Se devuelve tal cual llegó en la página anterior. */
-  @IsOptional()
+  @Omittable()
   @IsString()
   @MaxLength(200)
   cursor?: string;
 
-  @IsOptional()
+  @Omittable()
   @Type(() => Number)
   @IsInt()
   @Min(1)
@@ -40,13 +41,13 @@ class ExaminerQueue {
 }
 
 export class SubmissionQueueDto extends ExaminerQueue {
-  @IsOptional()
+  @Omittable()
   @IsIn(QUEUE_STATUSES, { message: 'El filtro de estado no es válido.' })
   status?: QueueStatus;
 }
 
 export class AttemptQueueDto extends ExaminerQueue {
-  @IsOptional()
+  @Omittable()
   @IsIn(ATTEMPT_RESULTS, { message: 'El filtro de resultado no es válido.' })
   result?: AttemptResult;
 }

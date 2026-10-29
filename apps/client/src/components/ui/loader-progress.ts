@@ -59,7 +59,7 @@ export function elapsedFor(progress: number): number {
 }
 
 /** Cada cuánto se recalcula la cifra mientras se espera. */
-export function tickInterval(reducedMotion: boolean): number {
+function tickInterval(reducedMotion: boolean): number {
   // Con movimiento reducido la barra avanza a saltos, sin transición: mejor pocos.
   return reducedMotion ? 500 : 100;
 }

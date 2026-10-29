@@ -28,7 +28,7 @@ export interface TransferState {
 }
 
 /** Quien puede ser responsable de cursos: examinador o administrador. */
-export function managesCourses(role: UserRole): boolean {
+function managesCourses(role: UserRole): boolean {
   return role === 'TEACHER' || role === 'ADMIN';
 }
 

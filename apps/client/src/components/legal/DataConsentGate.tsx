@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { ReactNode, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { ShieldCheck } from 'lucide-react';
@@ -40,10 +40,11 @@ const WORDING: Record<Country, { title: string; request: string; rights: string;
  * Pide aceptar la política de tratamiento de datos a quien entra sin haber aceptado la
  * versión vigente de su sede: cuentas creadas antes de existir la aceptación, cuentas que
  * dio de alta un administrador o una política que ha cambiado. Sin aceptarla no se puede
- * usar el campus; la alternativa es cerrar la sesión. Las páginas públicas quedan a la
- * vista, empezando por la legal: hay que poder leer lo que se acepta.
+ * usar el campus —la API tampoco lo deja—, así que en lugar de la pantalla se ve sólo la
+ * petición; la alternativa es cerrar la sesión. Las páginas públicas quedan a la vista,
+ * empezando por la legal: hay que poder leer lo que se acepta.
  */
-export function DataConsentDialog() {
+export function DataConsentGate({ children }: { children: ReactNode }) {
   const { user, refreshUser, logout } = useSession();
   const pathname = usePathname();
   const [saving, setSaving] = useState(false);
@@ -52,7 +53,7 @@ export function DataConsentDialog() {
   // Obligatoria: sin `onClose`, Escape no la cierra.
   const { dialogProps, titleId } = useDialog({ open });
 
-  if (!open || !user) return null;
+  if (!open || !user) return <>{children}</>;
   const wording = WORDING[user.country];
 
   const accept = async () => {

@@ -3,7 +3,8 @@ import { JwtService } from '@nestjs/jwt';
 import * as crypto from 'crypto';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-import { MAIL_CONCURRENCY, MailService } from '../mail/mail.service';
+import { MailService } from '../mail/mail.service';
+import { MAIL_CONCURRENCY } from '../mail/mail-transport';
 import { RealtimeService } from '../realtime/realtime.service';
 import { SettingsService } from '../settings/settings.service';
 import { Country, countryName } from '../common/domain/country';
@@ -355,7 +356,7 @@ export class AuthService {
    * Rechaza una solicitud conservando el registro, para que quede constancia de quién fue
    * rechazado y por qué, y se lo comunica por correo a quien la envió.
    */
-  async rejectAccessRequest(id: number, country: Country, reason?: string) {
+  async rejectAccessRequest(id: number, country: Country, reason?: string | null) {
     const accessRequest = await this.pendingRequest(id, country);
     const rejectionReason = reason?.trim() || null;
 

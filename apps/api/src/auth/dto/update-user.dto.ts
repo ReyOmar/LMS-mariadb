@@ -1,6 +1,7 @@
-import { IsIn, IsNotEmpty, IsOptional, IsString, MaxLength } from 'class-validator';
-import { Trim } from '../../common/validation/transforms';
+import { IsIn } from 'class-validator';
 import { ROLES, UserRole } from '../../common/interfaces/jwt-payload.interface';
+import { Omittable } from '../../common/validation/omittable';
+import { PersonName } from '../../common/validation/person-name';
 
 /**
  * Lo que un administrador puede cambiar de una cuenta de su sede.
@@ -9,21 +10,15 @@ import { ROLES, UserRole } from '../../common/interfaces/jwt-payload.interface';
  * recuperación de contraseña. La sede tampoco: una cuenta pertenece a una sola.
  */
 export class UpdateUserDto {
-  @IsOptional()
-  @IsString()
-  @IsNotEmpty({ message: 'El nombre no puede quedar vacío.' })
-  @MaxLength(100)
-  @Trim()
+  @Omittable()
+  @PersonName()
   firstName?: string;
 
-  @IsOptional()
-  @IsString()
-  @IsNotEmpty({ message: 'El apellido no puede quedar vacío.' })
-  @MaxLength(100)
-  @Trim()
+  @Omittable()
+  @PersonName()
   lastName?: string;
 
-  @IsOptional()
+  @Omittable()
   @IsIn(ROLES, { message: 'El rol no es válido.' })
   role?: UserRole;
 }

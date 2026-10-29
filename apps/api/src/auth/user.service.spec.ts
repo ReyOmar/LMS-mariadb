@@ -469,7 +469,7 @@ describe('UserService · perfil propio', () => {
       {} as never,
     );
 
-    await service.updateProfile('usuario-1', { currentPassword: 'ClaveVieja1', newPassword: 'ClaveNueva2' });
+    await service.updateProfile('usuario-1', { currentPassword: 'ClaveVieja1', newPassword: 'ClaveNueva2!' });
 
     expect(updates).toHaveLength(1);
     expect(updates[0]).toMatchObject({ usesDefaultPassword: false, currentSessionJti: null });

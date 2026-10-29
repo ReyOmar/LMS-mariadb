@@ -1,6 +1,7 @@
 import { IsBoolean, IsInt, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
 import { StrictBoolean } from '../../common/validation/transforms';
 import { MAX_LEGAL_TEXT_LENGTH } from '../../certificates/certificate-pdf';
+import { Omittable } from '../../common/validation/omittable';
 
 export class UpdateCertificateSettingsDto {
   @IsOptional()
@@ -20,27 +21,27 @@ export class UpdateCertificateSettingsDto {
   })
   certLegalText?: string | null;
 
-  @IsOptional()
+  @Omittable()
   @StrictBoolean()
   @IsBoolean()
   certShowModules?: boolean;
 
-  @IsOptional()
+  @Omittable()
   @StrictBoolean()
   @IsBoolean()
   certShowResources?: boolean;
 
-  @IsOptional()
+  @Omittable()
   @StrictBoolean()
   @IsBoolean()
   certShowScore?: boolean;
 
-  @IsOptional()
+  @Omittable()
   @StrictBoolean()
   @IsBoolean()
   certShowSignature?: boolean;
 
-  @IsOptional()
+  @Omittable()
   @StrictBoolean()
   @IsBoolean()
   certShowEnrollmentDate?: boolean;

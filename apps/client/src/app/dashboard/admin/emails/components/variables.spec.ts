@@ -25,41 +25,4 @@ describe('variableData', () => {
   it('inventa una etiqueta razonable para las que no', () => {
     expect(variableData('algo_nuevo').label).toBe('algo nuevo');
   });
-
-  it('conoce todas las variables que declaran hoy los eventos de la API', () => {
-    const fromApi = [
-      'adminNombre',
-      'calificacion',
-      'codigo',
-      'comentario',
-      'curso',
-      'cursoTitulo',
-      'diasInactivo',
-      'email',
-      'emoji',
-      'estudiante',
-      'examinerNombre',
-      'mensaje_aprobacion',
-      'moduloTitulo',
-      'motivo',
-      'nombre',
-      'nota',
-      'quizTitulo',
-      'resetUrl',
-      'sede',
-      'solicitanteEmail',
-      'solicitanteNombre',
-      'solicitanteRol',
-      'tarea',
-      'tempPassword',
-      'url_calificaciones',
-      'url_campus',
-      'url_certificado',
-      'url_curso',
-      'url_monitoreo',
-      'url_solicitudes',
-    ];
-    const unknown = fromApi.filter((variable) => variableData(variable).example === `[${variable}]`);
-    expect(unknown).toEqual([]);
-  });
 });

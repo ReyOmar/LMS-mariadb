@@ -1,26 +1,27 @@
 import { Type } from 'class-transformer';
-import { IsInt, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
+import { IsInt, IsString, Max, MaxLength, Min } from 'class-validator';
 import { MAX_PER_PAGE } from '../../common/domain/pagination';
+import { Omittable } from '../../common/validation/omittable';
 
 /** Filtro del monitoreo. El alcance —sede y cursos del examinador— sale siempre del token. */
 export class MonitoringFilterDto {
-  @IsOptional()
+  @Omittable()
   @IsString()
   @MaxLength(64)
   course?: string;
 
-  @IsOptional()
+  @Omittable()
   @IsString()
   @MaxLength(100)
   search?: string;
 
   /** Marca del último alumno recibido. Se devuelve tal cual llegó en la página anterior. */
-  @IsOptional()
+  @Omittable()
   @IsString()
   @MaxLength(200)
   cursor?: string;
 
-  @IsOptional()
+  @Omittable()
   @Type(() => Number)
   @IsInt()
   @Min(1)

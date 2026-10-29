@@ -1,6 +1,7 @@
-import { IsBoolean, IsIn, IsInt, IsNotEmpty, IsOptional, IsString, MaxLength, Min } from 'class-validator';
+import { IsBoolean, IsIn, IsInt, IsNotEmpty, IsString, MaxLength, Min } from 'class-validator';
 import { Type } from 'class-transformer';
 import { StrictBoolean, Trim } from '../../common/validation/transforms';
+import { Omittable } from '../../common/validation/omittable';
 
 const REF_TYPES = ['quiz_retry', 'entrega_revision', 'general'] as const;
 
@@ -21,11 +22,11 @@ export class SendMessageDto {
   @Trim()
   content: string;
 
-  @IsOptional()
+  @Omittable()
   @IsIn(REF_TYPES, { message: 'El tipo de referencia no es válido.' })
   refType?: (typeof REF_TYPES)[number];
 
-  @IsOptional()
+  @Omittable()
   @IsString()
   @MaxLength(64)
   refGuid?: string;
@@ -37,14 +38,14 @@ export class RequestContactDto {
   receiverGuid: string;
 
   /** Curso por el que se conocen. Si no viene, el servidor busca uno que compartan. */
-  @IsOptional()
+  @Omittable()
   @IsString()
   @IsNotEmpty({ message: 'Indica el curso que comparten.' })
   courseGuid?: string;
 }
 
 export class ContactSearchDto {
-  @IsOptional()
+  @Omittable()
   @IsString()
   @MaxLength(100)
   q?: string;
@@ -52,7 +53,7 @@ export class ContactSearchDto {
 
 export class NotificationsQueryDto {
   /** Cuántos avisos devolver; el servicio lo acota a su máximo. */
-  @IsOptional()
+  @Omittable()
   @Type(() => Number)
   @IsInt({ message: 'El límite debe ser un número entero.' })
   @Min(1)

@@ -1,5 +1,5 @@
 import { BadRequestException, ForbiddenException, Logger, NotFoundException } from '@nestjs/common';
-import { AssessmentsService } from './assessments.service';
+import { GradingService } from './grading.service';
 import { serializeQuizConfig } from '../courses/quiz-config';
 import { sessionFor } from '../common/testing/test-campus';
 
@@ -72,15 +72,7 @@ function newAttemptService({
   const realtime = { emitToUsers: jest.fn(), emitToCourseStaff: jest.fn() };
   const events = { emit: jest.fn() };
 
-  const service = new AssessmentsService(
-    prisma as never,
-    {} as never,
-    access as never,
-    {} as never,
-    realtime as never,
-    events as never,
-    {} as never,
-  );
+  const service = new GradingService(prisma as never, access as never, realtime as never, events as never);
   return { service, prisma, realtime, events, remaining, steps, transactionOptions };
 }
 

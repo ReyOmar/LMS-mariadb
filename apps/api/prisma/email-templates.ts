@@ -3,7 +3,7 @@
  *
  * La semilla las crea una sola vez en cada sede; a partir de ahí cada sede edita las suyas
  * desde el panel de administración y la semilla no las sobrescribe. Los marcadores `{{variable}}` los
- * sustituye `MailService` al enviar.
+ * sustituye `MailTemplates` al enviar.
  *
  * Las notas se insertan ya formateadas ("85 / 100"), de modo que cambiar la escala del
  * sistema no obliga a reescribir ninguna plantilla.
@@ -131,15 +131,15 @@ export const EMAIL_TEMPLATES: SeedTemplate[] = [
   },
   {
     key: 'MATRICULA_EN_ESPERA',
-    displayName: 'Curso Solicitado no Disponible',
+    displayName: 'Matrícula en Espera por Infracción',
     description:
-      'Avisa a los administradores de que otro sistema pidió un curso que no existe, no está publicado o no tiene plazas. Se repite cada día mientras alguien espere.',
-    variables: JSON.stringify(['adminNombre', 'codigoCurso', 'personas', 'causa', 'solucion', 'url_integraciones']),
+      'Avisa a los administradores de que alguien espera matricularse por una infracción sin curso elegido, o cuyo curso no está publicado o no tiene plazas. Se repite cada día.',
+    variables: JSON.stringify(['adminNombre', 'infraccion', 'personas', 'causa', 'solucion', 'url_integraciones']),
     template: {
       internalName: 'Plantilla por defecto - Matrícula en Espera',
-      subject: 'Curso solicitado no disponible: {{codigoCurso}}',
+      subject: 'Personas esperando un curso por la infracción {{infraccion}}',
       bodyHtml: `<h2 style="color:#1e293b;margin:0 0 16px">⏳ Personas esperando un curso</h2>
-<p style="color:#64748b;font-size:15px;line-height:1.6">Hola <strong>{{adminNombre}}</strong>, hay <strong>{{personas}}</strong> esperando matricularse en el curso con código <strong>{{codigoCurso}}</strong>, pero {{causa}}.</p>
+<p style="color:#64748b;font-size:15px;line-height:1.6">Hola <strong>{{adminNombre}}</strong>, hay <strong>{{personas}}</strong> esperando matricularse por la infracción <strong>{{infraccion}}</strong>, pero {{causa}}.</p>
 <div style="background:#fffbeb;border:1px solid #fcd34d;border-radius:12px;padding:20px;margin:20px 0">
 <p style="color:#92400e;font-size:14px;line-height:1.6;margin:0">Para resolverlo, {{solucion}}. Cada persona en espera quedará matriculada sola y recibirá un correo para empezar.</p>
 </div>

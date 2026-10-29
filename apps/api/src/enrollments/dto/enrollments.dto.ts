@@ -1,5 +1,6 @@
-import { IsBoolean, IsNotEmpty, IsOptional, IsString, MaxLength } from 'class-validator';
+import { IsBoolean, IsNotEmpty, IsString, MaxLength } from 'class-validator';
 import { StrictBoolean } from '../../common/validation/transforms';
+import { Omittable } from '../../common/validation/omittable';
 
 export class EnrollStudentDto {
   @IsString()
@@ -7,7 +8,7 @@ export class EnrollStudentDto {
   userGuid: string;
 
   /** Confirma que quien ya terminó el curso empieza una vuelta nueva desde cero. */
-  @IsOptional()
+  @Omittable()
   @StrictBoolean()
   @IsBoolean({ message: 'Indica si confirmas que el alumno vuelve a empezar el curso.' })
   confirmRestart?: boolean;
@@ -15,14 +16,14 @@ export class EnrollStudentDto {
 
 export class EnrolledStudentsQueryDto {
   /** Marca de la última fila recibida. Se devuelve tal cual llegó en la página anterior. */
-  @IsOptional()
+  @Omittable()
   @IsString()
   @MaxLength(200)
   cursor?: string;
 }
 
 export class CandidatesQueryDto {
-  @IsOptional()
+  @Omittable()
   @IsString()
   @MaxLength(100)
   search?: string;

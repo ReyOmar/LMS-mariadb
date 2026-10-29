@@ -13,7 +13,7 @@ import { Country } from '../common/domain/country';
 import { IntegrationClientsService } from './integration-clients.service';
 
 /** Cabecera con la que otro sistema presenta su clave. Fastify entrega las cabeceras en minúsculas. */
-export const API_KEY_HEADER = 'x-api-key';
+const API_KEY_HEADER = 'x-api-key';
 
 /** El sistema que hace la petición: su sede es la de todo lo que pida. */
 export interface IntegrationCaller {

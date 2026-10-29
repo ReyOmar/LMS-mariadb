@@ -9,7 +9,7 @@ import { RealtimeProvider } from '@/contexts/RealtimeContext';
 import { ConfigProvider } from '@/contexts/ConfigContext';
 import { AlertProvider } from '@/contexts/AlertContext';
 import { fontVariables } from '@/lib/fonts';
-import { DataConsentDialog } from '@/components/legal/DataConsentDialog';
+import { DataConsentGate } from '@/components/legal/DataConsentGate';
 import { StorageNotice } from '@/components/legal/StorageNotice';
 import { PageLoaderOverlay } from '@/components/ui/PageLoaderOverlay';
 import { BrandHead } from '@/components/layout/BrandHead';
@@ -41,8 +41,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
                 <ConfigProvider>
                   <BrandHead />
                   <AlertProvider>
-                    {children}
-                    <DataConsentDialog />
+                    <DataConsentGate>{children}</DataConsentGate>
                     <StorageNotice />
                   </AlertProvider>
                 </ConfigProvider>

@@ -20,7 +20,7 @@ const LINK_ADDRESS = { require_protocol: true, require_tld: false, protocols: ['
  * Un enlace guarda su dirección en el contenido. Sin protocolo, el alumno vería un vínculo
  * a cualquier cosa en lugar del vídeo o la página que se quería enlazar.
  */
-function assertLinkAddress(type: string | undefined, address: string | undefined): void {
+function assertLinkAddress(type: string | undefined, address: string | null | undefined): void {
   if (type === 'LINK' && address && !isURL(address, LINK_ADDRESS)) {
     throw new BadRequestException('La dirección del enlace debe ser una URL completa (https://…).');
   }

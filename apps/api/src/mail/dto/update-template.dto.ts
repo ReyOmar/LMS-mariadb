@@ -1,5 +1,6 @@
-import { IsBoolean, IsNotEmpty, IsOptional, IsString, MaxLength } from 'class-validator';
+import { IsBoolean, IsNotEmpty, IsString, MaxLength } from 'class-validator';
 import { StrictBoolean, Trim } from '../../common/validation/transforms';
+import { Omittable } from '../../common/validation/omittable';
 
 /**
  * Cambios de una plantilla. Cada campo es opcional porque activar o desactivar el envío
@@ -7,21 +8,21 @@ import { StrictBoolean, Trim } from '../../common/validation/transforms';
  * saldría en blanco.
  */
 export class UpdateTemplateDto {
-  @IsOptional()
+  @Omittable()
   @IsString()
   @IsNotEmpty({ message: 'El asunto no puede quedar vacío.' })
   @MaxLength(191, { message: 'El asunto no puede superar los 191 caracteres.' })
   @Trim()
   subject?: string;
 
-  @IsOptional()
+  @Omittable()
   @IsString()
   @IsNotEmpty({ message: 'El cuerpo del correo no puede quedar vacío.' })
   @MaxLength(50_000, { message: 'El cuerpo de la plantilla no puede superar los 50 000 caracteres.' })
   @Trim()
   bodyHtml?: string;
 
-  @IsOptional()
+  @Omittable()
   @StrictBoolean()
   @IsBoolean()
   active?: boolean;

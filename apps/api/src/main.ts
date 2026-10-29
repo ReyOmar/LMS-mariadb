@@ -10,7 +10,6 @@ import { randomUUID } from 'crypto';
 import { AppModule } from './app.module';
 import { ExceptionsFilter } from './common/filters/exceptions.filter';
 import { createValidationPipe } from './common/validation/validation.pipe';
-import { allowedOrigins } from './common/cors';
 import { serializeJson } from './common/http/json';
 import { MIB, readUploadCeiling } from './storage/upload-limits';
 
@@ -19,6 +18,9 @@ const JSON_LIMIT_BYTES = 2 * 1024 * 1024;
 
 /** Longitud mínima aceptable para el secreto de firma de los tokens. */
 const MIN_SECRET_LENGTH = 32;
+
+/** Origen del cliente si no se declara `CORS_ORIGIN`: el de desarrollo. */
+const DEFAULT_CLIENT_ORIGIN = 'http://localhost:3100';
 
 /** Valores de ejemplo que nunca deben llegar a producción. */
 const INSECURE_SECRETS = ['change_this_in_production', 'lms-super-secret-key-2026', 'secret', 'jwt_secret'];
@@ -69,7 +71,11 @@ async function bootstrap(): Promise<void> {
   app.useGlobalPipes(createValidationPipe());
 
   app.enableCors({
-    origin: allowedOrigins(config),
+    // Varias URLs separadas por comas: las dos sedes pueden servirse desde dominios distintos.
+    origin: (config.get<string>('CORS_ORIGIN') ?? DEFAULT_CLIENT_ORIGIN)
+      .split(',')
+      .map((origin) => origin.trim().replace(/\/+$/, ''))
+      .filter(Boolean),
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
     credentials: true,
     // Con la API en otro dominio, el navegador oculta esta cabecera si no se declara: es la
@@ -119,9 +125,8 @@ function validateSecret(config: ConfigService, logger: Logger): void {
 async function registerPlugins(app: NestFastifyApplication, logger: Logger): Promise<void> {
   await app.register(compress, {
     global: true,
-    // El flujo de eventos en tiempo real no pasa por aquí: se toma con `hijack()` y lo comprime
-    // `event-stream.ts` evento a evento. Se excluye igual, porque este plugin lo retendría.
-    customTypes: /^(?!text\/event-stream)(text\/|application\/(json|javascript|xml))/,
+    // Sólo texto: los archivos que se descargan (PDF, imágenes) ya van comprimidos.
+    customTypes: /^(text\/|application\/(json|javascript|xml))/,
   });
 
   await app.register(helmet, {
@@ -186,10 +191,10 @@ function configureRequestLogging(app: NestFastifyApplication): void {
   });
 
   fastify.addHook('onResponse', (request, response, next) => {
-    // Ni la comprobación de salud ni el flujo de eventos aportan nada al registro: la
-    // primera llega constantemente y el segundo dura horas abierto.
+    // Ni la comprobación de salud ni las consultas del tiempo real aportan nada al registro:
+    // llegan constantemente, cada pocos segundos por pestaña abierta.
     const url = request.url;
-    if (url === '/api/health' || url.startsWith('/api/realtime/stream')) {
+    if (url === '/api/health' || url.startsWith('/api/realtime/events')) {
       next();
       return;
     }

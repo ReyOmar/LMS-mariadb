@@ -1,4 +1,4 @@
-import { spread } from './stream';
+import { spread } from './poll';
 
 /** Tras un reinicio de la API, cada navegador vuelve en un momento distinto. */
 describe('spread', () => {

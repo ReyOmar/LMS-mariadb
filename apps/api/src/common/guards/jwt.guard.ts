@@ -1,6 +1,7 @@
 import {
   CanActivate,
   ExecutionContext,
+  ForbiddenException,
   Injectable,
   Logger,
   OnModuleDestroy,
@@ -10,8 +11,10 @@ import { JwtService } from '@nestjs/jwt';
 import { Reflector } from '@nestjs/core';
 import type { FastifyRequest } from 'fastify';
 import { IS_PUBLIC } from '../decorators/public.decorator';
+import { BEFORE_CONSENT } from '../decorators/before-consent.decorator';
 import { JwtClaims, JwtPayload } from '../interfaces/jwt-payload.interface';
 import { PrismaService } from '../../prisma/prisma.service';
+import { SettingsService } from '../../settings/settings.service';
 
 /** Cada cuánto, como máximo, se persiste `lastAccessAt` de un mismo usuario. */
 const LAST_ACCESS_INTERVAL_MS = 5 * 60 * 1000;
@@ -19,13 +22,20 @@ const LAST_ACCESS_INTERVAL_MS = 5 * 60 * 1000;
 /** Cada cuánto se purgan las marcas de escritura ya caducadas. */
 const CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
 
+/** Quién llama y qué versión de la política de datos aceptó. */
+interface Identity {
+  user: JwtPayload;
+  consentVersion: string | null;
+}
+
 /**
  * Autenticación por JWT para todas las rutas.
  *
  * Además de validar la firma, en cada petición comprueba contra la base de datos que la
  * cuenta siga existiendo y con el rol y país vigentes. Esto cuesta una consulta por
  * petición, pero es lo que permite que borrar una cuenta o cambiarla de rol surta efecto
- * al instante en lugar de esperar a que caduque el token.
+ * al instante en lugar de esperar a que caduque el token. También exige que haya aceptado
+ * la política de tratamiento de datos vigente en su sede, salvo en las rutas `@BeforeConsent()`.
  *
  * Las rutas marcadas con `@Public()` no exigen token; si viene uno válido se usa, y si
  * viene uno inválido se ignora en silencio en lugar de rechazar la petición.
@@ -41,6 +51,7 @@ export class JwtGuard implements CanActivate, OnModuleDestroy {
     private readonly jwtService: JwtService,
     private readonly reflector: Reflector,
     private readonly prisma: PrismaService,
+    private readonly settings: SettingsService,
   ) {
     this.cleanupTimer = setInterval(() => this.pruneAccessTimestamps(), CLEANUP_INTERVAL_MS);
     this.cleanupTimer.unref?.();
@@ -51,7 +62,8 @@ export class JwtGuard implements CanActivate, OnModuleDestroy {
   }
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
-    const isPublic = this.reflector.getAllAndOverride<boolean>(IS_PUBLIC, [context.getHandler(), context.getClass()]);
+    const route = [context.getHandler(), context.getClass()];
+    const isPublic = this.reflector.getAllAndOverride<boolean>(IS_PUBLIC, route);
     const request = context.switchToHttp().getRequest<FastifyRequest & { user?: JwtPayload }>();
     const token = this.extractToken(request.headers.authorization);
 
@@ -60,14 +72,30 @@ export class JwtGuard implements CanActivate, OnModuleDestroy {
       throw new UnauthorizedException('Token de autenticación requerido.');
     }
 
+    let identity: Identity;
     try {
-      request.user = await this.resolveIdentity(token);
-      return true;
+      identity = await this.resolveIdentity(token);
     } catch (error) {
       // En rutas públicas un token inválido no impide el acceso: simplemente se
       // atiende la petición como anónima.
       if (isPublic) return true;
       throw error instanceof UnauthorizedException ? error : new UnauthorizedException('Token inválido o expirado.');
+    }
+    request.user = identity.user;
+
+    if (!isPublic && !this.reflector.getAllAndOverride<boolean>(BEFORE_CONSENT, route)) {
+      await this.ensureConsent(identity);
+    }
+    return true;
+  }
+
+  /**
+   * Sin aceptar la política de datos vigente en su sede no se usa el campus: la pantalla lo pide
+   * antes de nada, y esto impide saltárselo llamando a la API directamente.
+   */
+  private async ensureConsent({ user, consentVersion }: Identity): Promise<void> {
+    if (consentVersion !== (await this.settings.legalVersion(user.country))) {
+      throw new ForbiddenException('Para usar el campus tienes que aceptar la política de tratamiento de datos.');
     }
   }
 
@@ -76,7 +104,7 @@ export class JwtGuard implements CanActivate, OnModuleDestroy {
    * @throws UnauthorizedException con un mensaje que el cliente distingue para decidir
    *         si muestra «sesión expirada» o «sesión revocada».
    */
-  private async resolveIdentity(token: string): Promise<JwtPayload> {
+  private async resolveIdentity(token: string): Promise<Identity> {
     const payload = await this.jwtService.verifyAsync<JwtClaims & Pick<JwtPayload, 'iat' | 'exp'>>(token);
 
     if (!payload?.sub) {
@@ -85,7 +113,7 @@ export class JwtGuard implements CanActivate, OnModuleDestroy {
 
     const account = await this.prisma.user.findUnique({
       where: { guid: payload.sub },
-      select: { guid: true, email: true, role: true, country: true, currentSessionJti: true },
+      select: { guid: true, email: true, role: true, country: true, currentSessionJti: true, dataConsentVersion: true },
     });
 
     // El orden va de lo más concreto a lo más genérico: el mensaje que reciba el usuario
@@ -109,7 +137,7 @@ export class JwtGuard implements CanActivate, OnModuleDestroy {
     this.touchLastAccess(account.guid);
 
     // El rol y el país mandan desde la base de datos, no desde el token.
-    return {
+    const user = {
       sub: account.guid,
       email: account.email,
       role: account.role,
@@ -118,6 +146,7 @@ export class JwtGuard implements CanActivate, OnModuleDestroy {
       iat: payload.iat,
       exp: payload.exp,
     };
+    return { user, consentVersion: account.dataConsentVersion };
   }
 
   /**

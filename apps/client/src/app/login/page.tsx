@@ -1,6 +1,6 @@
 'use client';
 
-import { Suspense, useEffect, useState, type ReactNode } from 'react';
+import { Suspense, useEffect, useState, useTransition, type ReactNode } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { CheckCircle2, GraduationCap, ShieldCheck } from 'lucide-react';
 import { fileUrlFor, isLogoutReason, loginUrl, safeNextPath, type LogoutReason } from '@/lib/api';
@@ -10,8 +10,6 @@ import { CountrySwitcher } from '@/components/features/CountrySwitcher';
 import { useCountry } from '@/contexts/CountryContext';
 import { useSession } from '@/contexts/SessionContext';
 import { useConfig } from '@/contexts/ConfigContext';
-import { PageLoader } from '@/components/ui/PageLoader';
-import { DashboardShell } from '@/components/layout/DashboardShell';
 import { useRateLimitedForm } from '@/hooks/useRateLimitedForm';
 import { SessionAlert } from './components/SessionAlert';
 import { SignInForm } from './components/SignInForm';
@@ -57,11 +55,13 @@ function LoginContent() {
   const [logoutReason, setLogoutReason] = useState<LogoutReason | null>(null);
   /** Página a la que volver tras entrar, como la de un enlace de correo abierto sin sesión. */
   const [next] = useState(() => safeNextPath(params?.get('next')));
+  const destination = next ?? '/dashboard';
   const [email, setEmail] = useState('');
   const [pendingSetup, setPendingSetup] = useState<PendingSetup | null>(null);
   /** Con el correo ya verificado, la solicitud queda atada a la sede en la que se empezó. */
   const [requestEmailVerified, setRequestEmailVerified] = useState(false);
-  const [enteringCampus, setEnteringCampus] = useState(false);
+  /** Ya dentro, mientras se abre el panel: el formulario sigue ocupado hasta que se ve. */
+  const [entering, startEntering] = useTransition();
 
   // Aquí y no en cada formulario: la espera de un 429 sigue aunque se cambie de pantalla.
   const signIn = useRateLimitedForm();
@@ -102,22 +102,17 @@ function LoginContent() {
     show('first-password');
   };
 
+  // El panel se descarga mientras se escriben las credenciales: al entrar aparece en el acto.
+  useEffect(() => {
+    router.prefetch(destination);
+  }, [router, destination]);
+
   const enterCampus = ({ token, user }: OpenedSession) => {
     login(token, user);
-    setEnteringCampus(true);
-    router.push(next ?? '/dashboard');
+    startEntering(() => router.push(destination));
   };
 
   if (!countryReady) return <LoginLoading />;
-
-  // Ya en el marco del panel: el indicador sigue en el mismo sitio cuando el panel lo releva.
-  if (enteringCampus) {
-    return (
-      <DashboardShell>
-        <PageLoader message="Entrando al campus…" />
-      </DashboardShell>
-    );
-  }
 
   return (
     <LoginFrame backgroundUrl={fileUrlFor(config?.loginBackgroundUrl)}>
@@ -150,12 +145,19 @@ function LoginContent() {
           onEmailChange={setEmail}
           onSetupRequired={requireSetup}
           onSignedIn={enterCampus}
+          entering={entering}
           onRequestAccess={() => show('request')}
         />
       )}
 
       {view === 'first-password' && pendingSetup && (
-        <FirstPasswordForm form={firstPassword} setup={pendingSetup} onCancel={backToSignIn} onSignedIn={enterCampus} />
+        <FirstPasswordForm
+          form={firstPassword}
+          setup={pendingSetup}
+          onCancel={backToSignIn}
+          onSignedIn={enterCampus}
+          entering={entering}
+        />
       )}
 
       {view === 'request' && (

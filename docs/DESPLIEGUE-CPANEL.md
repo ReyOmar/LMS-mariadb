@@ -24,19 +24,19 @@ variables de la API en _Setup Node.js App_.
 
 ## Qué cambia
 
-| Tema                   | Julio                                        | Ahora                                                                                                                  |
-| ---------------------- | -------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| Sedes                  | Una sola                                     | Colombia y México, separadas. **Todo lo existente pasa a Colombia**; México empieza vacío, con su propio administrador |
-| Notas                  | 0–5, aprobación 3,0                          | 0–100. Las notas se multiplican por 20: un 4,5 pasa a 90 y la aprobación 3,0 a **60** (se puede subir por curso)       |
-| Estructura de un curso | Curso › módulo › lección › recurso           | Curso › módulo › recurso. Los recursos de cada lección quedan seguidos en su módulo, en el mismo orden                 |
-| Archivos               | `apps/api/uploads`, dentro de la aplicación  | `/home/investig/lms-data/uploads`, fuera de la aplicación; el material reservado se sirve con enlace firmado           |
-| Tiempo real            | WebSockets (no funcionaban detrás de Apache) | Server-Sent Events: HTTP normal, sin configurar nada                                                                   |
-| Arranque de la API     | `app.js`                                     | `dist/main.js`                                                                                                         |
-| Base de datos          | MySQL o MariaDB                              | **Sólo MariaDB** (10.6 o superior): la API usa `max_statement_time`, que MySQL no tiene                                |
-| Sesiones               | Varias por cuenta                            | Una por cuenta. **Todo el mundo tendrá que volver a entrar** después de actualizar                                     |
-| Protección de datos    | —                                            | Cada persona acepta la política de datos la primera vez que entra; queda registrada la fecha y la versión              |
-| Cuentas desactivadas   | Existían                                     | No existen: una cuenta desactivada en julio podrá volver a entrar (el diagnóstico las lista)                           |
-| Otros sistemas         | —                                            | Piden matrículas por API, con una clave por sede, como el software PESV ([INTEGRACION.md](INTEGRACION.md))             |
+| Tema                   | Julio                                        | Ahora                                                                                                                     |
+| ---------------------- | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| Sedes                  | Una sola                                     | Colombia y México, separadas. **Todo lo existente pasa a Colombia**; México empieza vacío, con su propio administrador    |
+| Notas                  | 0–5, aprobación 3,0                          | 0–100. Las notas se multiplican por 20: un 4,5 pasa a 90 y la aprobación 3,0 a **60** (se puede subir por curso)          |
+| Estructura de un curso | Curso › módulo › lección › recurso           | Curso › módulo › recurso. Los recursos de cada lección quedan seguidos en su módulo, en el mismo orden                    |
+| Archivos               | `apps/api/uploads`, dentro de la aplicación  | `/home/investig/lms-data/uploads`, fuera de la aplicación; el material reservado se sirve con enlace firmado              |
+| Tiempo real            | WebSockets (no funcionaban detrás de Apache) | Cada pestaña pregunta cada pocos segundos qué ha pasado: peticiones HTTP cortas, sin configurar nada                      |
+| Arranque de la API     | `app.js`                                     | `dist/main.js`                                                                                                            |
+| Base de datos          | MySQL o MariaDB                              | **Sólo MariaDB** (10.6 o superior): la API usa `max_statement_time`, que MySQL no tiene                                   |
+| Sesiones               | Varias por cuenta                            | Una por cuenta. **Todo el mundo tendrá que volver a entrar** después de actualizar                                        |
+| Protección de datos    | —                                            | Cada persona acepta la política de datos al entrar, y sin aceptarla la API no deja usar el campus; consta fecha y versión |
+| Cuentas desactivadas   | Existían                                     | No existen: una cuenta desactivada en julio podrá volver a entrar (el diagnóstico las lista)                              |
+| Otros sistemas         | —                                            | Piden matrículas por API, con una clave por sede, como el software PESV ([INTEGRACION.md](INTEGRACION.md))                |
 
 La base se migra con un script incluido en el paquete (`apps/api/prisma/migracion-julio/migrar.js`).
 Se ha ensayado sobre una copia con datos de julio: el resultado tiene **exactamente** la
@@ -242,9 +242,10 @@ node prisma/migracion-julio/migrar.js despues
     (se calcula al vuelo), `lms_token_revocations` y `_migracion_julio` (la marca del paso
     anterior);
   - cambios de tipo de las notas a `Decimal(5,2)`, que con valores de 0 a 100 no pierden nada, y
-    de columnas de texto que se amplían (`MEDIUMTEXT`, `VARCHAR(255)` o `VARCHAR(500)`);
-  - una restricción única sobre `pais` y `codigo_integracion` de `lms_cursos`: la columna es
-    nueva y está vacía, así que no puede fallar.
+    de columnas de texto que se amplían (`MEDIUMTEXT`, `VARCHAR(255)` o `VARCHAR(500)`).
+
+  Las tablas de la integración con otros sistemas (`lms_clientes_integracion`,
+  `lms_infracciones` y `lms_matriculas_externas`) son nuevas: se crean vacías, sin ningún aviso.
 
   Debe terminar con «_Your database is now in sync with your Prisma schema_». Si se detuviera
   con `errno: 121 "Duplicate key on write or update"`, ejecútalo otra vez: aplica lo que falta.
@@ -347,7 +348,8 @@ instalar dependencias. La variable `NEXT_PUBLIC_API_URL` puede quedarse o borrar
 5. `https://lms.investigaciongipia.com/verify?code=CODIGO`, con el código de un certificado
    emitido en julio, dice que es válido. Los enlaces antiguos (`/verificar?codigo=…`,
    `/dashboard/…` en español) redirigen solos.
-6. El indicador de conexión del panel se mantiene activo: el tiempo real funciona.
+6. Con el campus abierto en dos navegadores, un mensaje del chat aparece en el otro en unos
+   segundos, sin recargar: el tiempo real funciona.
 7. Sube una portada de prueba y comprueba que se ve.
 8. Envía un correo de prueba (por ejemplo, _¿Olvidaste tu contraseña?_ con tu cuenta). Si no
    llega, el registro de la API lo dice; ver _Correo_.
@@ -361,9 +363,12 @@ Después, en cada sede:
   3,0). La de los cursos nuevos es 80.
 - Si el diagnóstico avisó de cuentas desactivadas, elimínalas desde _Usuarios_ si no deben
   entrar.
-- Si el software PESV va a conectarse: en _Integraciones_, conecta el sistema y entrega la
-  clave a su equipo, y pon a cada curso el código acordado con ellos (ver
-  [INTEGRACION.md](INTEGRACION.md#antes-de-conectar)).
+- Si el software PESV va a conectarse: en _Integraciones_, conecta el sistema, entrega la
+  clave a su equipo y escribe en **Avisos** la dirección que te den, y prueba que llega. Los
+  cursos de las infracciones se encuentran por su título: basta con que lleven el código de la
+  infracción («C29 Exceso de velocidad») o su descripción (ver
+  [INTEGRACION.md](INTEGRACION.md#antes-de-conectar)). Crea también la tarea de _Cron Jobs_ de
+  [Tareas programadas](#tareas-programadas).
 
 Por último, aplica lo de _Seguridad_ (Parte 2) y avisa a los usuarios de que tendrán que volver a
 iniciar sesión. Cuando el campus lleve unos días sin problemas, descarga `~/respaldo-julio` a un
@@ -444,31 +449,56 @@ de Brevo (crea otra y elimina la anterior). Reinicia la API.
 El historial del repositorio conserva una clave de Google Maps en un archivo antiguo de
 `.devcontainer`. El campus ya no la usa: revócala en Google Cloud.
 
-## Tiempo real sin WebSockets
+## Tiempo real sin conexiones abiertas
 
-Las aplicaciones Node de cPanel se sirven detrás de Apache con Passenger, que no propaga la
-cabecera `Upgrade` de los WebSockets: por eso el tiempo real de julio no llegaba a funcionar.
-Ahora va por **Server-Sent Events**, una respuesta HTTP que se mantiene abierta, y atraviesa
-Apache sin configurar nada. La API manda `X-Accel-Buffering: no` y un latido cada 25 s.
+Cada pestaña pregunta a la API qué ha pasado desde su última consulta: cada 4 segundos si está a
+la vista, cada 30 si está en segundo plano y en el acto al volver a ella. La API guarda los
+avisos de los últimos minutos y contesta con los que le tocan a cada uno. Un mensaje, una nota o
+un aviso de la campana llegan así en unos segundos, sin recargar.
 
-El flujo sale **comprimido por la propia API**, evento a evento. Con «Optimize Website →
-Compress all content» de cPanel (o con LiteSpeed), el servidor comprime también el flujo y
-retiene lo comprimido hasta llenar su búfer: los avisos no llegarían nunca, sin ningún error
-a la vista. Lo que ya llega comprimido no lo vuelve a comprimir, así que pasa al instante y no
-hace falta tocar la compresión del alojamiento.
+No se mantiene ninguna conexión abierta, y es a propósito:
 
-Apache no avisa a la API de que alguien cerró la pestaña: se entera al escribirle, con los
-latidos. Por eso «En línea» puede tardar hasta un minuto en apagarse. Si el flujo se cortara,
-el campus sigue funcionando: los datos se refrescan al navegar.
+- **WebSockets** no llegan a la aplicación: Apache con Passenger no propaga la cabecera
+  `Upgrade`. Por eso el tiempo real de julio no funcionaba.
+- **Un flujo abierto** (Server-Sent Events o _long polling_) sí atraviesa Apache, pero en un
+  servidor con CloudLinux —el que da _Setup Node.js App_— cada petición en curso ocupa uno de
+  los «procesos de entrada» de la cuenta, 20 por defecto. Con un flujo por pestaña, la
+  vigésima pestaña abierta dejaría a todo el campus, portada incluida, respondiendo _508
+  Resource Limit Is Reached_.
+
+Una consulta dura milisegundos, así que cientos de personas a la vez ocupan una fracción de un
+proceso. Lo que se nota es una espera de unos segundos en los avisos y que «En línea» tarde
+hasta un minuto y medio en apagarse cuando alguien cierra el campus. Si una consulta falla, se
+reintenta sin perder nada; si la pestaña estuvo dormida más de unos minutos, al volver vuelve a
+pedir los datos de la pantalla.
 
 ## La API corre en un solo proceso
 
-No subas el número de procesos de la API. El tiempo real, el bloqueo de edición de cursos, el
-límite de peticiones y la cola que atiende las matrículas de otros sistemas viven en la memoria
-del proceso: con varios, un aviso sólo llegaría a quien esté conectado al mismo proceso, dos
+No subas el número de procesos de la API. Los avisos del tiempo real, el bloqueo de edición de
+cursos, el límite de peticiones y la cola que atiende las matrículas de otros sistemas viven en
+la memoria del proceso: con varios, un aviso sólo lo vería quien pregunte al mismo proceso, dos
 administradores podrían editar el mismo curso a la vez, el tope de intentos de acceso se
 multiplicaría y una misma solicitud podría atenderse dos veces. Un proceso aguanta de sobra este uso
-(medido: 60 personas a la vez, 375 peticiones por segundo, el 95 % por debajo de 280 ms).
+(medido: 60 personas a la vez, 375 peticiones por segundo, el 95 % por debajo de 280 ms; y 600
+personas con el campus abierto, con el tiempo real, 173 peticiones por segundo, el 99 % por debajo
+de 20 ms).
+
+## Tareas programadas
+
+La API hace sola, a su hora, lo que no espera a nadie: avisa a los otros sistemas de lo que
+cambió en sus solicitudes (cada minuto, y reintenta cada 15 los que no llegan), atiende las
+matrículas en espera (cada hora), manda los recordatorios de inactividad (a las 8:00) y limpia
+lo caducado (de madrugada). Para eso el proceso tiene que estar en marcha, y Passenger lo detiene
+tras unos minutos sin peticiones (5, por defecto) y no lo arranca hasta la siguiente. Mientras
+alguien tiene el campus abierto, sus consultas lo mantienen vivo; para las noches y los fines de
+semana, crea en cPanel → _Cron Jobs_ una tarea que lo despierte cada 4 minutos:
+
+```bash
+*/4 * * * * curl -fsS -o /dev/null https://api-lms.investigaciongipia.com/api/health
+```
+
+Sin ella el campus funciona igual, pero lo programado espera a que alguien entre: un aviso al
+PESV que no llegó a la primera, por ejemplo, podría no reintentarse hasta la mañana siguiente.
 
 ## Variables de la API
 
@@ -576,33 +606,48 @@ Esta actualización pide, además:
   el mensaje de bienvenida, el motivo de rechazo, la URL de referencia, el nombre del titular de
   los certificados y el título de los avisos), añade a los cursos la fecha de su primera
   publicación y un índice a los avisos.
-- **Integración con otros sistemas**: `db push` crea `lms_clientes_integracion`,
-  `lms_matriculas_externas` y la columna `lms_cursos.codigo_integracion`, y avisa de que
-  añadirá una restricción única sobre `[pais,codigo_integracion]` («_If there are existing
-  duplicate values, this will fail_»). La columna es nueva y está vacía: no puede fallar ni
-  perder nada. Si es lo único que enumera, además de lo anterior, ejecuta
-  `npx prisma db push --accept-data-loss`. Después, `npx prisma db seed` añade el correo
-  _Curso solicitado no disponible_.
+- **Integración con otros sistemas** ([INTEGRACION.md](INTEGRACION.md)): si el servidor todavía
+  no la tenía, `db push` crea `lms_clientes_integracion`, `lms_infracciones` y
+  `lms_matriculas_externas`, vacías, sin perder nada. Si ya tenía la primera versión, la que
+  pedía los cursos por un código puesto a mano, ahora se piden por infracción y el curso se
+  encuentra por su título, así que `db push` retira `lms_cursos.codigo_integracion` (los códigos
+  dejan de usarse) y cambia `lms_matriculas_externas.codigo_curso` por `infraccion_id`. Esa
+  columna nueva es obligatoria: si la tabla tiene filas —solicitudes enviadas con el contrato
+  anterior, que no dicen su infracción—, `db push` se detiene. Antes, comprueba qué hay:
+
+  ```sql
+  SELECT estado, COUNT(*) FROM lms_matriculas_externas GROUP BY estado;
+  ```
+
+  y vacíala con `DELETE FROM lms_matriculas_externas;`. Las matrículas que esas solicitudes
+  abrieron siguen en pie; sólo se pierde su registro de la integración, y el sistema que las
+  envió tendrá que pedirlas de nuevo con el contrato nuevo si aún las necesita. Después,
+  `npx prisma db push --accept-data-loss` (lo que enumera es eso y lo de los puntos anteriores) y
+  `npx prisma db seed`, que repone el correo _Matrícula en espera por infracción_ si su plantilla
+  todavía nombraba el código del curso. Por último, crea la tarea de
+  [Tareas programadas](#tareas-programadas).
 
 ## Problemas frecuentes
 
-| Síntoma                                                                      | Causa                                                             | Solución                                                                             |
-| ---------------------------------------------------------------------------- | ----------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
-| La API no arranca y el registro dice `JWT_SECRET`                            | Secreto ausente o de menos de 32 caracteres                       | Genera uno de 64 y reinicia                                                          |
-| La API no arranca y el registro menciona `@prisma/client` o `.prisma/client` | Falta generar el cliente de la base                               | `npx prisma generate` en `apps/api` y reinicia                                       |
-| `migrar.js` dice «Falta DATABASE_URL»                                        | La Terminal no ve las variables de la aplicación                  | Defínela como en el paso 7.2                                                         |
-| `db push` se detiene con `errno: 121 "Duplicate key on write or update"`     | MariaDB rechaza recrear una clave ajena con el mismo nombre       | Ejecuta `npx prisma db push --accept-data-loss` otra vez hasta que diga «in sync»    |
-| `db push` no puede crear `lms_contacto_chat_curso_guid_fkey`                 | Quedan contactos de chat de cursos ya borrados                    | En phpMyAdmin, la consulta de debajo de esta tabla; repite `db push`                 |
-| `npm install` se queja de la carpeta `node_modules`                          | Se borró el enlace que crea cPanel                                | Pulsa **Ejecutar NPM Install** en _Setup Node.js App_ y repite `npx prisma generate` |
-| No sale ningún correo                                                        | Falta `MAIL_FROM` o `BREVO_API_KEY`, o Brevo rechaza el remitente | El registro de la API dice cuál; ver _Correo_                                        |
-| «No hay conexión con el servidor» al entrar                                  | El cliente no llega a la API                                      | Comprueba `/api/health` y que el paquete se generó con el `--api-url` correcto       |
-| El navegador bloquea las peticiones por CORS                                 | `CORS_ORIGIN` no coincide con el dominio del cliente              | Ponlo exacto, con `https://` y sin barra final                                       |
-| Las imágenes no salen en los correos                                         | Falta `API_PUBLIC_URL`                                            | Defínela y reinicia                                                                  |
-| `/api/health` dice `storage: error`                                          | `STORAGE_DIR` no existe, no es de la cuenta o el disco está lleno | Revisa la ruta y el espacio; el registro de arranque dice qué falló                  |
-| Una imagen o un PDF antiguo no se ve                                         | El archivo no estaba en el origen al ejecutar `archivos`          | `comprobar` lista los que faltan; búscalos en la copia y repite `archivos`           |
-| `max_user_connections` o `Too many connections` en el registro               | La API y otras herramientas superan el cupo del usuario de base   | Baja `DATABASE_POOL_SIZE` y reinicia                                                 |
-| Los certificados salen sin logotipo                                          | El logotipo de la sede no es PNG ni JPG                           | Panel → _Tema y apariencia_: súbelo en PNG o JPG                                     |
-| Un alumno no puede entrar                                                    | Está en la sede equivocada                                        | Que cambie de sede con el selector de la pantalla de acceso                          |
+| Síntoma                                                                      | Causa                                                             | Solución                                                                              |
+| ---------------------------------------------------------------------------- | ----------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| La API no arranca y el registro dice `JWT_SECRET`                            | Secreto ausente o de menos de 32 caracteres                       | Genera uno de 64 y reinicia                                                           |
+| La API no arranca y el registro menciona `@prisma/client` o `.prisma/client` | Falta generar el cliente de la base                               | `npx prisma generate` en `apps/api` y reinicia                                        |
+| `migrar.js` dice «Falta DATABASE_URL»                                        | La Terminal no ve las variables de la aplicación                  | Defínela como en el paso 7.2                                                          |
+| `db push` se detiene con `errno: 121 "Duplicate key on write or update"`     | MariaDB rechaza recrear una clave ajena con el mismo nombre       | Ejecuta `npx prisma db push --accept-data-loss` otra vez hasta que diga «in sync»     |
+| `db push` no puede crear `lms_contacto_chat_curso_guid_fkey`                 | Quedan contactos de chat de cursos ya borrados                    | En phpMyAdmin, la consulta de debajo de esta tabla; repite `db push`                  |
+| `db push` dice «_Added the required column `infraccion_id`_ … _rows_»        | Hay solicitudes de la primera versión de la integración           | Ver _Si el servidor ya tenía una versión posterior a julio_                           |
+| El otro sistema no recibe los avisos                                         | Su dirección no contesta, o la API estaba detenida                | _Integraciones_ → _Avisos_ dice por qué falló el último; crea la tarea de _Cron Jobs_ |
+| `npm install` se queja de la carpeta `node_modules`                          | Se borró el enlace que crea cPanel                                | Pulsa **Ejecutar NPM Install** en _Setup Node.js App_ y repite `npx prisma generate`  |
+| No sale ningún correo                                                        | Falta `MAIL_FROM` o `BREVO_API_KEY`, o Brevo rechaza el remitente | El registro de la API dice cuál; ver _Correo_                                         |
+| «No hay conexión con el servidor» al entrar                                  | El cliente no llega a la API                                      | Comprueba `/api/health` y que el paquete se generó con el `--api-url` correcto        |
+| El navegador bloquea las peticiones por CORS                                 | `CORS_ORIGIN` no coincide con el dominio del cliente              | Ponlo exacto, con `https://` y sin barra final                                        |
+| Las imágenes no salen en los correos                                         | Falta `API_PUBLIC_URL`                                            | Defínela y reinicia                                                                   |
+| `/api/health` dice `storage: error`                                          | `STORAGE_DIR` no existe, no es de la cuenta o el disco está lleno | Revisa la ruta y el espacio; el registro de arranque dice qué falló                   |
+| Una imagen o un PDF antiguo no se ve                                         | El archivo no estaba en el origen al ejecutar `archivos`          | `comprobar` lista los que faltan; búscalos en la copia y repite `archivos`            |
+| `max_user_connections` o `Too many connections` en el registro               | La API y otras herramientas superan el cupo del usuario de base   | Baja `DATABASE_POOL_SIZE` y reinicia                                                  |
+| Los certificados salen sin logotipo                                          | El logotipo de la sede no es PNG ni JPG                           | Panel → _Tema y apariencia_: súbelo en PNG o JPG                                      |
+| Un alumno no puede entrar                                                    | Está en la sede equivocada                                        | Que cambie de sede con el selector de la pantalla de acceso                           |
 
 Contactos de chat sin curso:
 

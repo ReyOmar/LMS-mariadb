@@ -1,6 +1,7 @@
-import { IsNotEmpty, IsOptional, IsString, MaxLength } from 'class-validator';
+import { IsString, MaxLength } from 'class-validator';
 import { MAX_PASSWORD_LENGTH } from '../../common/domain/password';
-import { Trim } from '../../common/validation/transforms';
+import { Omittable } from '../../common/validation/omittable';
+import { PersonName } from '../../common/validation/person-name';
 
 /**
  * Datos editables del propio perfil.
@@ -9,26 +10,20 @@ import { Trim } from '../../common/validation/transforms';
  * y cambiarlo sin re-verificar abriría una vía para apropiarse de una cuenta ajena.
  */
 export class UpdateProfileDto {
-  @IsOptional()
-  @IsString()
-  @IsNotEmpty({ message: 'El nombre no puede quedar vacío.' })
-  @MaxLength(100)
-  @Trim()
+  @Omittable()
+  @PersonName()
   firstName?: string;
 
-  @IsOptional()
-  @IsString()
-  @IsNotEmpty({ message: 'El apellido no puede quedar vacío.' })
-  @MaxLength(100)
-  @Trim()
+  @Omittable()
+  @PersonName()
   lastName?: string;
 
-  @IsOptional()
+  @Omittable()
   @IsString()
   @MaxLength(MAX_PASSWORD_LENGTH)
   currentPassword?: string;
 
-  @IsOptional()
+  @Omittable()
   @IsString()
   @MaxLength(MAX_PASSWORD_LENGTH)
   newPassword?: string;

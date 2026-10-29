@@ -31,9 +31,14 @@ const INITIAL_ADMINS = [
   { country: 'MEXICO' as const, email: 'admin.mx@pesv.com', firstName: 'Administrador', lastName: 'México' },
 ];
 
-/** Contraseña aleatoria legible: se muestra una vez y hay que cambiarla al entrar. */
+/**
+ * Contraseña aleatoria: se muestra una vez y hay que cambiarla al entrar. Son 72 bits de azar
+ * (12 caracteres) más un sufijo que cumple la política de `src/common/domain/password.ts`
+ * —letra, número y símbolo—, que la semilla no puede importar porque en el servidor sólo se
+ * despliega lo compilado.
+ */
 function generatePassword(): string {
-  return `${crypto.randomBytes(6).toString('base64url')}1a`;
+  return `${crypto.randomBytes(9).toString('base64url')}#1a`;
 }
 
 function createClient(): PrismaClient {
@@ -83,12 +88,19 @@ async function seedAdmins(): Promise<{ email: string; country: string; password:
 }
 
 /**
+ * Variables que el código dejó de enviar, por evento. Una plantilla que todavía las usa enviaría el
+ * marcador tal cual, así que se repone la de serie: el aviso de matrículas en espera nombraba el
+ * código del curso, y ahora nombra la infracción.
+ */
+const RETIRED_VARIABLES: Record<string, string[]> = { MATRICULA_EN_ESPERA: ['codigoCurso'] };
+
+/**
  * Crea los eventos de correo que falten y, en cada sede, la plantilla por defecto de los
  * eventos que todavía no tengan ninguna: un evento nuevo llega así a las dos sedes.
  *
- * Las plantillas que ya existen no se tocan. El nombre, la descripción y las variables del
- * evento sí se actualizan: no se editan desde el panel y la ayuda del editor debe listar
- * las variables que el código envía.
+ * Las plantillas que ya existen no se tocan, salvo las que usan una variable retirada (ver
+ * `RETIRED_VARIABLES`). El nombre, la descripción y las variables del evento sí se actualizan:
+ * no se editan desde el panel y la ayuda del editor debe listar las variables que el código envía.
  */
 async function seedEmailTemplates(): Promise<number> {
   let created = 0;
@@ -100,6 +112,15 @@ async function seedEmailTemplates(): Promise<number> {
       update: details,
       select: { id: true },
     });
+
+    for (const variable of RETIRED_VARIABLES[key] ?? []) {
+      const marker = `{{${variable}}}`;
+      const { count } = await prisma.emailTemplate.updateMany({
+        where: { eventId: event.id, OR: [{ subject: { contains: marker } }, { bodyHtml: { contains: marker } }] },
+        data: { subject: template.subject, bodyHtml: template.bodyHtml },
+      });
+      if (count > 0) console.log(`· ${key}: ${count} plantilla(s) usaban ${marker} y se repusieron`);
+    }
 
     for (const country of Object.values(Country)) {
       const existing = await prisma.emailTemplate.findFirst({

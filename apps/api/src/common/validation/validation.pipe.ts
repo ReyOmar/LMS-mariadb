@@ -9,6 +9,7 @@ import { BadRequestException, ValidationError, ValidationPipe } from '@nestjs/co
 const DEFAULT_MESSAGES: Record<string, string> = {
   isString: 'El campo «{field}» debe ser texto.',
   isNotEmpty: 'El campo «{field}» es obligatorio.',
+  isNull: 'El campo «{field}» no puede quedar vacío.',
   maxLength: 'El campo «{field}» admite como mucho {limit} caracteres.',
   length: 'El campo «{field}» no tiene la longitud permitida.',
   isInt: 'El campo «{field}» debe ser un número entero.',
@@ -96,8 +97,8 @@ const FIELD_LABELS: Record<string, string> = {
   attachmentName: 'nombre del adjunto',
   // Integración con otros sistemas
   externalId: 'identificador externo',
-  courseCode: 'código del curso',
-  integrationCode: 'código de integración',
+  infractionCode: 'código de la infracción',
+  infractionDescription: 'descripción de la infracción',
   name: 'nombre',
   // Configuración de la sede
   platformName: 'nombre de la plataforma',
@@ -149,8 +150,12 @@ function messagesOf(error: ValidationError, parent?: string): string[] {
   const label = FIELD_LABELS[error.property] ?? error.property;
   const field = parent ? `${parent}.${label}` : label;
 
-  // Un campo obligatorio que no llegó incumple todas sus reglas («debe ser texto», «es
-  // demasiado largo»…); lo único útil es decir que falta.
+  // Un campo sin valor —que no llegó, o que llegó vacío (`null`)— incumple todas sus reglas
+  // («debe ser texto», «es demasiado largo»…); lo único útil es decir que le falta el valor.
+  if (error.value === null) {
+    const own = Object.values(error.constraints ?? {}).find((message) => !isDefaultMessage(message));
+    return [own ?? DEFAULT_MESSAGES.isNull.replace('{field}', field)];
+  }
   if (error.value === undefined) {
     const required = error.constraints?.isNotEmpty ?? error.constraints?.isDefined;
     return [required && !isDefaultMessage(required) ? required : DEFAULT_MESSAGES.isNotEmpty.replace('{field}', field)];

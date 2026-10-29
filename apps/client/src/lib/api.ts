@@ -235,7 +235,7 @@ export function errorMessage(error: unknown, fallback = 'No se pudo completar la
 /** Sin avance durante este tiempo, la subida se da por perdida. */
 const UPLOAD_STALL_MS = 120_000;
 
-export const UPLOAD_STALLED_MESSAGE =
+const UPLOAD_STALLED_MESSAGE =
   'La subida se detuvo: no se envió nada en los últimos 2 minutos. Revisa tu conexión e inténtalo de nuevo.';
 
 export interface UploadOptions {

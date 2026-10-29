@@ -1,4 +1,4 @@
-import { NotFoundException } from '@nestjs/common';
+import { ConflictException, NotFoundException } from '@nestjs/common';
 import { IntegrationClientsService } from './integration-clients.service';
 import { hashKey } from './integration-key';
 
@@ -6,8 +6,26 @@ import { hashKey } from './integration-key';
 describe('IntegrationClientsService', () => {
   function serviceWith() {
     const clients: Record<string, unknown>[] = [];
+    const requests = [
+      { clientId: 1, externalId: 'INF-1' },
+      { clientId: 2, externalId: 'INF-2' },
+    ];
     const prisma = {
+      $transaction: (operations: Promise<unknown>[]) => Promise.all(operations),
+      externalEnrollment: {
+        deleteMany: async ({ where }: { where: { clientId: number } }) => {
+          const kept = requests.filter((r) => r.clientId !== where.clientId);
+          const count = requests.length - kept.length;
+          requests.splice(0, requests.length, ...kept);
+          return { count };
+        },
+      },
       integrationClient: {
+        delete: async ({ where }: { where: { id: number } }) =>
+          clients.splice(
+            clients.findIndex((c) => c.id === where.id),
+            1,
+          )[0],
         create: async ({ data }: { data: Record<string, unknown> }) => {
           const row = { id: clients.length + 1, lastUsedAt: null, ...data };
           clients.push(row);
@@ -22,9 +40,11 @@ describe('IntegrationClientsService', () => {
         ),
       },
     };
-    const service = new IntegrationClientsService(prisma as never);
+    const realtime = { emitToRole: jest.fn() };
+    const webhooks = { resume: jest.fn(async () => undefined) };
+    const service = new IntegrationClientsService(prisma as never, realtime as never, webhooks as never);
     jest.spyOn(service['logger'], 'log').mockImplementation(() => undefined);
-    return { service, clients, update: prisma.integrationClient.update };
+    return { service, clients, requests, realtime, webhooks, update: prisma.integrationClient.update };
   }
 
   it('al conectar un sistema la clave se entrega una vez y sólo se guarda su resumen', async () => {
@@ -63,6 +83,53 @@ describe('IntegrationClientsService', () => {
 
     await expect(service.renewKey(1, 'MEXICO')).rejects.toBeInstanceOf(NotFoundException);
     await expect(service.revokeKey(1, 'MEXICO')).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it('sólo se elimina un sistema desconectado: uno con la clave vigente sigue en uso', async () => {
+    const { service, clients } = serviceWith();
+    await service.create('Software PESV', 'COLOMBIA');
+
+    await expect(service.remove(1, 'COLOMBIA')).rejects.toBeInstanceOf(ConflictException);
+    expect(clients).toHaveLength(1);
+  });
+
+  it('eliminarlo borra el sistema y sus solicitudes, no las de otros, y avisa a los paneles', async () => {
+    const { service, clients, requests, realtime } = serviceWith();
+    await service.create('Software PESV', 'COLOMBIA');
+    await service.create('Otro sistema', 'COLOMBIA');
+    await service.revokeKey(1, 'COLOMBIA');
+
+    await service.remove(1, 'COLOMBIA');
+
+    expect(clients.map((c) => c.name)).toEqual(['Otro sistema']);
+    expect(requests).toEqual([{ clientId: 2, externalId: 'INF-2' }]);
+    expect(realtime.emitToRole).toHaveBeenCalledWith('integration:changed', {}, 'COLOMBIA', 'ADMIN');
+  });
+
+  it('no se elimina un sistema de la otra sede', async () => {
+    const { service } = serviceWith();
+    await service.create('Software PESV', 'COLOMBIA');
+    await service.revokeKey(1, 'COLOMBIA');
+
+    await expect(service.remove(1, 'MEXICO')).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it('la dirección de avisos se fija o se quita, y los avisos pendientes salen ya hacia la nueva', async () => {
+    const { service, clients, webhooks } = serviceWith();
+    await service.create('Software PESV', 'COLOMBIA');
+    Object.assign(clients[0], { lastNoticeAt: new Date(), noticeError: 'Respondió con el código 500.' });
+
+    await service.setCallback(1, 'https://pesv.example/avisos', 'COLOMBIA');
+    expect(clients[0]).toMatchObject({
+      callbackUrl: 'https://pesv.example/avisos',
+      lastNoticeAt: null,
+      noticeError: null,
+    });
+    expect(webhooks.resume).toHaveBeenCalledWith(1);
+
+    await service.setCallback(1, null, 'COLOMBIA');
+    expect(clients[0]).toMatchObject({ callbackUrl: null });
+    await expect(service.setCallback(1, null, 'MEXICO')).rejects.toBeInstanceOf(NotFoundException);
   });
 
   it('el último uso se apunta, pero no en cada petición', async () => {

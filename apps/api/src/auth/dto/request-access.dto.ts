@@ -1,9 +1,10 @@
-import { Equals, IsIn, IsNotEmpty, IsString, MaxLength } from 'class-validator';
-import { StrictBoolean, Trim } from '../../common/validation/transforms';
+import { Equals, IsIn, IsNotEmpty } from 'class-validator';
+import { StrictBoolean } from '../../common/validation/transforms';
 import { IsCountry } from '../../common/validation/country.validator';
 import { Country } from '../../common/domain/country';
 import { UserRole } from '../../common/interfaces/jwt-payload.interface';
 import { AccountEmail } from '../../common/validation/account-email';
+import { PersonName } from '../../common/validation/person-name';
 
 /** Roles que un visitante puede pedir por sí mismo. Un ADMIN sólo lo crea otro administrador. */
 const REQUESTABLE_ROLES: UserRole[] = ['STUDENT', 'TEACHER'];
@@ -13,16 +14,10 @@ export class RequestAccessDto {
   @AccountEmail()
   email: string;
 
-  @IsString()
-  @IsNotEmpty({ message: 'El nombre es obligatorio.' })
-  @MaxLength(100)
-  @Trim()
+  @PersonName()
   firstName: string;
 
-  @IsString()
-  @IsNotEmpty({ message: 'El apellido es obligatorio.' })
-  @MaxLength(100)
-  @Trim()
+  @PersonName()
   lastName: string;
 
   @IsIn(REQUESTABLE_ROLES, { message: 'Sólo puedes solicitar acceso como estudiante o profesor.' })

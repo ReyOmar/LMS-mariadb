@@ -3,7 +3,8 @@ import { MaintenanceService } from './maintenance.service';
 import { StorageService } from '../storage/storage.service';
 
 /** Las matrículas en espera las atiende su propio servicio, que tiene sus propias pruebas. */
-const waitingEnrollments = { attendAllWaiting: async () => 0 };
+const waitingRequests = { attendAll: async () => 0 };
+const webhooks = { deliverPending: async () => 0 };
 
 /**
  * Ninguna tarea programada borra archivos.
@@ -81,6 +82,7 @@ describe('MaintenanceService — ninguna tarea borra archivos ni información de
       'attendWaitingEnrollments',
       'cleanHiddenMessages',
       'cleanTemporaryData',
+      'notifyIntegrations',
       'reconcileCompletedResources',
       'sendInactivityReminders',
       'unlockLongWaits',
@@ -113,7 +115,8 @@ describe('MaintenanceService — ninguna tarea borra archivos ni información de
       base as never,
       notifications as never,
       mail as never,
-      waitingEnrollments as never,
+      waitingRequests as never,
+      webhooks as never,
     );
     const failures = jest.spyOn(service['logger'], 'error').mockImplementation(() => undefined);
     jest.spyOn(service['logger'], 'log').mockImplementation(() => undefined);
@@ -265,7 +268,8 @@ describe('MaintenanceService — desbloqueo por espera', () => {
       base as never,
       notifications as never,
       {} as never,
-      waitingEnrollments as never,
+      waitingRequests as never,
+      webhooks as never,
     );
     jest.spyOn(service['logger'], 'log').mockImplementation(() => undefined);
     return service;
@@ -429,7 +433,8 @@ describe('MaintenanceService — recordatorio de inactividad', () => {
       base as never,
       notifications as never,
       mail as never,
-      waitingEnrollments as never,
+      waitingRequests as never,
+      webhooks as never,
     );
     jest.spyOn(service['logger'], 'log').mockImplementation(() => undefined);
     const warnings = jest.spyOn(service['logger'], 'warn').mockImplementation(() => undefined);

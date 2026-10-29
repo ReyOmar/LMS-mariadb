@@ -1,5 +1,7 @@
-import { UnauthorizedException } from '@nestjs/common';
+import { ExecutionContext, ForbiddenException, UnauthorizedException } from '@nestjs/common';
 import { JwtGuard } from './jwt.guard';
+import { IS_PUBLIC } from '../decorators/public.decorator';
+import { BEFORE_CONSENT } from '../decorators/before-consent.decorator';
 
 /**
  * Por qué se queda alguien fuera.
@@ -20,12 +22,15 @@ const ACCOUNT: {
   country: string;
   /** Nulo cuando se cerró la sesión o se cambió o restableció la contraseña. */
   currentSessionJti: string | null;
+  /** La versión de la política de datos que aceptó; nula si ninguna. */
+  dataConsentVersion: string | null;
 } = {
   guid: 'ana',
   email: 'ana@pesv.test',
   role: 'STUDENT',
   country: 'COLOMBIA',
   currentSessionJti: 'sesion-actual',
+  dataConsentVersion: 'politica-vigente',
 };
 
 const TOKEN = { sub: 'ana', jti: 'sesion-actual', iat: 1_700_000_000 };
@@ -33,9 +38,11 @@ const TOKEN = { sub: 'ana', jti: 'sesion-actual', iat: 1_700_000_000 };
 interface Scenario {
   account?: Partial<typeof ACCOUNT> | null;
   token?: Partial<typeof TOKEN>;
+  /** Cómo está marcada la ruta: `@Public()` o `@BeforeConsent()`. */
+  route?: Record<string, boolean>;
 }
 
-function createGuard({ account = {}, token = {} }: Scenario) {
+function createGuard({ account = {}, token = {}, route = {} }: Scenario) {
   const payload = { ...TOKEN, ...token };
   const prisma = {
     user: {
@@ -45,7 +52,26 @@ function createGuard({ account = {}, token = {} }: Scenario) {
     },
   };
 
-  return new JwtGuard({ verifyAsync: async () => payload } as never, {} as never, prisma as never);
+  const reflector = { getAllAndOverride: (key: string) => route[key] };
+  const settings = { legalVersion: async () => 'politica-vigente' };
+
+  return new JwtGuard(
+    { verifyAsync: async () => payload } as never,
+    reflector as never,
+    prisma as never,
+    settings as never,
+  );
+}
+
+/** Una petición con token a una ruta marcada como indique el escenario. */
+function admits(scenario: Scenario): Promise<boolean> {
+  const request = { headers: { authorization: 'Bearer token' } };
+  const context = {
+    getHandler: () => undefined,
+    getClass: () => undefined,
+    switchToHttp: () => ({ getRequest: () => request }),
+  };
+  return createGuard(scenario).canActivate(context as unknown as ExecutionContext);
 }
 
 /** Ejecuta la resolución y devuelve el mensaje del rechazo, o `null` si pasó. */
@@ -95,5 +121,30 @@ describe('JwtGuard · por qué se corta una sesión', () => {
 
   it('la cuenta borrada manda sobre cualquier otro motivo', async () => {
     expect(await rejectionReason({ account: null, token: { jti: 'sesion-vieja' } })).toContain('ya no existe');
+  });
+});
+
+/**
+ * Sin aceptar la política de tratamiento de datos vigente en su sede no se usa el campus. La
+ * pantalla lo pide antes que nada; la API no deja saltárselo llamándola directamente.
+ */
+describe('JwtGuard · política de tratamiento de datos', () => {
+  it('con la política vigente aceptada, pasa', async () => {
+    await expect(admits({})).resolves.toBe(true);
+  });
+
+  it('sin aceptarla, o si aceptó una que ya cambió, la API no deja usar el campus', async () => {
+    for (const dataConsentVersion of [null, 'politica-anterior']) {
+      await expect(admits({ account: { dataConsentVersion } })).rejects.toThrow(
+        new ForbiddenException('Para usar el campus tienes que aceptar la política de tratamiento de datos.'),
+      );
+    }
+  });
+
+  it('lo necesario para aceptarla o salir sí se puede antes, como las rutas públicas', async () => {
+    await expect(admits({ account: { dataConsentVersion: null }, route: { [BEFORE_CONSENT]: true } })).resolves.toBe(
+      true,
+    );
+    await expect(admits({ account: { dataConsentVersion: null }, route: { [IS_PUBLIC]: true } })).resolves.toBe(true);
   });
 });

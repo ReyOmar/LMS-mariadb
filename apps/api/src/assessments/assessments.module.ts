@@ -1,6 +1,8 @@
 import { Module } from '@nestjs/common';
 import { AssessmentsController } from './assessments.controller';
-import { AssessmentsService } from './assessments.service';
+import { SubmissionsService } from './submissions.service';
+import { ExaminerPanelsService } from './examiner-panels.service';
+import { GradingService } from './grading.service';
 import { CoursesModule } from '../courses/courses.module';
 import { StorageModule } from '../storage/storage.module';
 import { SettingsModule } from '../settings/settings.module';
@@ -8,6 +10,6 @@ import { SettingsModule } from '../settings/settings.module';
 @Module({
   imports: [CoursesModule, StorageModule, SettingsModule],
   controllers: [AssessmentsController],
-  providers: [AssessmentsService],
+  providers: [SubmissionsService, ExaminerPanelsService, GradingService],
 })
 export class AssessmentsModule {}

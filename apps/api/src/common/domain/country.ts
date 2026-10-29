@@ -51,20 +51,16 @@ export const COUNTRY_METADATA: Readonly<Record<Country, CountryMetadata>> = {
   },
 };
 
-/** Comprueba si un valor arbitrario es un país válido. */
-export function isCountry(value: unknown): value is Country {
-  return typeof value === 'string' && (COUNTRIES as readonly string[]).includes(value);
-}
-
 /**
  * Convierte una entrada externa en un país válido, o `null` si no lo es.
- * Acepta el código en cualquier capitalización para tolerar query params escritos a mano,
- * pero no adivina: una entrada desconocida devuelve `null` y quien llama decide qué hacer.
+ * Acepta el código, el nombre con o sin tildes y el código ISO, en cualquier capitalización
+ * —`MEXICO`, «México», `mx`—, para tolerar parámetros escritos a mano y lo que envían otros
+ * sistemas, pero no adivina: una entrada desconocida devuelve `null` y quien llama decide qué hacer.
  */
 export function normalizeCountry(value: unknown): Country | null {
   if (typeof value !== 'string') return null;
-  const candidate = value.trim().toUpperCase();
-  return isCountry(candidate) ? candidate : null;
+  const candidate = value.trim().normalize('NFD').replace(/\p{M}/gu, '').toUpperCase();
+  return COUNTRIES.find((country) => country === candidate || COUNTRY_METADATA[country].iso === candidate) ?? null;
 }
 
 /** Nombre legible del país, para mensajes de error y correos. */

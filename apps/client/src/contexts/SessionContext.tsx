@@ -4,7 +4,7 @@ import React, { ReactNode, createContext, useCallback, useContext, useEffect, us
 import api, { clearSession, isNetworkFailure, saveSession, readStoredUser, readToken, sendKeepalive } from '@/lib/api';
 import { Country } from '@/lib/country';
 import type { UserRole } from '@/types/models';
-import { PageLoader } from '@/components/ui/PageLoader';
+import { FullScreenLoader } from '@/components/ui/PageLoader';
 
 /** Roles tal como los nombra la interfaz. */
 export type Role = 'admin' | 'teacher' | 'student';
@@ -128,13 +128,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     [user, ready, login, logout, refreshUser],
   );
 
-  if (loggingOut) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-muted/20">
-        <PageLoader message="Cerrando sesión…" />
-      </div>
-    );
-  }
+  if (loggingOut) return <FullScreenLoader message="Cerrando sesión…" />;
 
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;
 }

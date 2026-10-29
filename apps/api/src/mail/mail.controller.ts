@@ -1,5 +1,5 @@
 import { Body, Controller, Get, Param, ParseIntPipe, Put } from '@nestjs/common';
-import { MailService } from './mail.service';
+import { MailTemplates } from './mail-templates';
 import { Roles } from '../common/decorators/roles.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { JwtPayload } from '../common/interfaces/jwt-payload.interface';
@@ -14,11 +14,11 @@ import { UpdateTemplateDto } from './dto/update-template.dto';
 @Roles('ADMIN')
 @Controller('email-templates')
 export class MailController {
-  constructor(private readonly mail: MailService) {}
+  constructor(private readonly templates: MailTemplates) {}
 
   @Get('/events')
   getEvents(@CurrentUser() user: JwtPayload) {
-    return this.mail.getEvents(user.country);
+    return this.templates.getEvents(user.country);
   }
 
   @Put('/:id')
@@ -27,6 +27,6 @@ export class MailController {
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: UpdateTemplateDto,
   ) {
-    return this.mail.updateTemplate(id, user.country, dto);
+    return this.templates.updateTemplate(id, user.country, dto);
   }
 }

@@ -7,7 +7,7 @@ import { statusReport, StoredRequest, waitingReasonFor } from './external-status
 describe('estado de una matrícula pedida por otro sistema', () => {
   const request = (fields: Partial<StoredRequest> = {}): StoredRequest => ({
     status: 'ENROLLED',
-    courseCode: 'MANEJO',
+    infraction: { code: 'C29' },
     rejectionReason: null,
     userGuid: 'ana',
     courseGuid: 'curso-1',
@@ -16,8 +16,8 @@ describe('estado de una matrícula pedida por otro sistema', () => {
   const facts = { waitingReason: null, enrollmentActive: true, courseTitle: 'Manejo defensivo', certificateCode: null };
 
   describe('por qué espera', () => {
-    it('sin curso con ese código, sin publicar o sin plaza', () => {
-      expect(waitingReasonFor(null)).toBe('COURSE_NOT_FOUND');
+    it('sin curso elegido para la infracción, sin publicar o sin plaza', () => {
+      expect(waitingReasonFor(null)).toBe('COURSE_NOT_ASSIGNED');
       expect(waitingReasonFor({ status: 'DRAFT', maxStudents: null, occupiedSeats: 0 })).toBe('COURSE_NOT_PUBLISHED');
       expect(waitingReasonFor({ status: 'PUBLISHED', maxStudents: 2, occupiedSeats: 2 })).toBe('COURSE_FULL');
     });
@@ -28,11 +28,13 @@ describe('estado de una matrícula pedida por otro sistema', () => {
     });
   });
 
-  it('en espera dice por qué, con el código pedido', () => {
-    const report = statusReport(request({ status: 'WAITING' }), { ...facts, waitingReason: 'COURSE_NOT_FOUND' });
+  it('en espera dice por qué, con la infracción', () => {
+    const report = statusReport(request({ status: 'WAITING' }), { ...facts, waitingReason: 'COURSE_NOT_ASSIGNED' });
 
-    expect(report).toMatchObject({ status: 'WAITING', waitingReason: 'COURSE_NOT_FOUND' });
-    expect(report.detail).toContain('MANEJO');
+    expect(report).toMatchObject({ status: 'WAITING', waitingReason: 'COURSE_NOT_ASSIGNED' });
+    expect(report.detail).toBe(
+      'En espera por la infracción C29: todavía no se ha elegido el curso que la atiende. La persona quedará matriculada en cuanto se resuelva.',
+    );
   });
 
   it('matriculada sólo mientras la matrícula sigue activa', () => {

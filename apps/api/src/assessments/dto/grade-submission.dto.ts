@@ -11,7 +11,7 @@ export class GradeSubmissionDto {
   @IsOptional()
   @IsString()
   @MaxLength(2000, { message: 'El comentario no puede superar los 2000 caracteres.' })
-  feedback?: string;
+  feedback?: string | null;
 
   /**
    * Cuándo se envió la versión que el examinador revisó. Mientras no está calificada, el alumno

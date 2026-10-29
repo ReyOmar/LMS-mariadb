@@ -14,7 +14,7 @@ import { UpdateSettingsDto } from './settings/dto/update-settings.dto';
 import { UpdateCertificateSettingsDto } from './settings/dto/update-certificate-settings.dto';
 import { UpdateSignatureDto } from './settings/dto/update-signature.dto';
 import { ExternalEnrollmentDto } from './integrations/dto/external-enrollment.dto';
-import { CreateIntegrationClientDto } from './integrations/dto/integration-client.dto';
+import { CreateIntegrationClientDto } from './integrations/dto/integration-admin.dto';
 import { maxLengthOf } from './common/testing/validation-metadata';
 import { EMAIL_TEMPLATES } from '../prisma/email-templates';
 
@@ -100,8 +100,8 @@ const COLUMNS: Column[] = [
   // Cada versión publicada de los textos legales guarda una copia de los de la sede.
   [UpdateSettingsDto, LEGAL, 'LegalVersion'],
   [UpdateCertificateSettingsDto, ['certCustomTitle', 'certSubtitle', 'certLegalText'], 'CountrySettings'],
-  [UpdateCourseDto, ['integrationCode'], 'Course'],
-  [ExternalEnrollmentDto, ['externalId', 'courseCode', 'email', 'firstName', 'lastName'], 'ExternalEnrollment'],
+  [ExternalEnrollmentDto, ['externalId', 'email', 'firstName', 'lastName'], 'ExternalEnrollment'],
+  [ExternalEnrollmentDto, ['infractionCode', 'infractionDescription'], 'Infraction', ['code', 'description']],
   [CreateIntegrationClientDto, ['name'], 'IntegrationClient'],
 ];
 

@@ -20,9 +20,11 @@ apps/api/uploads/
 *.log
 .DS_Store
 
-# Editores
+# Editores y asistentes de código: sus ajustes y skills son de cada equipo, no del proyecto
 .vscode/
 .idea/
+.claude/
+.agents/
 
 # Paquetes para cPanel (npm run package:cpanel)
 despliegue/

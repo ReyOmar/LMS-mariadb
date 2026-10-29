@@ -5,5 +5,5 @@ export class RejectAccessRequestDto {
   @IsOptional()
   @IsString()
   @MaxLength(500, { message: 'El motivo no puede exceder 500 caracteres.' })
-  reason?: string;
+  reason?: string | null;
 }

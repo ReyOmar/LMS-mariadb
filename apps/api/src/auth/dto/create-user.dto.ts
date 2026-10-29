@@ -1,7 +1,7 @@
-import { IsIn, IsNotEmpty, IsString, MaxLength } from 'class-validator';
-import { Trim } from '../../common/validation/transforms';
+import { IsIn } from 'class-validator';
 import { ROLES, UserRole } from '../../common/interfaces/jwt-payload.interface';
 import { AccountEmail } from '../../common/validation/account-email';
+import { PersonName } from '../../common/validation/person-name';
 
 /**
  * Alta directa de una cuenta por un administrador.
@@ -10,16 +10,10 @@ import { AccountEmail } from '../../common/validation/account-email';
  * recibe la persona por correo.
  */
 export class CreateUserDto {
-  @IsString()
-  @IsNotEmpty({ message: 'El nombre es obligatorio.' })
-  @MaxLength(100)
-  @Trim()
+  @PersonName()
   firstName: string;
 
-  @IsString()
-  @IsNotEmpty({ message: 'El apellido es obligatorio.' })
-  @MaxLength(100)
-  @Trim()
+  @PersonName()
   lastName: string;
 
   @AccountEmail()

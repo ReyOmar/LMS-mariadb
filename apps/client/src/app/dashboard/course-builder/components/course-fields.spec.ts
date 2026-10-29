@@ -1,10 +1,4 @@
-import {
-  isFieldError,
-  parseCapacity,
-  parseDurationHours,
-  parseIntegrationCode,
-  parsePassingScore,
-} from './course-fields';
+import { isFieldError, parseCapacity, parseDurationHours, parsePassingScore } from './course-fields';
 
 describe('parseCapacity', () => {
   it('vacío deja el curso sin límite', () => {
@@ -51,21 +45,5 @@ describe('parseDurationHours', () => {
   it('no deja pasar más horas de las que admite la API', () => {
     expect(parseDurationHours('1000')).toEqual({ durationHours: 1000 });
     expect(parseDurationHours('1500')).toHaveProperty('error');
-  });
-});
-
-describe('parseIntegrationCode', () => {
-  it('se guarda en mayúsculas y sin espacios en los extremos', () => {
-    expect(parseIntegrationCode('  manejo-defensivo ')).toEqual({ integrationCode: 'MANEJO-DEFENSIVO' });
-  });
-
-  it('vacío quita el código', () => {
-    expect(parseIntegrationCode('   ')).toEqual({ integrationCode: null });
-  });
-
-  it('rechaza lo que la API no admitiría: tildes, espacios, guiones sueltos o demasiado largo', () => {
-    for (const typed of ['manejo defensivo', 'CAMIÓN', '-MANEJO', 'MANEJO--1', 'A'.repeat(51)]) {
-      expect(isFieldError(parseIntegrationCode(typed))).toBe(true);
-    }
   });
 });

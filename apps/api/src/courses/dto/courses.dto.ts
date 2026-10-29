@@ -16,7 +16,7 @@ import { Transform } from 'class-transformer';
 import { StrictBoolean } from '../../common/validation/transforms';
 import { MAX_SCORE, MIN_SCORE } from '../../common/domain/grading';
 import { IsStorageKey } from '../../storage/storage-key.validator';
-import { CourseCode } from '../../common/validation/course-code';
+import { Omittable } from '../../common/validation/omittable';
 
 /**
  * Los estados que se le pueden dar a un curso. La base admite además ARCHIVED, sólo para leer
@@ -42,7 +42,7 @@ export class CreateCourseDto {
   title: string;
 
   /** Responsable del curso. Si se omite, queda a nombre de quien lo crea. */
-  @IsOptional()
+  @Omittable()
   @IsString()
   teacherGuid?: string;
 }
@@ -54,15 +54,15 @@ export class AssignCourseDto {
 }
 
 export class UpdateCourseDto {
-  @IsOptional()
+  @Omittable()
   @IsString()
   @IsNotEmpty({ message: 'El título no puede quedar vacío.' })
   @MaxLength(MAX_TITLE_LENGTH)
   @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   title?: string;
 
-  @IsOptional() @IsString() @MaxLength(5000) description?: string;
-  @IsOptional() @IsString() @MaxLength(191) shortDescription?: string;
+  @IsOptional() @IsString() @MaxLength(5000) description?: string | null;
+  @IsOptional() @IsString() @MaxLength(191) shortDescription?: string | null;
 
   /** Clave de la portada en el almacenamiento; `null` la quita. */
   @IsOptional()
@@ -71,11 +71,11 @@ export class UpdateCourseDto {
   @IsStorageKey(['portadas'], { message: 'La portada no es un archivo válido.' })
   coverImage?: string | null;
 
-  @IsOptional()
+  @Omittable()
   @IsIn(STATUSES, { message: `El estado debe ser uno de: ${STATUSES.join(', ')}.` })
   status?: CourseStatus;
 
-  @IsOptional()
+  @Omittable()
   @IsIn(LEVELS, { message: `El nivel debe ser uno de: ${LEVELS.join(', ')}.` })
   level?: CourseLevel;
 
@@ -90,27 +90,19 @@ export class UpdateCourseDto {
   durationHours?: number | null;
 
   /** Nota mínima para aprobar, en la escala 0–100 del sistema. */
-  @IsOptional()
+  @Omittable()
   @IsNumber({}, { message: 'La nota de aprobación debe ser un número.' })
   @Min(MIN_SCORE, { message: `La nota de aprobación no puede ser menor que ${MIN_SCORE}.` })
   @Max(MAX_SCORE, { message: `La nota de aprobación no puede ser mayor que ${MAX_SCORE}.` })
   passingScore?: number;
 
-  @IsOptional() @StrictBoolean() @IsBoolean() strictOrder?: boolean;
+  @Omittable() @StrictBoolean() @IsBoolean() strictOrder?: boolean;
 
   /** Alumnos matriculados a la vez como mucho; `null` lo deja sin límite. */
   @IsOptional()
   @IsInt({ message: 'El cupo debe ser un número entero de estudiantes.' })
   @Min(1, { message: 'El cupo debe ser al menos 1.' })
   maxStudents?: number | null;
-
-  /**
-   * Código con el que otros sistemas piden matricular en este curso, como `MANEJO-DEFENSIVO`
-   * (ver `ExternalEnrollmentsService`). Sólo lo cambia un administrador; `null` lo quita.
-   */
-  @IsOptional()
-  @CourseCode()
-  integrationCode?: string | null;
 }
 
 export class CreateModuleDto {
@@ -122,14 +114,14 @@ export class CreateModuleDto {
 }
 
 export class UpdateModuleDto {
-  @IsOptional()
+  @Omittable()
   @IsString()
   @IsNotEmpty({ message: 'El título no puede quedar vacío.' })
   @MaxLength(MAX_TITLE_LENGTH)
   @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   title?: string;
 
-  @IsOptional() @IsString() @MaxLength(191) description?: string;
+  @IsOptional() @IsString() @MaxLength(191) description?: string | null;
 }
 
 export class ReorderDto {

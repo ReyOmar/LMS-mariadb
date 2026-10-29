@@ -1,166 +1,131 @@
-import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
-import type { Writable } from 'stream';
+import { Injectable, OnModuleDestroy } from '@nestjs/common';
 import { Country } from '../common/domain/country';
 import { JwtPayload, UserRole } from '../common/interfaces/jwt-payload.interface';
 import { EventDestination, EventName, EventMessage } from './events';
 
 /**
- * Intervalo del comentario de mantenimiento del flujo. Apache y los proxies intermedios
- * cierran conexiones inactivas; un `:ping` periódico las mantiene vivas y detecta de
- * inmediato los clientes que ya no están.
+ * Cuánto se guarda cada evento: de sobra para la espera más larga entre dos consultas de una
+ * pestaña, incluso en segundo plano. Quien tarde más recibe `reset` y vuelve a pedir sus datos.
  */
-const HEARTBEAT_INTERVAL_MS = 25_000;
+const RETENTION_MS = 3 * 60 * 1000;
 
-/** Conexiones simultáneas permitidas por usuario (pestañas abiertas). */
-const MAX_CONNECTIONS_PER_USER = 5;
+/** Tope de eventos guardados, por si una ráfaga llegara antes de que caduquen. */
+const MAX_LOGGED_EVENTS = 10_000;
 
 /**
- * Lo que se deja acumulado para un cliente que no lee (equipo suspendido, red caída sin
- * aviso) antes de cortarle el flujo. Sin tope crecería en memoria sin límite; al reconectar,
- * el cliente recupera el estado y vuelve a pedir sus datos.
+ * Sin preguntar en este tiempo, alguien deja de estar en línea. Holgado frente a la espera de
+ * una pestaña en segundo plano (30 s), que el navegador puede alargar hasta un minuto.
  */
-const MAX_UNSENT_BYTES = 1024 * 1024;
+const PRESENCE_TIMEOUT_MS = 90_000;
 
-interface Connection {
-  readonly id: number;
-  readonly guid: string;
-  readonly country: Country;
-  readonly role: UserRole;
-  readonly res: Writable;
+/** Cada cuánto se repasa quién dejó de preguntar y se descartan los eventos caducados. */
+const SWEEP_INTERVAL_MS = 15_000;
+
+/** Lo que recibe el navegador en cada consulta. */
+export interface EventBatch {
+  /** Hasta dónde llega esta respuesta: la consulta siguiente lo envía en `after`. */
+  cursor: number;
+  /**
+   * Si pudo perderse algún evento desde la consulta anterior —el proceso se reinició o pasó
+   * demasiado tiempo—: llega el estado de ahora y el navegador vuelve a pedir sus datos.
+   */
+  reset: boolean;
+  events: EventMessage[];
+}
+
+interface LoggedEvent {
+  seq: number;
+  target: EventDestination;
+  message: EventMessage;
+}
+
+/** Quien ha preguntado hace poco: está en línea, y a quien se le reparten los eventos. */
+interface Visitor {
+  guid: string;
+  country: Country;
+  role: UserRole;
+  seenAt: number;
 }
 
 /**
- * Tiempo real del LMS sobre Server-Sent Events.
+ * Tiempo real del LMS: cada navegador pregunta cada pocos segundos qué ha pasado desde su última
+ * consulta, y el servidor guarda los eventos recientes para contestarle.
  *
- * Se usa SSE y no WebSocket porque el despliegue vive en cPanel, donde Apache no propaga
- * la cabecera `Upgrade`. SSE es HTTP/1.1 corriente: atraviesa cualquier proxy inverso sin
- * configuración especial y trae reconexión en el propio protocolo.
+ * No hay conexiones abiertas, a propósito. En cPanel, Apache no propaga los WebSockets, y con
+ * CloudLinux cada petición en curso ocupa uno de los «procesos de entrada» de la cuenta (unos 20):
+ * un flujo que se mantiene abierto (Server-Sent Events, *long polling*) ocupa uno por pestaña, y
+ * con veinte pestañas abiertas Apache respondería 508 a todo el campus. Una consulta dura
+ * milisegundos, así que cientos de personas caben de sobra.
  *
- * El flujo es unidireccional (servidor → navegador); lo que va en sentido contrario, como
- * el aviso de edición de un curso, son peticiones HTTP normales.
- *
- * Todo envío exige un destino con país, y todo estado que se reparte —presencia y cursos
- * en edición— se filtra por país: nada cruza entre sedes.
+ * Todo envío exige un destino con país, y todo estado que se reparte —presencia y cursos en
+ * edición— se filtra por país: nada cruza entre sedes.
  */
 @Injectable()
 export class RealtimeService implements OnModuleDestroy {
-  private readonly logger = new Logger(RealtimeService.name);
-  private readonly connections = new Map<number, Connection>();
-  private readonly heartbeat: ReturnType<typeof setInterval>;
-  private nextId = 1;
+  private readonly log: LoggedEvent[] = [];
+  /**
+   * Número del último evento. Empieza en el instante de arranque, así que un navegador que
+   * pregunta con la marca de un proceso anterior siempre queda por detrás y recibe `reset`.
+   */
+  private lastSeq = Date.now();
+  /** Los eventos hasta este número ya no se guardan: quien no los haya visto, recibe `reset`. */
+  private discardedUpTo = this.lastSeq;
+  private readonly visitors = new Map<string, Visitor>();
+  private readonly sweeper: ReturnType<typeof setInterval>;
 
   /**
-   * courseGuid → quién lo está editando. Sólo tiene entradas de editores conectados: se
-   * vacía al liberar el aviso o al cerrarse el último flujo de quien lo tenía.
+   * courseGuid → quién lo está editando. Sólo tiene entradas de editores en línea: se vacía al
+   * liberar el aviso o al dejar de estarlo quien lo tenía.
    */
   private readonly editsByCourse = new Map<string, CourseEdit>();
 
   constructor() {
-    this.heartbeat = setInterval(() => this.emitHeartbeat(), HEARTBEAT_INTERVAL_MS);
-    this.heartbeat.unref?.();
+    this.sweeper = setInterval(() => this.sweep(), SWEEP_INTERVAL_MS);
+    this.sweeper.unref?.();
   }
 
   onModuleDestroy(): void {
-    clearInterval(this.heartbeat);
-    for (const connection of this.connections.values()) {
-      this.close(connection);
-    }
-    this.connections.clear();
+    clearInterval(this.sweeper);
   }
 
-  // ── Ciclo de vida de una conexión ────────────────────────────────────────
+  // ── Consulta ─────────────────────────────────────────────────────────────
 
   /**
-   * Da de alta un flujo SSE ya preparado por el controlador.
-   * @returns Función para darlo de baja, que el controlador invoca al cerrarse la conexión.
+   * Los eventos posteriores a `after` que le tocan a quien pregunta, que con ello queda en línea.
+   * Sin `after` —la primera consulta— o si se perdió algo, el estado de ahora: quién está en línea
+   * y cuáles de sus cursos se están editando.
    */
-  register(user: JwtPayload, res: Writable): () => void {
-    this.limitConnectionsFor(user.sub);
-
-    const connection: Connection = {
-      id: this.nextId++,
-      guid: user.sub,
-      country: user.country,
-      role: user.role,
-      res,
+  poll(user: JwtPayload, after: number | null): EventBatch {
+    const visitor = this.markSeen(user);
+    const cursor = this.lastSeq;
+    if (after !== null && after >= this.discardedUpTo && after <= cursor) {
+      return { cursor, reset: false, events: this.eventsAfter(after, visitor) };
+    }
+    const now = Date.now();
+    return {
+      cursor,
+      reset: after !== null,
+      events: [
+        { event: 'presence:sync', data: { onlineUsers: this.onlineUsers(user.country) }, ts: now },
+        { event: 'course:editing-sync', data: this.editorsFor(visitor), ts: now },
+      ],
     };
-    this.connections.set(connection.id, connection);
+  }
 
-    // Estado inicial: quién está en línea y cuáles de sus cursos están siendo editados.
-    this.sendTo(connection, {
-      event: 'presence:sync',
-      data: { onlineUsers: this.onlineUsers(user.country) },
-      ts: Date.now(),
-    });
-    this.sendTo(connection, {
-      event: 'course:editing-sync',
-      data: this.editorsFor(connection),
-      ts: Date.now(),
-    });
-
-    const wasFirstConnection = this.connectionsOf(user.sub).length === 1;
-    if (wasFirstConnection) {
-      this.announcePresence(user.country, user.sub, 'online');
+  private eventsAfter(after: number, visitor: Visitor): EventMessage[] {
+    const events: EventMessage[] = [];
+    for (let i = this.log.length - 1; i >= 0 && this.log[i].seq > after; i--) {
+      if (reaches(visitor, this.log[i].target)) events.push(this.log[i].message);
     }
-
-    return () => this.removeConnection(connection);
-  }
-
-  private removeConnection(connection: Connection): void {
-    if (!this.connections.delete(connection.id)) return;
-
-    const stillConnected = this.connectionsOf(connection.guid).length > 0;
-    if (!stillConnected) {
-      this.releaseLocksHeldBy(connection.guid);
-      this.announcePresence(connection.country, connection.guid, 'offline');
-    }
-  }
-
-  /**
-   * Evita que una pestaña dejada abierta con recargas continuas acumule flujos muertos.
-   * Cierra las más antiguas cuando se supera el límite, avisándolas para que no vuelvan a
-   * conectarse solas: cada una echaría a otra y las pestañas se turnarían sin fin.
-   */
-  private limitConnectionsFor(guid: string): void {
-    const ownConnections = this.connectionsOf(guid);
-    if (ownConnections.length < MAX_CONNECTIONS_PER_USER) return;
-
-    const excess = ownConnections.slice(0, ownConnections.length - MAX_CONNECTIONS_PER_USER + 1);
-    for (const connection of excess) {
-      this.sendTo(connection, { event: 'stream:superseded', data: null, ts: Date.now() });
-      this.disconnect(connection);
-    }
-  }
-
-  /**
-   * Cierra un flujo desde el servidor. Pasa por `removeConnection` como un cierre del cliente,
-   * para que al irse la última conexión se anuncie la desconexión y se liberen sus avisos de
-   * edición: si no, la persona seguiría «en línea» y sus cursos «en edición» para siempre.
-   */
-  private disconnect(connection: Connection): void {
-    this.removeConnection(connection);
-    this.close(connection);
-  }
-
-  private connectionsOf(guid: string): Connection[] {
-    return [...this.connections.values()].filter((connection) => connection.guid === guid);
+    return events.reverse();
   }
 
   // ── Emisión ──────────────────────────────────────────────────────────────
 
-  /**
-   * Envía un evento al destino indicado.
-   *
-   * No lanza nunca: el tiempo real es accesorio y un fallo de red en un cliente no puede
-   * tumbar la operación de negocio que lo originó.
-   */
+  /** Guarda el evento para quienes pregunten. No lanza nunca: el tiempo real es accesorio. */
   private emit(event: EventName, data: unknown, target: EventDestination): void {
-    const message: EventMessage = { event, data, ts: Date.now() };
-    for (const connection of this.connections.values()) {
-      if (this.reaches(connection, target)) {
-        this.sendTo(connection, message);
-      }
-    }
+    this.log.push({ seq: ++this.lastSeq, target, message: { event, data, ts: Date.now() } });
+    if (this.log.length > MAX_LOGGED_EVENTS) this.discard(this.log.length - MAX_LOGGED_EVENTS);
   }
 
   /** Atajo para el caso más común: avisar a usuarios concretos de una sede. */
@@ -184,45 +149,43 @@ export class RealtimeService implements OnModuleDestroy {
     this.emit(event, data, { type: 'country', country });
   }
 
-  private reaches(connection: Connection, target: EventDestination): boolean {
-    if (connection.country !== target.country) return false;
-    switch (target.type) {
-      case 'users':
-        return target.guids.includes(connection.guid);
-      case 'role':
-        return connection.role === target.role;
-      case 'country':
-        return true;
-      case 'staff':
-        return connection.role === 'ADMIN' || target.guids.includes(connection.guid);
-    }
-  }
-
   // ── Sesión ───────────────────────────────────────────────────────────────
 
   /**
-   * Avisa al usuario de que su sesión dejó de ser válida y cierra sus flujos.
-   * El navegador reacciona limpiando el almacenamiento y volviendo al login.
+   * Avisa al usuario de que su sesión dejó de ser válida, y deja de contarlo en línea. El
+   * navegador vuelve al login con el motivo, que también recibe si su token ya no sirve: se lo
+   * dice la respuesta 401 a su consulta.
    */
   revokeSession(guid: string, reason: RevocationReason): void {
-    for (const connection of this.connectionsOf(guid)) {
-      this.sendTo(connection, { event: 'session:revoked', data: { reason }, ts: Date.now() });
-      this.disconnect(connection);
-    }
+    const visitor = this.visitors.get(guid);
+    if (!visitor) return;
+    this.emit('session:revoked', { reason }, { type: 'users', country: visitor.country, guids: [guid] });
+    this.leave(visitor);
   }
 
   // ── Presencia ────────────────────────────────────────────────────────────
 
-  /** GUID de los usuarios con al menos un flujo abierto en la sede indicada. */
-  private onlineUsers(country: Country): string[] {
-    const guids = new Set<string>();
-    for (const connection of this.connections.values()) {
-      if (connection.country === country) guids.add(connection.guid);
-    }
-    return [...guids];
+  private markSeen({ sub: guid, country, role }: JwtPayload): Visitor {
+    const isNew = !this.visitors.has(guid);
+    const visitor = { guid, country, role, seenAt: Date.now() };
+    this.visitors.set(guid, visitor);
+    if (isNew) this.announcePresence(country, guid, 'online');
+    return visitor;
   }
 
-  /** Sólo el cambio: la lista completa llega una vez, en `presence:sync`, al conectar. */
+  /** Deja de estar en línea: se anuncia y se liberan sus avisos de edición. */
+  private leave(visitor: Visitor): void {
+    this.visitors.delete(visitor.guid);
+    this.releaseLocksHeldBy(visitor.guid);
+    this.announcePresence(visitor.country, visitor.guid, 'offline');
+  }
+
+  /** GUID de los usuarios en línea en la sede indicada. */
+  private onlineUsers(country: Country): string[] {
+    return [...this.visitors.values()].filter((visitor) => visitor.country === country).map(({ guid }) => guid);
+  }
+
+  /** Sólo el cambio: la lista completa llega en `presence:sync`, con la primera consulta. */
   private announcePresence(country: Country, guid: string, status: 'online' | 'offline'): void {
     this.emitToCountry('presence:update', { guid, status }, country);
   }
@@ -262,49 +225,47 @@ export class RealtimeService implements OnModuleDestroy {
     this.emitToCourseStaff('course:editing-released', { courseGuid }, editor.country, teacherGuid);
   }
 
-  /** Cursos en edición que gestiona quien se conecta, como `courseGuid → editor`. */
-  private editorsFor(connection: Connection): Record<string, CourseEditor> {
+  /** Cursos en edición que gestiona quien pregunta, como `courseGuid → editor`. */
+  private editorsFor(visitor: Visitor): Record<string, CourseEditor> {
     return Object.fromEntries(
       [...this.editsByCourse]
         .filter(([, { editor, teacherGuid }]) =>
-          this.reaches(connection, { type: 'staff', country: editor.country, guids: [teacherGuid] }),
+          reaches(visitor, { type: 'staff', country: editor.country, guids: [teacherGuid] }),
         )
         .map(([courseGuid, { editor }]) => [courseGuid, editor]),
     );
   }
 
-  // ── Escritura en el flujo ────────────────────────────────────────────────
+  // ── Mantenimiento ────────────────────────────────────────────────────────
 
-  private sendTo(connection: Connection, message: EventMessage): void {
-    this.write(connection, `event: ${message.event}\ndata: ${JSON.stringify(message)}\n\n`);
+  /** Da por ido a quien dejó de preguntar y descarta los eventos caducados. */
+  private sweep(): void {
+    const now = Date.now();
+    for (const visitor of this.visitors.values()) {
+      if (now - visitor.seenAt > PRESENCE_TIMEOUT_MS) this.leave(visitor);
+    }
+    const kept = this.log.findIndex(({ message }) => now - message.ts <= RETENTION_MS);
+    this.discard(kept === -1 ? this.log.length : kept);
   }
 
-  private emitHeartbeat(): void {
-    for (const connection of this.connections.values()) {
-      this.write(connection, ': ping\n\n');
-    }
+  /** Descarta los `count` eventos más antiguos. */
+  private discard(count: number): void {
+    if (count > 0) this.discardedUpTo = this.log.splice(0, count)[count - 1].seq;
   }
+}
 
-  private write(connection: Connection, chunk: string): void {
-    const { res } = connection;
-    if (res.writableEnded || res.writableLength > MAX_UNSENT_BYTES) {
-      this.disconnect(connection);
-      return;
-    }
-    try {
-      res.write(chunk);
-    } catch (error) {
-      this.logger.debug(`Flujo SSE de ${connection.guid} no escribible: ${(error as Error)?.message}`);
-      this.disconnect(connection);
-    }
-  }
-
-  private close(connection: Connection): void {
-    try {
-      connection.res.end();
-    } catch {
-      // El socket ya estaba cerrado por el cliente; no hay nada que hacer.
-    }
+/** Si un evento con ese destino le toca a quien pregunta. */
+function reaches(visitor: Visitor, target: EventDestination): boolean {
+  if (visitor.country !== target.country) return false;
+  switch (target.type) {
+    case 'users':
+      return target.guids.includes(visitor.guid);
+    case 'role':
+      return visitor.role === target.role;
+    case 'country':
+      return true;
+    case 'staff':
+      return visitor.role === 'ADMIN' || target.guids.includes(visitor.guid);
   }
 }
 

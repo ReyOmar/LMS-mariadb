@@ -59,6 +59,11 @@ const VARIABLES: Record<string, VariableData> = {
     example: 'https://plataforma.com/dashboard/examiner/grading',
     color: TONE.cyan,
   },
+  url_integraciones: {
+    label: 'Enlace a las integraciones',
+    example: 'https://plataforma.com/dashboard/admin/integrations',
+    color: TONE.cyan,
+  },
   examinerNombre: { label: 'Examinador', example: 'Prof. García', color: TONE.indigo },
   adminNombre: { label: 'Administrador', example: 'Administrador', color: TONE.amber },
   estudiante: { label: 'Estudiante', example: 'María López', color: TONE.blue },
@@ -72,6 +77,14 @@ const VARIABLES: Record<string, VariableData> = {
   quizTitulo: { label: 'Cuestionario', example: 'Cuestionario final', color: TONE.pink },
   moduloTitulo: { label: 'Módulo', example: 'Módulo 1', color: TONE.indigo },
   nota: { label: 'Nota', example: '65', color: TONE.red },
+  infraccion: {
+    label: 'Infracción',
+    example: 'C29 (Conducir a velocidad superior a la máxima permitida)',
+    color: TONE.orange,
+  },
+  personas: { label: 'Personas en espera', example: '3 personas', color: TONE.amber },
+  causa: { label: 'Qué falta', example: 'todavía no se ha elegido el curso que la atiende', color: TONE.slate },
+  solucion: { label: 'Cómo resolverlo', example: 'elige en Integraciones el curso que la atiende', color: TONE.slate },
 };
 
 export function variableData(variable: string): VariableData {

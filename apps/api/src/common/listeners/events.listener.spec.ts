@@ -236,7 +236,7 @@ describe('EventsListener · matrículas pedidas por otros sistemas', () => {
 
     await listener.onCourseOpened(opened);
 
-    expect(attendCourse).toHaveBeenCalledWith('curso-1');
+    expect(attendCourse).toHaveBeenCalledWith('curso-1', 'COLOMBIA');
   });
 
   it('un fallo al atenderlas se registra y no escapa: la publicación ya se guardó', async () => {

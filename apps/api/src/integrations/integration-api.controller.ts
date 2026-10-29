@@ -9,12 +9,12 @@ import { ExternalEnrollmentDto } from './dto/external-enrollment.dto';
  * `docs/integracion-openapi.yaml`): lo que cambie de forma incompatible va en una versión nueva.
  */
 @IntegrationAuth()
-@Controller('integration/v1/enrollment-requests')
+@Controller('integration/v1')
 export class IntegrationApiController {
   constructor(private readonly requests: ExternalEnrollmentsService) {}
 
   /** 201 si la solicitud es nueva; 200 si ya existía con ese identificador (un reintento). */
-  @Post()
+  @Post('enrollment-requests')
   async request(
     @Caller() caller: IntegrationCaller,
     @Body() dto: ExternalEnrollmentDto,
@@ -25,13 +25,13 @@ export class IntegrationApiController {
     return view;
   }
 
-  @Get(':externalId')
+  @Get('enrollment-requests/:externalId')
   status(@Caller() caller: IntegrationCaller, @Param('externalId') externalId: string) {
     return this.requests.status(externalId, caller);
   }
 
   /** Retira una solicitud que ya no hace falta, mientras espera. */
-  @Delete(':externalId')
+  @Delete('enrollment-requests/:externalId')
   withdraw(@Caller() caller: IntegrationCaller, @Param('externalId') externalId: string) {
     return this.requests.withdraw(externalId, caller);
   }

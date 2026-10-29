@@ -4,14 +4,20 @@ info:
   version: 1.0.0
   summary: Matrículas pedidas por otros sistemas, como el software PESV.
   description: |
-    Otro sistema pide que una persona haga un curso, identificado por un código acordado, y
-    consulta después si lo terminó. La guía completa, con el flujo y lo que debe construir el
-    sistema que llama, está en `docs/INTEGRACION.md`.
+    Otro sistema pide que una persona haga el curso de una infracción, y el campus le avisa de
+    cada cambio hasta que lo termina. No necesita conocer los cursos del campus: envía la sede, la
+    persona y la infracción, y el campus busca el curso por su título o lo elige un administrador
+    de la sede. La guía completa, con el flujo y lo que debe construir el sistema que llama, está
+    en `docs/INTEGRACION.md`.
 
-    - La clave de integración va en la cabecera `X-Api-Key` y determina la sede.
+    - La clave de integración va en la cabecera `X-Api-Key` y pertenece a una sede: cada solicitud
+      dice la suya (`country`), que tiene que ser la de la clave.
     - `POST` es idempotente por `externalId`: un reintento devuelve la solicitud existente.
     - `DELETE` retira una solicitud mientras espera (por ejemplo, si se anula la infracción).
-    - Los campos de las respuestas pueden crecer en esta versión: ignora los que no conozcas.
+    - Los avisos (`webhooks`) llegan firmados a la dirección que el administrador de la sede
+      configure para el sistema.
+    - Los campos de las respuestas y de los avisos pueden crecer en esta versión: ignora los que
+      no conozcas.
 servers:
   - url: https://api-lms.investigaciongipia.com/api/integration/v1
     description: Producción
@@ -19,6 +25,68 @@ servers:
     description: Desarrollo
 security:
   - apiKey: []
+webhooks:
+  enrollmentRequestUpdated:
+    post:
+      operationId: enrollmentRequestUpdated
+      summary: Aviso de un cambio en una solicitud
+      description: |
+        El campus lo envía a la dirección de avisos del sistema —https, configurada por el
+        administrador de la sede— en el minuto siguiente a cada cambio de `status`: matriculada,
+        terminada, dada de baja o rechazada. Lleva el estado de ese momento, no el cambio, y puede
+        llegar más de una vez con el mismo estado. El estado inicial no se avisa: ya lo dice la
+        respuesta al `POST`.
+      security: []
+      parameters:
+        - name: X-Lms-Signature
+          in: header
+          required: true
+          description: |
+            `t=<segundos>,v1=<firma>`: la firma es el HMAC-SHA256 en hexadecimal de `t`, un punto y
+            el cuerpo tal como llega, con el resumen SHA-256 en hexadecimal y minúsculas de la clave
+            de la sede como secreto. Rechaza el aviso si no coincide o si `t` tiene más de 5 minutos.
+          schema:
+            type: string
+            pattern: '^t=[0-9]+,v1=[0-9a-f]{64}$'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Notice'
+            examples:
+              completed:
+                summary: Completó el curso
+                value:
+                  event: enrollment-request.updated
+                  sentAt: '2026-11-02T21:16:00.000Z'
+                  request:
+                    id: 335fbb2d-16c5-4155-a6ad-e0fb4f3d2589
+                    externalId: INF-2026-000123
+                    status: COMPLETED
+                    waitingReason: null
+                    detail: La persona completó el curso. Certificado CERT-9F2A61C04B-MH8K2X1Q.
+                    country: CO
+                    infraction: { code: C29, description: Conducir a velocidad superior a la máxima permitida }
+                    person: { firstName: Laura, lastName: Gómez, email: laura.gomez@example.com }
+                    course:
+                      title: Manejo defensivo
+                      url: https://lms.investigaciongipia.com/courses/0d2e2599-30c4-4d7f-868c-6f33ead6f7e8
+                    requestedAt: '2026-10-27T13:02:11.087Z'
+                    enrolledAt: '2026-10-27T15:40:03.512Z'
+                    certificate:
+                      code: CERT-9F2A61C04B-MH8K2X1Q
+                      verificationUrl: https://lms.investigaciongipia.com/verify?code=CERT-9F2A61C04B-MH8K2X1Q
+                      issuedAt: '2026-11-02T21:15:47.000Z'
+                      validUntil: '2027-11-02T21:15:47.000Z'
+              ping:
+                summary: Aviso de prueba del panel
+                value:
+                  event: ping
+                  sentAt: '2026-10-28T16:00:00.000Z'
+      responses:
+        '2XX':
+          description: Recibido. Cualquier otra respuesta, una redirección o ninguna en 10 segundos hacen que se reintente cada 15 minutos hasta que llegue.
 tags:
   - name: Matrículas
 paths:
@@ -28,10 +96,11 @@ paths:
       operationId: requestEnrollment
       summary: Pedir que una persona haga un curso
       description: |
-        Si hay un curso publicado y con plaza que lleve `courseCode`, la persona queda
-        matriculada en el acto (se le crea la cuenta si no la tiene). Si no, la solicitud
-        espera y los administradores de la sede reciben un aviso; quedará matriculada sola en
-        cuanto el curso esté disponible.
+        La primera solicitud por una infracción la registra en la sede y le busca curso entre
+        los publicados, por su título. Si la infracción tiene un curso publicado y con plaza, la
+        persona queda matriculada en el acto (se le crea la cuenta si no la tiene). Si no, la
+        solicitud espera y los administradores de la sede reciben un aviso; quedará matriculada
+        sola en cuanto el curso esté disponible.
       requestBody:
         required: true
         content:
@@ -40,7 +109,9 @@ paths:
               $ref: '#/components/schemas/EnrollmentRequestInput'
             example:
               externalId: INF-2026-000123
-              courseCode: MANEJO-DEFENSIVO
+              country: CO
+              infractionCode: C29
+              infractionDescription: Conducir a velocidad superior a la máxima permitida
               firstName: Laura
               lastName: Gómez
               email: laura.gomez@example.com
@@ -57,7 +128,7 @@ paths:
                 enrolled:
                   $ref: '#/components/examples/Enrolled'
         '200':
-          description: Ya existía con ese `externalId`, la misma persona y el mismo curso. Se devuelve en su estado actual.
+          description: Ya existía con ese `externalId`, la misma persona y la misma infracción. Se devuelve en su estado actual.
           content:
             application/json:
               schema:
@@ -66,10 +137,22 @@ paths:
           $ref: '#/components/responses/InvalidData'
         '401':
           $ref: '#/components/responses/InvalidKey'
+        '403':
+          description: La sede de la solicitud (`country`) no es la de la clave. Enviarla con la clave de esa sede.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                statusCode: 403
+                error: Forbidden
+                message: 'La clave es de la sede de Colombia y la solicitud, de la de México: usa la clave de esa sede.'
+                timestamp: '2026-10-27T13:02:11.476Z'
+                requestId: 4b8e0c1d-2f3a-4e5b-9c6d-7e8f9a0b1c2d
         '409':
           description: |
-            El `externalId` ya se usó con otra persona u otro curso, o el correo pertenece a
-            una cuenta que no puede matricularse en la sede (examinador, administrador u otra
+            El `externalId` ya se usó con otra persona u otra infracción, o el correo pertenece
+            a una cuenta que no puede matricularse en la sede (examinador, administrador u otra
             sede). No reintentar.
           content:
             application/json:
@@ -78,7 +161,7 @@ paths:
               example:
                 statusCode: 409
                 error: Conflict
-                message: El identificador INF-2026-000123 ya se usó para otra solicitud (laura.gomez@example.com, MANEJO-DEFENSIVO). Cada solicitud necesita el suyo.
+                message: El identificador INF-2026-000123 ya se usó para otra solicitud (laura.gomez@example.com, infracción C29). Cada solicitud necesita el suyo.
                 timestamp: '2026-10-27T13:02:11.476Z'
                 requestId: 18134d3c-58d6-4b26-8640-9087cf0a9f8d
         '429':
@@ -188,7 +271,7 @@ components:
       type: apiKey
       in: header
       name: X-Api-Key
-      description: Clave emitida por un administrador de la sede en Administración → Integraciones. Se muestra una sola vez.
+      description: Clave emitida por un administrador de la sede en Administración → Integraciones. Se muestra una sola vez y sólo sirve en su sede.
   schemas:
     ExternalId:
       type: string
@@ -197,35 +280,50 @@ components:
       pattern: '^[A-Za-z0-9._:-]+$'
       description: Identificador de la solicitud en el sistema que la envía, como el número de la infracción. Único por solicitud, sin distinguir mayúsculas.
       examples: [INF-2026-000123]
-    CourseCode:
+    InfractionCode:
       type: string
-      maxLength: 50
-      pattern: '^[A-Za-z0-9]+(?:[-_.][A-Za-z0-9]+)*$'
-      description: Código acordado del curso. Se compara en mayúsculas.
-      examples: [MANEJO-DEFENSIVO]
+      minLength: 1
+      description: |
+        Código del tipo de infracción, como lo tenga el sistema que llama. Se guarda en
+        mayúsculas, sin tildes, espacios ni signos —`c.29`, `C-29` y `C29` son la misma
+        infracción—, con hasta 50 letras y cifras y al menos una.
+      examples: [C29, c.29]
     EnrollmentRequestInput:
       type: object
       additionalProperties: false
-      required: [externalId, courseCode, firstName, lastName, email]
+      required: [externalId, country, infractionCode, firstName, lastName, email]
       properties:
         externalId:
           $ref: '#/components/schemas/ExternalId'
-        courseCode:
-          $ref: '#/components/schemas/CourseCode'
+        country:
+          type: string
+          description: |
+            La sede de la persona: `CO` (Colombia) o `MX` (México). También vale su nombre, con o sin
+            tildes y en cualquier capitalización. Tiene que ser la sede de la clave.
+          examples: [CO, MX, Colombia, México]
+        infractionCode:
+          $ref: '#/components/schemas/InfractionCode'
+        infractionDescription:
+          type: [string, 'null']
+          maxLength: 255
+          description: Qué es la infracción. Opcional; con ella también se busca su curso, y es lo que lee el administrador si tiene que elegirlo.
         firstName:
-          type: string
-          minLength: 1
-          maxLength: 100
+          $ref: '#/components/schemas/PersonName'
         lastName:
-          type: string
-          minLength: 1
-          maxLength: 100
+          $ref: '#/components/schemas/PersonName'
         email:
           type: string
           format: email
           maxLength: 191
           pattern: '^[\x21-\x7e]+$'
           description: Con él entra la persona al campus. Sin espacios ni tildes; un dominio internacional, en su forma `xn--`.
+    PersonName:
+      type: string
+      minLength: 1
+      maxLength: 100
+      description: |
+        Sin espacios sobrantes. Si llega todo en mayúsculas o todo en minúsculas, se guarda con
+        iniciales mayúsculas (`GÓMEZ DE LA CRUZ` → `Gómez de la Cruz`).
     Status:
       type: string
       enum: [WAITING, ENROLLED, COMPLETED, CANCELLED, REJECTED]
@@ -234,15 +332,15 @@ components:
         - `ENROLLED`: matriculada; puede hacer el curso.
         - `COMPLETED`: aprobó el curso después de pedirse y tiene certificado. No cambia más.
         - `CANCELLED`: ya no está matriculada (baja, curso o cuenta eliminados). Vuelve a `ENROLLED` si un administrador la reactiva.
-        - `REJECTED`: no se atenderá (correo del personal o de otra sede, descartada por un administrador o retirada por el propio sistema). No cambia más.
+        - `REJECTED`: no se atenderá (correo del personal o de otra sede, descartada por un administrador de la sede o retirada por el propio sistema). No cambia más.
     WaitingReason:
       type: [string, 'null']
-      enum: [COURSE_NOT_FOUND, COURSE_NOT_PUBLISHED, COURSE_FULL, null]
+      enum: [COURSE_NOT_ASSIGNED, COURSE_NOT_PUBLISHED, COURSE_FULL, null]
       description: |
         Sólo con `WAITING`:
-        - `COURSE_NOT_FOUND`: ningún curso de la sede lleva el código.
-        - `COURSE_NOT_PUBLISHED`: el curso existe, pero no está publicado.
-        - `COURSE_FULL`: el curso no tiene plazas libres (quien ya lo está cursando no espera por esto).
+        - `COURSE_NOT_ASSIGNED`: la infracción todavía no tiene curso: ninguno publicado la nombra en su título y la sede no lo ha elegido.
+        - `COURSE_NOT_PUBLISHED`: su curso existe, pero no está publicado.
+        - `COURSE_FULL`: su curso no tiene plazas libres (quien ya lo está cursando no espera por esto).
         - `null`: ya se puede atender y se atiende antes de una hora.
     EnrollmentRequest:
       type: object
@@ -252,7 +350,8 @@ components:
         - status
         - waitingReason
         - detail
-        - courseCode
+        - country
+        - infraction
         - person
         - course
         - requestedAt
@@ -272,9 +371,21 @@ components:
         detail:
           type: string
           description: El estado en una frase en español, para mostrarla a una persona. No es para interpretarla.
-        courseCode:
+        country:
           type: string
-          description: El código pedido, en mayúsculas.
+          enum: [CO, MX]
+          description: La sede, en código ISO.
+        infraction:
+          type: object
+          required: [code, description]
+          description: La infracción por la que se pidió.
+          properties:
+            code:
+              type: string
+              description: Normalizado, como se guardó.
+            description:
+              type: [string, 'null']
+              description: La última descripción recibida; `null` si nunca llegó ninguna.
         person:
           type: object
           required: [firstName, lastName, email]
@@ -286,7 +397,7 @@ components:
             email:
               type: string
               format: email
-              description: En minúsculas.
+              description: En minúsculas. El nombre y el apellido, como se guardaron (ver `PersonName`).
         course:
           type: [object, 'null']
           description: El curso en el que quedó matriculada; `null` mientras espera.
@@ -323,6 +434,20 @@ components:
               type: [string, 'null']
               format: date-time
               description: Vencimiento; `null` si no vence.
+    Notice:
+      type: object
+      required: [event, sentAt]
+      properties:
+        event:
+          type: string
+          enum: [enrollment-request.updated, ping]
+          description: '`enrollment-request.updated` cuando cambia el estado de una solicitud; `ping` en el aviso de prueba del panel.'
+        sentAt:
+          type: string
+          format: date-time
+        request:
+          $ref: '#/components/schemas/EnrollmentRequest'
+          description: Sólo en `enrollment-request.updated`. La solicitud tal como la devolvería su consulta en ese momento.
     Error:
       type: object
       required: [statusCode, error, message, timestamp]
@@ -350,7 +475,7 @@ components:
           example:
             statusCode: 400
             error: Bad Request
-            message: El campo «sede» no está permitido. El nombre es obligatorio. El correo electrónico no es válido.
+            message: El campo «sede» no está permitido. El campo «nombre» es obligatorio. El correo electrónico no es válido.
             timestamp: '2026-10-27T13:02:11.484Z'
             requestId: 63f83db3-9b2f-43bb-acb7-907a431ade6f
     InvalidKey:
@@ -384,14 +509,15 @@ components:
             $ref: '#/components/schemas/Error'
   examples:
     Waiting:
-      summary: En espera de que exista el curso
+      summary: En espera de que la sede elija el curso de la infracción
       value:
         id: 335fbb2d-16c5-4155-a6ad-e0fb4f3d2589
         externalId: INF-2026-000123
         status: WAITING
-        waitingReason: COURSE_NOT_FOUND
-        detail: 'En espera: todavía no hay ningún curso con ese código (MANEJO-DEFENSIVO). La persona quedará matriculada en cuanto lo haya.'
-        courseCode: MANEJO-DEFENSIVO
+        waitingReason: COURSE_NOT_ASSIGNED
+        detail: 'En espera por la infracción C29: todavía no se ha elegido el curso que la atiende. La persona quedará matriculada en cuanto se resuelva.'
+        country: CO
+        infraction: { code: C29, description: Conducir a velocidad superior a la máxima permitida }
         person: { firstName: Laura, lastName: Gómez, email: laura.gomez@example.com }
         course: null
         requestedAt: '2026-10-27T13:02:11.087Z'
@@ -405,7 +531,8 @@ components:
         status: ENROLLED
         waitingReason: null
         detail: La persona está matriculada en «Manejo defensivo» y puede empezar cuando quiera.
-        courseCode: MANEJO-DEFENSIVO
+        country: CO
+        infraction: { code: C29, description: Conducir a velocidad superior a la máxima permitida }
         person: { firstName: Laura, lastName: Gómez, email: laura.gomez@example.com }
         course:
           title: Manejo defensivo
@@ -421,7 +548,8 @@ components:
         status: COMPLETED
         waitingReason: null
         detail: La persona completó el curso. Certificado CERT-9F2A61C04B-MH8K2X1Q.
-        courseCode: MANEJO-DEFENSIVO
+        country: CO
+        infraction: { code: C29, description: Conducir a velocidad superior a la máxima permitida }
         person: { firstName: Laura, lastName: Gómez, email: laura.gomez@example.com }
         course:
           title: Manejo defensivo
@@ -441,7 +569,8 @@ components:
         status: CANCELLED
         waitingReason: null
         detail: Un administrador dio de baja la matrícula.
-        courseCode: MANEJO-DEFENSIVO
+        country: CO
+        infraction: { code: C29, description: Conducir a velocidad superior a la máxima permitida }
         person: { firstName: Laura, lastName: Gómez, email: laura.gomez@example.com }
         course:
           title: Manejo defensivo
@@ -456,8 +585,9 @@ components:
         externalId: INF-2026-000123
         status: REJECTED
         waitingReason: null
-        detail: 'Un administrador la descartó: el curso pedido no se va a ofrecer.'
-        courseCode: MANEJO-DEFENSIVO
+        detail: Un administrador de la sede la descartó.
+        country: CO
+        infraction: { code: C29, description: Conducir a velocidad superior a la máxima permitida }
         person: { firstName: Laura, lastName: Gómez, email: laura.gomez@example.com }
         course: null
         requestedAt: '2026-10-27T13:02:11.087Z'
@@ -471,7 +601,8 @@ components:
         status: REJECTED
         waitingReason: null
         detail: La retiró el sistema que la envió.
-        courseCode: MANEJO-DEFENSIVO
+        country: CO
+        infraction: { code: C29, description: Conducir a velocidad superior a la máxima permitida }
         person: { firstName: Laura, lastName: Gómez, email: laura.gomez@example.com }
         course: null
         requestedAt: '2026-10-27T13:02:11.087Z'

@@ -1,28 +1,19 @@
-import { CourseStatus, ExternalEnrollmentStatus } from '@prisma/client';
-
-/**
- * En qué punto está una matrícula pedida por otro sistema, tal como se le responde.
- *
- * Es el contrato de la integración (ver `docs/INTEGRACION.md`): estos valores no se renombran.
- * Se calcula a partir de lo guardado y de la propia matrícula, que es quien sabe si sigue en pie.
- */
-export const EXTERNAL_STATUSES = ['WAITING', 'ENROLLED', 'COMPLETED', 'CANCELLED', 'REJECTED'] as const;
-export type ExternalStatus = (typeof EXTERNAL_STATUSES)[number];
+import { CourseStatus, ExternalEnrollmentStatus, ExternalStatus } from '@prisma/client';
 
 /** Por qué espera: lo que tiene que hacer un administrador para que se atienda. */
-export const WAITING_REASONS = ['COURSE_NOT_FOUND', 'COURSE_NOT_PUBLISHED', 'COURSE_FULL'] as const;
+export const WAITING_REASONS = ['COURSE_NOT_ASSIGNED', 'COURSE_NOT_PUBLISHED', 'COURSE_FULL'] as const;
 export type WaitingReason = (typeof WAITING_REASONS)[number];
 
-/** El curso que lleva el código pedido, si existe, con lo que decide si admite a alguien más. */
-export interface CourseForCode {
+/** El curso que atiende la infracción, si ya tiene, con lo que decide si admite a alguien más. */
+export interface AssignedCourse {
   status: CourseStatus;
   maxStudents: number | null;
   /** Matrículas en curso; quien ya se certificó no ocupa plaza (ver `occupiedSeats`). */
   occupiedSeats: number;
 }
 
-export function waitingReasonFor(course: CourseForCode | null): WaitingReason | null {
-  if (!course) return 'COURSE_NOT_FOUND';
+export function waitingReasonFor(course: AssignedCourse | null): WaitingReason | null {
+  if (!course) return 'COURSE_NOT_ASSIGNED';
   if (course.status !== 'PUBLISHED') return 'COURSE_NOT_PUBLISHED';
   if (course.maxStudents !== null && course.occupiedSeats >= course.maxStudents) return 'COURSE_FULL';
   return null;
@@ -30,23 +21,22 @@ export function waitingReasonFor(course: CourseForCode | null): WaitingReason | 
 
 /** Explicación de cada motivo, para la respuesta y para el aviso a los administradores. */
 export const WAITING_REASON_TEXT: Record<WaitingReason, string> = {
-  COURSE_NOT_FOUND: 'todavía no hay ningún curso con ese código',
-  COURSE_NOT_PUBLISHED: 'el curso con ese código todavía no está publicado',
-  COURSE_FULL: 'el curso con ese código no tiene plazas libres',
+  COURSE_NOT_ASSIGNED: 'todavía no se ha elegido el curso que la atiende',
+  COURSE_NOT_PUBLISHED: 'su curso todavía no está publicado',
+  COURSE_FULL: 'su curso no tiene plazas libres',
 };
 
 /** Lo que tiene que hacer un administrador para que entren, para su aviso. */
 export const WAITING_REASON_FIX: Record<WaitingReason, string> = {
-  COURSE_NOT_FOUND:
-    'abre el curso que corresponde (o créalo), escribe el código en el campo «Código de integración» de su ficha y publícalo',
-  COURSE_NOT_PUBLISHED: 'publica el curso que lleva ese código',
-  COURSE_FULL: 'amplía el cupo del curso que lleva ese código',
+  COURSE_NOT_ASSIGNED: 'elige en Integraciones el curso que la atiende',
+  COURSE_NOT_PUBLISHED: 'publica su curso',
+  COURSE_FULL: 'amplía el cupo de su curso',
 };
 
 /** Lo guardado de una solicitud que interesa para contar en qué punto está. */
 export interface StoredRequest {
   status: ExternalEnrollmentStatus;
-  courseCode: string;
+  infraction: { code: string };
   rejectionReason: string | null;
   userGuid: string | null;
   courseGuid: string | null;
@@ -62,6 +52,10 @@ export interface CurrentFacts {
   certificateCode: string | null;
 }
 
+/**
+ * En qué punto está una matrícula pedida por otro sistema, tal como se le responde: se calcula a
+ * partir de lo guardado y de la propia matrícula, que es quien sabe si sigue en pie.
+ */
 export interface StatusReport {
   status: ExternalStatus;
   waitingReason: WaitingReason | null;
@@ -81,7 +75,7 @@ export function statusReport(request: StoredRequest, facts: CurrentFacts): Statu
       return facts.waitingReason
         ? report(
             'WAITING',
-            `En espera: ${WAITING_REASON_TEXT[facts.waitingReason]} (${request.courseCode}). La persona quedará matriculada en cuanto lo haya.`,
+            `En espera por la infracción ${request.infraction.code}: ${WAITING_REASON_TEXT[facts.waitingReason]}. La persona quedará matriculada en cuanto se resuelva.`,
             facts.waitingReason,
           )
         : report(

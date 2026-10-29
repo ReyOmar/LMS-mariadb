@@ -4,7 +4,7 @@ import { useConfig } from '@/contexts/ConfigContext';
 import { useCountry } from '@/contexts/CountryContext';
 import { fileUrlFor } from '@/lib/api';
 import { platformNameOf } from '@/lib/platform';
-import { PageLoader } from '@/components/ui/PageLoader';
+import { FullScreenLoader } from '@/components/ui/PageLoader';
 import { LandingHeader } from '@/components/landing/LandingHeader';
 import { Hero } from '@/components/landing/Hero';
 import { Services } from '@/components/landing/Services';
@@ -20,11 +20,7 @@ export default function LandingPage() {
 
   // Enseñar una sede y cambiarla al instante siguiente sería peor que esperar a leer la guardada.
   if (!ready) {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <PageLoader message="Cargando campus…" />
-      </div>
-    );
+    return <FullScreenLoader message="Cargando campus…" />;
   }
 
   const platformName = platformNameOf(config);

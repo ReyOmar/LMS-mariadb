@@ -4,6 +4,7 @@ import type { FastifyRequest } from 'fastify';
 import { AuthService } from './auth.service';
 import { UserService } from './user.service';
 import { Public } from '../common/decorators/public.decorator';
+import { BeforeConsent } from '../common/decorators/before-consent.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { ListAccountsDto } from './dto/list-accounts.dto';
@@ -85,6 +86,7 @@ export class AuthController {
    * Cierra la sesión actual: revoca el token y libera el registro de sesión activa, de
    * modo que la cuenta queda lista para entrar desde cualquier dispositivo.
    */
+  @BeforeConsent()
   @Post('logout')
   async logout(@CurrentUser() user: JwtPayload) {
     await this.users.logout(user.sub, user.jti);
@@ -93,12 +95,14 @@ export class AuthController {
 
   // ── Perfil propio ────────────────────────────────────────────────────────
 
+  @BeforeConsent()
   @Get('me')
   getMyProfile(@CurrentUser() user: JwtPayload) {
     return this.users.getUserProfile(user.sub, user.country);
   }
 
   /** Aceptación de la política de tratamiento de datos vigente. */
+  @BeforeConsent()
   @Post('me/data-consent')
   acceptDataPolicy(@CurrentUser() user: JwtPayload) {
     return this.users.acceptDataPolicy(user.sub, user.country);

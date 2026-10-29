@@ -48,5 +48,3 @@ export function useSyllabusPanel() {
     },
   };
 }
-
-export type SyllabusPanel = ReturnType<typeof useSyllabusPanel>;

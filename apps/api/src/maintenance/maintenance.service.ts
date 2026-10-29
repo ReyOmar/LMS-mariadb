@@ -1,9 +1,11 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
-import { ExternalEnrollmentsService } from '../integrations/external-enrollments.service';
+import { WaitingRequestsService } from '../integrations/waiting-requests.service';
+import { IntegrationWebhooks } from '../integrations/integration-webhooks';
 import { NotificationsService } from '../notifications/notifications.service';
-import { MAIL_CONCURRENCY, MailService } from '../mail/mail.service';
+import { MailService } from '../mail/mail.service';
+import { MAIL_CONCURRENCY } from '../mail/mail-transport';
 import { recordCompletion, refreshCompletedResourcesOf } from '../courses/resource-progress';
 import { AUTO_UNLOCK_HOURS, AWAITING_GRADE } from '../courses/progression';
 import { AFTER_LOCK, lockEnrollment } from '../enrollments/enrollment-lock';
@@ -49,7 +51,8 @@ export class MaintenanceService {
     private readonly prisma: PrismaService,
     private readonly notifications: NotificationsService,
     private readonly mail: MailService,
-    private readonly externalEnrollments: ExternalEnrollmentsService,
+    private readonly waitingRequests: WaitingRequestsService,
+    private readonly webhooks: IntegrationWebhooks,
   ) {}
 
   /** Ejecuta una tarea evitando solapes y registrando su resultado. */
@@ -314,15 +317,27 @@ export class MaintenanceService {
 
   /**
    * Atiende las matrículas que otros sistemas pidieron y siguen esperando un curso, a la media de
-   * cada hora. Publicar el curso, ponerle código o ampliar su cupo ya las atiende en el acto; esto
-   * cubre lo que no avisa —una plaza que queda libre al certificarse alguien— y recuerda cada día
-   * a los administradores lo que sigue faltando.
+   * cada hora. Elegir el curso de la infracción, publicarlo o ampliar su cupo ya las atiende en el
+   * acto; esto cubre lo que no avisa —una plaza que queda libre al certificarse alguien— y recuerda
+   * cada día a los administradores lo que sigue faltando.
    */
   @Cron('30 * * * *', { timeZone: SCHEDULE_TIME_ZONE })
   attendWaitingEnrollments(): Promise<void> {
     return this.run('matrículas en espera', async () => {
-      const enrolled = await this.externalEnrollments.attendAllWaiting();
+      const enrolled = await this.waitingRequests.attendAll();
       if (enrolled > 0) return `${enrolled} ${plural(enrolled, 'persona matriculada', 'personas matriculadas')}`;
+    });
+  }
+
+  /**
+   * Avisa a los sistemas conectados de lo que cambió en sus solicitudes, cada minuto: así el PESV
+   * sabe enseguida que alguien terminó su curso (ver `IntegrationWebhooks`).
+   */
+  @Cron('* * * * *', { timeZone: SCHEDULE_TIME_ZONE })
+  notifyIntegrations(): Promise<void> {
+    return this.run('avisos a otros sistemas', async () => {
+      const delivered = await this.webhooks.deliverPending();
+      if (delivered > 0) return `${delivered} ${plural(delivered, 'aviso entregado', 'avisos entregados')}`;
     });
   }
 

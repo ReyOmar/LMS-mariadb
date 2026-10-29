@@ -1,7 +1,7 @@
 'use client';
 
 import { FormEvent, useState } from 'react';
-import { KeyRound, Loader2, Plug, Unplug } from 'lucide-react';
+import { BellRing, KeyRound, Loader2, Plug, Trash2, Unplug } from 'lucide-react';
 import type { IntegrationClient } from '@/types/models';
 import { shortDate, timeAgo } from '@/lib/dates';
 import { INPUT_CLASS } from '@/components/ui/FormFields';
@@ -16,10 +16,23 @@ interface Props {
   onConnect: (name: string) => Promise<boolean>;
   onRenewKey: (client: IntegrationClient) => void;
   onRevokeKey: (client: IntegrationClient) => void;
+  onRemove: (client: IntegrationClient) => void;
+  onEditCallback: (client: IntegrationClient) => void;
 }
 
-/** Los sistemas que pueden pedir matrículas en la sede, cada uno con su clave. */
-export function ConnectedSystems({ clients, isBusy, onConnect, onRenewKey, onRevokeKey }: Props) {
+/**
+ * Los sistemas que pueden pedir matrículas en la sede, cada uno con su clave y la dirección a la que
+ * se le avisa. Uno conectado se desconecta; uno desconectado se vuelve a conectar o se elimina.
+ */
+export function ConnectedSystems({
+  clients,
+  isBusy,
+  onConnect,
+  onRenewKey,
+  onRevokeKey,
+  onRemove,
+  onEditCallback,
+}: Props) {
   const [name, setName] = useState('');
 
   const submit = async (event: FormEvent) => {
@@ -50,8 +63,18 @@ export function ConnectedSystems({ clients, isBusy, onConnect, onRenewKey, onRev
                       Desconectado: no tiene clave vigente.
                     </p>
                   )}
+                  <NoticeState client={client} />
                 </div>
-                <div className="flex gap-2 shrink-0">
+                <div className="flex flex-wrap gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => onEditCallback(client)}
+                    disabled={busy}
+                    aria-label={`Avisos a ${client.name}`}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-bold hover:bg-muted transition-colors disabled:opacity-50"
+                  >
+                    <BellRing className="h-3.5 w-3.5" /> Avisos
+                  </button>
                   <button
                     type="button"
                     onClick={() => onRenewKey(client)}
@@ -61,7 +84,7 @@ export function ConnectedSystems({ clients, isBusy, onConnect, onRenewKey, onRev
                   >
                     <KeyRound className="h-3.5 w-3.5" /> {client.keyPrefix ? 'Nueva clave' : 'Volver a conectar'}
                   </button>
-                  {client.keyPrefix && (
+                  {client.keyPrefix ? (
                     <button
                       type="button"
                       onClick={() => onRevokeKey(client)}
@@ -70,6 +93,16 @@ export function ConnectedSystems({ clients, isBusy, onConnect, onRenewKey, onRev
                       className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-bold text-destructive hover:bg-destructive/10 transition-colors disabled:opacity-50"
                     >
                       <Unplug className="h-3.5 w-3.5" /> Desconectar
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => onRemove(client)}
+                      disabled={busy}
+                      aria-label={`Eliminar ${client.name}`}
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-bold text-destructive hover:bg-destructive/10 transition-colors disabled:opacity-50"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" /> Eliminar
                     </button>
                   )}
                 </div>
@@ -101,5 +134,24 @@ export function ConnectedSystems({ clients, isBusy, onConnect, onRenewKey, onRev
         </button>
       </form>
     </div>
+  );
+}
+
+/** A dónde se le avisa y cómo fue el último aviso. */
+function NoticeState({ client }: { client: IntegrationClient }) {
+  if (!client.callbackUrl) {
+    return <p className="text-xs text-muted-foreground mt-0.5">Sin dirección de avisos: consulta él el estado.</p>;
+  }
+  return (
+    <p className="text-xs text-muted-foreground mt-0.5 break-all">
+      Avisos a <span className="font-mono">{client.callbackUrl}</span>
+      {client.noticeError ? (
+        <span className="block font-semibold text-red-700 dark:text-red-400">
+          El último aviso no llegó ({timeAgo(client.lastNoticeAt)}): {client.noticeError} Se reintenta cada 15 minutos.
+        </span>
+      ) : (
+        client.lastNoticeAt && ` · Último aviso: ${timeAgo(client.lastNoticeAt)}`
+      )}
+    </p>
   );
 }

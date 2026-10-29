@@ -1,8 +1,8 @@
 'use client';
 
 import React, { ReactNode, createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { apiUrl, clearSession, readToken, redirectToLogin, type LogoutReason } from '@/lib/api';
-import { connectStream } from '@/lib/realtime/stream';
+import { clearSession, readToken, redirectToLogin, type LogoutReason } from '@/lib/api';
+import { pollEvents } from '@/lib/realtime/poll';
 import {
   CourseEditor,
   PresenceChange,
@@ -14,29 +14,27 @@ import {
 import { useSession } from './SessionContext';
 
 /**
- * Tiempo real del campus sobre Server-Sent Events.
+ * Tiempo real del campus: cada pestaña pregunta cada pocos segundos qué ha pasado
+ * (`pollEvents`) y reparte los avisos entre las pantallas suscritas.
  *
- * SSE y no WebSocket porque el despliegue vive en cPanel, donde Apache no propaga la
- * cabecera `Upgrade`. SSE es HTTP corriente y atraviesa el proxy sin configuración especial.
- *
- * El flujo es de servidor a cliente. La única acción en sentido contrario —avisar de que
- * se está editando un curso— es una petición HTTP normal (`useCourseLock`).
+ * Avisar de que se está editando un curso es una petición HTTP aparte (`useCourseLock`).
  */
 
 type Listener = (data: unknown) => void;
 
 interface RealtimeContextType {
-  connected: boolean;
   /** Se suscribe a un evento y devuelve la función para darse de baja. */
   subscribe: (event: RealtimeEvent, listener: Listener) => () => void;
-  /** Se suscribe a la recuperación del flujo tras un corte y devuelve la función para darse de baja. */
+  /**
+   * Se suscribe a los momentos en que pudo perderse algún aviso —la API se reinició o la pestaña
+   * estuvo dormida— y devuelve la función para darse de baja.
+   */
   onReconnect: (listener: () => void) => () => void;
   onlineUsers: ReadonlySet<string>;
   coursesBeingEdited: Record<string, CourseEditor>;
 }
 
 const RealtimeContext = createContext<RealtimeContextType>({
-  connected: false,
   subscribe: () => () => undefined,
   onReconnect: () => () => undefined,
   onlineUsers: new Set(),
@@ -70,7 +68,6 @@ const REASON_TO_LOGOUT: Record<string, LogoutReason> = {
 
 export function RealtimeProvider({ children }: { children: ReactNode }) {
   const { authenticated } = useSession();
-  const [connected, setConnected] = useState(false);
   const [onlineUsers, setOnlineUsers] = useState<ReadonlySet<string>>(() => new Set());
   const [coursesBeingEdited, setCoursesBeingEdited] = useState<Record<string, CourseEditor>>({});
 
@@ -156,30 +153,19 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const token = readToken();
 
-    // Sin sesión no hay nada que escuchar: la portada y el login no abren flujo.
+    // Sin sesión no hay nada que preguntar: la portada y el login no consultan.
     if (!authenticated || !token) {
-      setConnected(false);
       setOnlineUsers(new Set());
       setCoursesBeingEdited({});
       return;
     }
 
     const control = new AbortController();
-    let connectedBefore = false;
 
-    void connectStream({
-      url: `${apiUrl()}/realtime/stream`,
-      token,
+    void pollEvents({
       signal: control.signal,
-      onConnectionChange: (isConnected) => {
-        setConnected(isConnected);
-        if (!isConnected) return;
-        // Lo que pasó mientras el flujo estuvo cortado no llegará nunca: al recuperarlo,
-        // cada pantalla vuelve a pedir sus datos.
-        if (connectedBefore) reconnectListeners.current.forEach((listener) => listener());
-        connectedBefore = true;
-      },
-      onUnauthorized: () => forceLogout(),
+      // Lo que pasó en ese intervalo no llegará nunca: cada pantalla vuelve a pedir sus datos.
+      onReset: () => reconnectListeners.current.forEach((listener) => listener()),
       onMessage: (message) => {
         if (message.event === 'session:revoked') {
           forceLogout((message.data as { reason?: string })?.reason);
@@ -216,8 +202,8 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const value = useMemo(
-    () => ({ connected, subscribe, onReconnect, onlineUsers, coursesBeingEdited }),
-    [connected, subscribe, onReconnect, onlineUsers, coursesBeingEdited],
+    () => ({ subscribe, onReconnect, onlineUsers, coursesBeingEdited }),
+    [subscribe, onReconnect, onlineUsers, coursesBeingEdited],
   );
 
   return <RealtimeContext.Provider value={value}>{children}</RealtimeContext.Provider>;
@@ -240,8 +226,8 @@ export function useRealtimeEvent(event: RealtimeEvent, listener: Listener): void
 }
 
 /**
- * Vuelve a cargar los datos de la pantalla cuando el flujo se recupera tras un corte: los
- * avisos de ese intervalo se perdieron. Siempre llama a la versión más reciente de `listener`.
+ * Vuelve a cargar los datos de la pantalla cuando pudo perderse algún aviso. Siempre llama a la
+ * versión más reciente de `listener`.
  */
 export function useRealtimeReconnect(listener: () => void): void {
   const { onReconnect } = useRealtime();

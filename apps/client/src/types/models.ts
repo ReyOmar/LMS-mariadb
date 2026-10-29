@@ -85,8 +85,6 @@ export interface Course {
   passingScore: number;
   strictOrder?: boolean;
   maxStudents?: number | null;
-  /** Con el que otros sistemas piden matricular en el curso (ver la página de Integraciones). */
-  integrationCode?: string | null;
   teacherGuid: string;
   teacher?: Pick<User, 'guid' | 'firstName' | 'lastName' | 'role'>;
   modules?: CourseModule[];
@@ -413,7 +411,19 @@ export interface IntegrationClient {
   keyPrefix: string | null;
   keyIssuedAt: string | null;
   lastUsedAt: string | null;
+  /** Dirección a la que se le avisa de los cambios en sus solicitudes; nula si consulta él. */
+  callbackUrl: string | null;
+  /** El último intento de aviso y, si falló, por qué. */
+  lastNoticeAt: string | null;
+  noticeError: string | null;
   createdAt: string;
+  _count: { requests: number };
+}
+
+/** Lo que contesta el aviso de prueba a la dirección de un sistema. */
+export interface CallbackTest {
+  delivered: boolean;
+  message: string;
 }
 
 export interface IssuedIntegrationKey {
@@ -422,7 +432,7 @@ export interface IssuedIntegrationKey {
 }
 
 /** Por qué espera una matrícula pedida por otro sistema. */
-export type WaitingReason = 'COURSE_NOT_FOUND' | 'COURSE_NOT_PUBLISHED' | 'COURSE_FULL';
+export type WaitingReason = 'COURSE_NOT_ASSIGNED' | 'COURSE_NOT_PUBLISHED' | 'COURSE_FULL';
 
 export interface WaitingRequest {
   guid: string;
@@ -435,11 +445,15 @@ export interface WaitingRequest {
   system: string;
 }
 
-/** Las solicitudes que esperan un mismo código de curso. */
-export interface WaitingCourse {
-  courseCode: string;
+/** Una infracción que llegó desde otro sistema, el curso que la atiende y quién espera por ella. */
+export interface Infraction {
+  id: number;
+  code: string;
+  description: string | null;
   course: Pick<Course, 'guid' | 'title' | 'status'> | null;
-  /** Nulo si el curso ya las admite: la siguiente pasada las matricula. */
+  /** Si el curso lo eligió el campus por su título y no un administrador. */
+  autoAssigned: boolean;
+  /** Por qué espera quien espera; nulo si no espera nadie o si el curso ya los admite. */
   reason: WaitingReason | null;
-  requests: WaitingRequest[];
+  waiting: WaitingRequest[];
 }

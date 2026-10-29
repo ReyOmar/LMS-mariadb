@@ -1,5 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { runInNewContext } from 'node:vm';
+import { ModuleKind, ScriptTarget, transpileModule } from 'typescript';
 
 /**
  * Lectura del cliente para las pruebas que comprueban que sus copias de las reglas de la API
@@ -11,6 +13,21 @@ const CLIENT_ROOT = join(__dirname, '../../../../client');
 export function clientSource(path: string): string | null {
   const file = join(CLIENT_ROOT, path);
   return existsSync(file) ? readFileSync(file, 'utf8') : null;
+}
+
+/**
+ * Un módulo del cliente sin dependencias, compilado y cargado: así una prueba compara lo que hacen
+ * las dos copias de una regla, no sólo lo que dicen. `null` si el cliente no está junto a la API.
+ */
+export function clientModule<T>(path: string): T | null {
+  const source = clientSource(path);
+  if (source === null) return null;
+  const { outputText } = transpileModule(source, {
+    compilerOptions: { module: ModuleKind.CommonJS, target: ScriptTarget.ES2022 },
+  });
+  const module = { exports: {} as T };
+  runInNewContext(outputText, { module, exports: module.exports });
+  return module.exports;
 }
 
 /** El contenido de la lista o el objeto que se asigna a `name`, tenga o no anotación de tipo. */

@@ -1,30 +1,37 @@
 import { BadRequestException } from '@nestjs/common';
-import { IsBoolean, IsIn, IsInt, IsOptional, IsString, MaxLength } from 'class-validator';
+import { IsBoolean, IsIn, IsInt, IsString, MaxLength } from 'class-validator';
 import { createValidationPipe } from './validation.pipe';
 import { StrictBoolean } from './transforms';
+import { Omittable } from './omittable';
+import { PersonName } from './person-name';
 
 class Filter {
   @IsString()
   @MaxLength(10)
   course: string;
 
-  @IsOptional()
+  @Omittable()
   @IsIn(['pending', 'graded'], { message: 'El filtro de estado no es válido.' })
   status?: string;
 
-  @IsOptional()
+  @Omittable()
   @IsInt()
   limit?: number;
 
-  @IsOptional()
+  @Omittable()
   @IsString()
   @MaxLength(5)
   search?: string;
 
-  @IsOptional()
+  @Omittable()
   @IsString()
   @MaxLength(5)
   sinEtiqueta?: string;
+}
+
+class Person {
+  @PersonName()
+  firstName: string;
 }
 
 class Answer {
@@ -32,7 +39,7 @@ class Answer {
   @IsBoolean({ message: 'Indica si aceptas o rechazas la solicitud.' })
   accept: boolean;
 
-  @IsOptional()
+  @Omittable()
   @StrictBoolean()
   @IsBoolean()
   active?: boolean;
@@ -84,6 +91,15 @@ describe('validación de entrada', () => {
 
   it('deja pasar una entrada válida', async () => {
     expect(await messagesFor({ course: 'c1', status: 'graded', limit: '20' })).toEqual([]);
+  });
+
+  it('un campo que puede faltar no admite null: se explica en lugar de llegar a la base', async () => {
+    expect(await messagesFor({ course: 'c1', search: null })).toEqual(['El campo «búsqueda» no puede quedar vacío.']);
+  });
+
+  it('un nombre llega normalizado, y vacío se rechaza', async () => {
+    expect((await validate(Person, { firstName: '  LAURA   GÓMEZ ' })).value?.firstName).toBe('Laura Gómez');
+    expect((await validate(Person, { firstName: '   ' })).messages).toEqual(['El campo «nombre» es obligatorio.']);
   });
 });
 

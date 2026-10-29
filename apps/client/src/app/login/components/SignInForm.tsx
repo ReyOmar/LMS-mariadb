@@ -19,6 +19,8 @@ interface Props {
   onEmailChange: (email: string) => void;
   onSetupRequired: (setup: PendingSetup) => void;
   onSignedIn: (session: OpenedSession) => void;
+  /** Ya dentro: se está abriendo el panel. */
+  entering: boolean;
   onRequestAccess: () => void;
 }
 
@@ -29,6 +31,7 @@ export function SignInForm({
   onEmailChange,
   onSetupRequired,
   onSignedIn,
+  entering,
   onRequestAccess,
 }: Props) {
   const [password, setPassword] = useState('');
@@ -67,7 +70,7 @@ export function SignInForm({
             autoComplete="current-password"
           />
         </Field>
-        <SubmitButton form={form} idle="Entrar" busy="Comprobando…" />
+        <SubmitButton form={form} idle="Entrar" busy="Entrando…" pending={entering} />
       </form>
 
       <div className="mt-8 pt-6 border-t border-border flex flex-col items-center gap-3">

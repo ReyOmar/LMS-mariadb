@@ -8,6 +8,7 @@ import { applyTheme } from '@/lib/theme';
 import { setTimeZone } from '@/lib/dates';
 import { useCountry } from './CountryContext';
 import { useRealtimeEvent } from './RealtimeContext';
+import { useSession } from './SessionContext';
 
 /**
  * Configuración de la sede activa: marca, textos de la portada y textos legales.
@@ -89,6 +90,7 @@ function applySettings(config: CountrySettings): void {
 
 export function ConfigProvider({ children }: { children: ReactNode }) {
   const { country } = useCountry();
+  const { user, refreshUser } = useSession();
   const [config, setConfig] = useState<CountrySettings | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -129,10 +131,12 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
     void load(country);
   }, [country, load]);
 
-  // Un administrador puede cambiar la marca mientras otros la tienen abierta.
+  // Un administrador puede cambiar la marca mientras otros la tienen abierta. Si publica otra
+  // versión de los textos legales, quien está dentro tiene que volver a aceptarla.
   useRealtimeEvent('config:updated', (data) => {
     const updated = data as CountrySettings | null;
     if (!updated?.country || updated.country !== country) return;
+    if (user && config && updated.legalUpdatedAt !== config.legalUpdatedAt) void refreshUser().catch(() => undefined);
     setConfig(updated);
     applySettings(updated);
     writeCache(updated.country, updated);

@@ -5,7 +5,7 @@ import { NotificationsService } from '../../notifications/notifications.service'
 import { MailService } from '../../mail/mail.service';
 import { CertificatesService } from '../../certificates/certificates.service';
 import { RealtimeService } from '../../realtime/realtime.service';
-import { ExternalEnrollmentsService } from '../../integrations/external-enrollments.service';
+import { WaitingRequestsService } from '../../integrations/waiting-requests.service';
 import { formatScore, formatPoints } from '../domain/grading';
 import {
   SubmissionGraded,
@@ -41,7 +41,7 @@ export class EventsListener {
     private readonly mail: MailService,
     private readonly certificates: CertificatesService,
     private readonly realtime: RealtimeService,
-    private readonly externalEnrollments: ExternalEnrollmentsService,
+    private readonly waitingRequests: WaitingRequestsService,
   ) {}
 
   // ── Cuestionarios ────────────────────────────────────────────────────────
@@ -249,7 +249,7 @@ export class EventsListener {
   async onCourseOpened(event: CourseOpened): Promise<void> {
     await this.runSafely(
       'course.opened',
-      () => this.externalEnrollments.attendCourse(event.courseGuid),
+      () => this.waitingRequests.attendCourse(event.courseGuid, event.country),
       'matrículas en espera',
     );
   }

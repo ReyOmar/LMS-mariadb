@@ -15,10 +15,12 @@ interface Props {
   setup: PendingSetup;
   onCancel: () => void;
   onSignedIn: (session: OpenedSession) => void;
+  /** Ya dentro: se está abriendo el panel. */
+  entering: boolean;
 }
 
 /** La cuenta entra por primera vez con la contraseña temporal: elige una propia y entra. */
-export function FirstPasswordForm({ form, setup, onCancel, onSignedIn }: Props) {
+export function FirstPasswordForm({ form, setup, onCancel, onSignedIn, entering }: Props) {
   const [newPassword, setNewPassword] = useState('');
 
   const save = (event: FormEvent) => {
@@ -56,7 +58,13 @@ export function FirstPasswordForm({ form, setup, onCancel, onSignedIn }: Props) 
       </Field>
       <div className="flex gap-2">
         <SecondaryButton onClick={onCancel}>Cancelar</SecondaryButton>
-        <SubmitButton form={form} idle="Guardar y entrar" busy="Guardando…" className="h-12 flex-1" />
+        <SubmitButton
+          form={form}
+          idle="Guardar y entrar"
+          busy="Guardando…"
+          pending={entering}
+          className="h-12 flex-1"
+        />
       </div>
     </form>
   );

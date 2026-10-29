@@ -1,34 +1,17 @@
-import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { EventEmitter2 } from '@nestjs/event-emitter';
-import { Prisma, Submission } from '@prisma/client';
+import { Injectable } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { StorageService } from '../storage/storage.service';
-import { FileOwnershipService } from '../storage/file-ownership.service';
-import { RealtimeService } from '../realtime/realtime.service';
-import { SettingsService } from '../settings/settings.service';
-import { CourseAccessService, UNENROLLED_MESSAGE } from '../courses/course-access.service';
-import { recordCompletion, refreshCompletedResources } from '../courses/resource-progress';
+import { CourseAccessService } from '../courses/course-access.service';
 import { AWAITING_GRADE } from '../courses/progression';
-import { QuizConfig, allowedAttemptsOf, parseQuizConfig, quizDisplayTitle } from '../courses/quiz-config';
-import { attemptsExhausted, usedAttempts } from '../courses/quiz.service';
-import {
-  AFTER_LOCK,
-  ClosedRoundMessages,
-  LockedEnrollment,
-  assertRoundOpen,
-  lockEnrollment,
-} from '../enrollments/enrollment-lock';
-import { toScore, isPassing, formatScore, normalizeScore, passingThreshold } from '../common/domain/grading';
-import { Country } from '../common/domain/country';
+import { allowedAttemptsOf } from '../courses/quiz-config';
+import { toScore, passingThreshold } from '../common/domain/grading';
 import { JwtPayload } from '../common/interfaces/jwt-payload.interface';
-import { FileReceiver } from '../storage/multipart';
-import { uploadLimit } from '../storage/upload-limits';
 import { encodeCursor, rowsPerPage, decodeCursor, Cursor } from '../common/domain/pagination';
-import { GradeSubmissionDto } from './dto/grade-submission.dto';
 import { SubmissionQueueDto, AttemptQueueDto, QueueStatus } from './dto/examiner-queue.dto';
-import { emitEvent } from '../common/domain/domain-events';
 import { everyWord } from '../common/domain/search';
 import { personSearchSql } from '../prisma/person-search';
+import { deliveredFileUrl } from './delivered-file';
 
 /** Campos que necesita el panel del examinador, iguales para tareas y cuestionarios. */
 const DASHBOARD_SELECT = {
@@ -139,51 +122,15 @@ function tallyOf(row: SubmissionsByCourseRow): SubmissionTally {
   return { total: Number(row.total), graded: Number(row.graded), ...rangesOf(row) };
 }
 
-const SUBMISSIONS_CLOSED: ClosedRoundMessages = {
-  unenrolled: UNENROLLED_MESSAGE,
-  certified: 'Ya terminaste este curso: tus entregas quedaron cerradas con tu certificado.',
-};
-
-const GRADING_CLOSED: ClosedRoundMessages = {
-  unenrolled: 'Este alumno ya no está matriculado en el curso: no puedes calificar su entrega.',
-  certified: 'La vuelta de este alumno ya está certificada: su calificación no puede cambiarse.',
-};
-
-const NEW_ATTEMPT_CLOSED: ClosedRoundMessages = {
-  unenrolled: 'Este alumno ya no está matriculado en el curso: no puedes habilitarle otro intento.',
-  certified: 'La vuelta de este alumno ya está certificada: no puedes habilitarle otro intento.',
-};
-
-/** Lo que se mira de la entrega anterior de un alumno al recibir otra. */
-const OWN_SUBMISSION_SELECT = {
-  guid: true,
-  status: true,
-  score: true,
-  attachmentKey: true,
-} satisfies Prisma.SubmissionSelect;
-
-type OwnSubmission = Prisma.SubmissionGetPayload<{ select: typeof OWN_SUBMISSION_SELECT }>;
-
-/** Una entrega aprobada no se sustituye: respalda una nota ya dada. */
-function ensureReplaceable(previous: OwnSubmission | null, threshold: number, country: Country): void {
-  if (previous?.status === 'GRADED' && isPassing(previous.score, threshold)) {
-    throw new BadRequestException(
-      `Tu entrega ya fue aprobada con ${formatScore(previous.score, country)}. No necesitas volver a enviarla.`,
-    );
-  }
-}
-
 /**
- * Entregas de tareas —subida por el alumno y calificación por el examinador— y paneles del
- * examinador de tareas y de cuestionarios.
+ * Paneles del examinador de tareas y de cuestionarios: las colas, por página, y las cifras de
+ * cada curso.
  *
- * Los paneles sólo cuentan a los alumnos con matrícula activa en el curso: a quien se dio
- * de baja no se le corrige ni se le cuenta.
+ * Sólo cuentan a los alumnos con matrícula activa en el curso: a quien se dio de baja no se le
+ * corrige ni se le cuenta.
  */
 @Injectable()
-export class AssessmentsService {
-  private readonly logger = new Logger(AssessmentsService.name);
-
+export class ExaminerPanelsService {
   /** Cifras de las matrículas terminadas por alcance (sede, y profesor si es examinador). */
   private readonly finishedTallies = new Map<
     string,
@@ -194,160 +141,7 @@ export class AssessmentsService {
     private readonly prisma: PrismaService,
     private readonly storage: StorageService,
     private readonly access: CourseAccessService,
-    private readonly settings: SettingsService,
-    private readonly realtime: RealtimeService,
-    private readonly events: EventEmitter2,
-    private readonly files: FileOwnershipService,
   ) {}
-
-  // ── Alumno ───────────────────────────────────────────────────────────────
-
-  /**
-   * Registra la entrega de una tarea. Se puede reenviar mientras no esté aprobada: una aprobada
-   * no se sustituye, porque respalda una nota ya dada. El archivo se recibe al final, cuando ya
-   * se sabe que la entrega procede y cuál es su límite (el de la tarea o el general de la sede).
-   */
-  async recordSubmission(assignmentGuid: string, receive: FileReceiver, user: JwtPayload) {
-    const course = await this.access.unlockedResourceAccess(assignmentGuid, user);
-    const threshold = passingThreshold(course.passingScore);
-
-    const assignment = await this.prisma.resource.findUnique({
-      where: { guid: assignmentGuid },
-      select: { title: true, type: true, quizConfig: true, maxUploadMb: true },
-    });
-    if (!assignment || assignment.type !== 'ASSIGNMENT') {
-      throw new BadRequestException('Este recurso no admite entregas.');
-    }
-    if (assignment.quizConfig) {
-      throw new BadRequestException('Este recurso es un cuestionario: se resuelve en línea, no se sube archivo.');
-    }
-
-    // Antes de recibir el archivo, para no aceptar en balde uno que puede pesar varios GB.
-    assertRoundOpen(await this.enrollmentOf(user.sub, course.guid), SUBMISSIONS_CLOSED);
-    ensureReplaceable(await this.ownSubmission(this.prisma, assignmentGuid, user.sub), threshold, user.country);
-
-    const limit = uploadLimit('entregas', assignment.maxUploadMb ?? (await this.settings.getMaxUploadMb(user.country)));
-    const file = await receive(limit);
-    const key = await this.storage.uploadFromDisk(file.filePath, file.name, 'entregas', user, limit.bytes);
-
-    const attachment = { attachmentKey: key, attachmentName: file.name };
-    const { submission, previous } = await this.files.adoptUpload(
-      key,
-      () =>
-        this.saveDelivery(
-          { assignmentGuid, courseGuid: course.guid, userGuid: user.sub, country: user.country, threshold },
-          attachment,
-        ),
-      (saved) => saved.previous?.attachmentKey,
-    );
-
-    emitEvent(this.events, 'submission.received', {
-      submissionGuid: submission.guid,
-      userGuid: user.sub,
-      country: user.country,
-      assignmentTitle: assignment.title,
-      courseTitle: course.title,
-      teacherGuid: course.teacherGuid,
-      isResubmission: submission.status === 'IN_REVIEW',
-      previousScore: toScore(previous?.score),
-    });
-
-    return this.forStudent(submission);
-  }
-
-  /**
-   * Con la matrícula bloqueada: dos envíos a la vez se ponen en fila y el segundo sustituye al
-   * primero, y uno que llega tras la baja, el certificado o un suspenso que devolvió al alumno
-   * al principio del módulo se rechaza.
-   */
-  private saveDelivery(
-    target: { assignmentGuid: string; courseGuid: string; userGuid: string; country: Country; threshold: number },
-    attachment: { attachmentKey: string; attachmentName: string },
-  ) {
-    const { assignmentGuid, courseGuid, userGuid, country, threshold } = target;
-    return this.prisma.$transaction(async (tx) => {
-      assertRoundOpen(await lockEnrollment(tx, userGuid, courseGuid), SUBMISSIONS_CLOSED);
-      await this.access.ensureUnlocked(courseGuid, assignmentGuid, userGuid, tx);
-      const previous = await this.ownSubmission(tx, assignmentGuid, userGuid);
-      ensureReplaceable(previous, threshold, country);
-
-      const delivery = { ...attachment, submittedAt: new Date() };
-      const submission = previous
-        ? await tx.submission.update({
-            where: { guid: previous.guid },
-            // Una versión corregida tras una nota insuficiente sigue siendo un reenvío
-            // aunque se sustituya antes de que la califiquen.
-            data: {
-              ...delivery,
-              status: previous.status === 'SUBMITTED' ? 'SUBMITTED' : 'IN_REVIEW',
-              filePurged: false,
-            },
-          })
-        : await tx.submission.create({ data: { ...delivery, assignmentGuid, userGuid, status: 'SUBMITTED' } });
-      return { submission, previous };
-    }, AFTER_LOCK);
-  }
-
-  private enrollmentOf(userGuid: string, courseGuid: string): Promise<LockedEnrollment | null> {
-    return this.prisma.enrollment.findUnique({
-      where: { userGuid_courseGuid: { userGuid, courseGuid } },
-      select: { active: true, completedAt: true },
-    });
-  }
-
-  /** La entrega del alumno en una tarea, si ya la tiene: cada tarea admite una por alumno. */
-  private ownSubmission(db: Prisma.TransactionClient, assignmentGuid: string, userGuid: string) {
-    return db.submission.findFirst({ where: { assignmentGuid, userGuid }, select: OWN_SUBMISSION_SELECT });
-  }
-
-  /** Entrega del alumno en sesión para una tarea concreta. */
-  async getMySubmission(assignmentGuid: string, user: JwtPayload) {
-    await this.access.ensureResourceAccess(assignmentGuid, user);
-
-    const submission = await this.prisma.submission.findFirst({
-      where: { assignmentGuid, userGuid: user.sub },
-    });
-    return submission ? this.forStudent(submission) : { status: 'PENDING' as const };
-  }
-
-  /**
-   * El archivo entregado, como URL firmada y caducable y nunca como clave suelta: la clave sola
-   * permitiría a cualquiera descargarlo. Ninguna si se retiró al emitirse el certificado.
-   */
-  private deliveredFileUrl(submission: Pick<Submission, 'attachmentKey' | 'attachmentName' | 'filePurged'>) {
-    if (submission.filePurged || !submission.attachmentKey) return null;
-    return this.storage.downloadUrl(submission.attachmentKey, submission.attachmentName);
-  }
-
-  /** Proyección de una entrega hacia su autor. */
-  private forStudent(
-    submission: Pick<
-      Submission,
-      | 'guid'
-      | 'status'
-      | 'submittedAt'
-      | 'attachmentName'
-      | 'attachmentKey'
-      | 'score'
-      | 'feedback'
-      | 'filePurged'
-      | 'attemptNumber'
-    >,
-  ) {
-    return {
-      guid: submission.guid,
-      status: submission.status,
-      submittedAt: submission.submittedAt,
-      fileName: submission.attachmentName,
-      fileUrl: this.deliveredFileUrl(submission),
-      filePurged: submission.filePurged,
-      score: toScore(submission.score),
-      feedback: submission.feedback,
-      attemptNumber: submission.attemptNumber,
-    };
-  }
-
-  // ── Examinador ───────────────────────────────────────────────────────────
 
   /**
    * Cola de corrección de un curso, por página. Avanza con una marca de la última entrega
@@ -659,7 +453,7 @@ export class AssessmentsService {
       feedback: submission.feedback,
       passingScore: passingThreshold(submission.assignment?.module.course.passingScore),
       fileName: submission.attachmentName,
-      fileUrl: this.deliveredFileUrl(submission),
+      fileUrl: deliveredFileUrl(this.storage, submission),
       filePurged: submission.filePurged,
       roundClosed: certified.has(submission.user.guid),
       student: submission.user,
@@ -671,155 +465,5 @@ export class AssessmentsService {
       courseTitle: submission.assignment?.module.course.title ?? null,
       courseImage: submission.assignment?.module.course.coverImage ?? null,
     };
-  }
-
-  /**
-   * Califica una entrega. Sólo puede hacerlo el responsable del curso.
-   *
-   * Aprobar marca el recurso como superado y dispara la comprobación de fin de curso.
-   * Suspender deja la tarea pendiente para que el alumno pueda reenviarla y le retira el
-   * avance que tuviera en ella —por un aprobado anterior o por el desbloqueo por espera—:
-   * si no, una tarea suspendida contaría como completada para el certificado.
-   *
-   * A quien se dio de baja o ya tiene el certificado de esta vuelta no se le califica: la nota
-   * movería el avance de una vuelta cerrada. Y la nota es de la versión que revisó el
-   * examinador: si el alumno la sustituyó entretanto, no se guarda.
-   */
-  async gradeSubmission(submissionGuid: string, dto: GradeSubmissionDto, user: JwtPayload) {
-    const { submission, course } = await this.access.managedCourseOfSubmission(submissionGuid, user);
-
-    // La nota de un cuestionario la pone la corrección automática, y el aprobado de cualquiera
-    // de sus intentos es el que cuenta: cambiarla a mano podría retirarle a quien lo superó.
-    if (submission.assignment?.quizConfig) {
-      throw new BadRequestException('Los cuestionarios se califican automáticamente: su nota no se cambia a mano.');
-    }
-
-    const threshold = passingThreshold(course.passingScore);
-    const score = normalizeScore(dto.score);
-    const passed = score >= threshold;
-    const feedback = dto.feedback?.trim() || null;
-
-    // Con la matrícula bloqueada: dos calificaciones a la vez se aplican una detrás de otra,
-    // y la nota y el avance de la tarea quedan los dos de acuerdo con la última. Por
-    // separado, la nota podía ser un suspenso con el avance de un aprobado.
-    await this.prisma.$transaction(async (tx) => {
-      assertRoundOpen(await lockEnrollment(tx, submission.userGuid, course.guid), GRADING_CLOSED);
-
-      const reviewed = await tx.submission.updateMany({
-        where: { guid: submissionGuid, submittedAt: new Date(dto.submittedAt) },
-        data: { status: 'GRADED', score, feedback },
-      });
-      if (reviewed.count === 0) {
-        throw new ConflictException(
-          'El alumno envió una versión nueva de esta entrega mientras la revisabas. Ábrela de nuevo para calificar la que está ahora.',
-        );
-      }
-
-      if (!submission.assignmentGuid) return;
-      if (passed) {
-        await recordCompletion(tx, submission.userGuid, submission.assignmentGuid, course.guid);
-      } else {
-        await tx.resourceProgress.deleteMany({
-          where: { userGuid: submission.userGuid, resourceGuid: submission.assignmentGuid },
-        });
-        await refreshCompletedResources(tx, submission.userGuid, course.guid);
-      }
-    }, AFTER_LOCK);
-
-    const graded = { submissionGuid, assignmentGuid: submission.assignmentGuid, score, passed };
-    this.realtime.emitToUsers('submission:graded', graded, user.country, [submission.userGuid]);
-    this.realtime.emitToCourseStaff('submission:graded', graded, user.country, course.teacherGuid);
-
-    emitEvent(this.events, 'submission.graded', {
-      submissionGuid,
-      userGuid: submission.userGuid,
-      country: user.country,
-      courseGuid: course.guid,
-      assignmentGuid: submission.assignmentGuid,
-      assignmentTitle: submission.assignment?.title ?? 'Tarea',
-      score,
-      passingScore: threshold,
-      passed,
-      feedback,
-    });
-
-    return { guid: submissionGuid, score, passed, passingScore: threshold };
-  }
-
-  /**
-   * Devuelve **un** intento de cuestionario a un alumno que agotó los suyos sin superarlo.
-   *
-   * Es la vía de escape del examinador cuando alguien pierde un intento por un problema de
-   * conexión o de dispositivo. Se retira únicamente el último intento registrado, porque
-   * el recuento se lleva contando entregas: borrarlas todas repondría todos los intentos y
-   * se llevaría el historial que el examinador consulta.
-   */
-  async enableNewAttempt(resourceGuid: string, studentGuid: string, user: JwtPayload) {
-    const course = await this.access.managedCourseOfResource(resourceGuid, user);
-
-    const resource = await this.prisma.resource.findUnique({
-      where: { guid: resourceGuid },
-      select: { title: true, quizConfig: true },
-    });
-    if (!resource?.quizConfig) {
-      throw new BadRequestException('Este recurso no es un cuestionario.');
-    }
-    const config = parseQuizConfig(resource.quizConfig);
-
-    // Con la matrícula bloqueada, como al abrir y corregir intentos: nadie cuenta a la vez los que quedan.
-    await this.prisma.$transaction(async (tx) => {
-      assertRoundOpen(await lockEnrollment(tx, studentGuid, course.guid), NEW_ATTEMPT_CLOSED);
-      await this.discardLastAttempt(tx, { resourceGuid, studentGuid, config });
-    }, AFTER_LOCK);
-
-    const quizTitle = quizDisplayTitle(resource.title);
-    this.logger.log(`${user.email} habilitó un nuevo intento de "${quizTitle}" a ${studentGuid}`);
-
-    // Si tiene el cuestionario abierto, el «has agotado tus intentos» se cambia por el botón
-    // de empezar sin que tenga que recargar.
-    this.realtime.emitToUsers('quiz:attempt-enabled', { resourceGuid, courseGuid: course.guid }, user.country, [
-      studentGuid,
-    ]);
-    emitEvent(this.events, 'quiz.attempt_enabled', {
-      userGuid: studentGuid,
-      country: user.country,
-      resourceGuid,
-      courseGuid: course.guid,
-      quizTitle,
-    });
-
-    return { message: 'El alumno puede volver a realizar el cuestionario.' };
-  }
-
-  /** Retira el último intento calificado; nunca el de quien ya superó el cuestionario ni a quien le quedan. */
-  private async discardLastAttempt(
-    tx: Prisma.TransactionClient,
-    { resourceGuid, studentGuid, config }: { resourceGuid: string; studentGuid: string; config: QuizConfig },
-  ): Promise<void> {
-    const passed = await tx.resourceProgress.findUnique({
-      where: { userGuid_resourceGuid: { userGuid: studentGuid, resourceGuid } },
-      select: { id: true },
-    });
-    if (passed) {
-      throw new BadRequestException('Este alumno ya superó el cuestionario: su intento aprobado no se retira.');
-    }
-
-    const last = await tx.submission.findFirst({
-      where: { assignmentGuid: resourceGuid, userGuid: studentGuid, status: 'GRADED' },
-      orderBy: [{ attemptNumber: 'desc' }, { submittedAt: 'desc' }],
-      select: { guid: true },
-    });
-    if (!last) {
-      throw new NotFoundException('Este alumno no tiene intentos registrados en el cuestionario.');
-    }
-
-    const used = await tx.submission.count({ where: usedAttempts(resourceGuid, studentGuid) });
-    if (!attemptsExhausted(config, used)) {
-      throw new BadRequestException(
-        'A este alumno todavía le quedan intentos: puede volver a presentar el cuestionario sin que le habilites otro.',
-      );
-    }
-
-    await tx.submission.delete({ where: { guid: last.guid } });
   }
 }

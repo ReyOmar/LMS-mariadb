@@ -1,43 +1,39 @@
 import type { UserRole } from '@/types/models';
 
 /**
- * Catálogo de eventos que el servidor empuja al navegador.
+ * Catálogo de eventos que el navegador recibe al preguntar qué ha pasado.
  * Espejo de `apps/api/src/realtime/events.ts`: si uno cambia, el otro también.
  */
-export const REALTIME_EVENTS = [
-  'session:revoked',
-  'stream:superseded',
-  'user:created',
-  'user:updated',
-  'user:deleted',
-  'request:new',
-  'request:resolved',
-  'integration:changed',
-  'course:created',
-  'course:updated',
-  'course:deleted',
-  'course:maintenance',
-  'course:editing',
-  'course:editing-released',
-  'course:editing-sync',
-  'enrollment:changed',
-  'submission:new',
-  'submission:graded',
-  'round:closed',
-  'quiz:attempt-enabled',
-  'config:updated',
-  'presence:update',
-  'presence:sync',
-  'notification:new',
-  'message:new',
-  'message:read',
-  'contact:updated',
-  'certificate:new',
-] as const;
+export type RealtimeEvent =
+  | 'session:revoked'
+  | 'user:created'
+  | 'user:updated'
+  | 'user:deleted'
+  | 'request:new'
+  | 'request:resolved'
+  | 'integration:changed'
+  | 'course:created'
+  | 'course:updated'
+  | 'course:deleted'
+  | 'course:maintenance'
+  | 'course:editing'
+  | 'course:editing-released'
+  | 'course:editing-sync'
+  | 'enrollment:changed'
+  | 'submission:new'
+  | 'submission:graded'
+  | 'round:closed'
+  | 'quiz:attempt-enabled'
+  | 'config:updated'
+  | 'presence:update'
+  | 'presence:sync'
+  | 'notification:new'
+  | 'message:new'
+  | 'message:read'
+  | 'contact:updated'
+  | 'certificate:new';
 
-export type RealtimeEvent = (typeof REALTIME_EVENTS)[number];
-
-/** Trama recibida por el flujo. */
+/** Un evento tal como llega del servidor. */
 export interface RealtimeMessage<T = unknown> {
   event: RealtimeEvent;
   data: T;

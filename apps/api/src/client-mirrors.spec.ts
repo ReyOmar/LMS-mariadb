@@ -1,5 +1,5 @@
-import { clientSource, entriesIn, numberIn, textsIn } from './common/testing/client-source';
-import { MAX_PASSWORD_LENGTH, MIN_PASSWORD_LENGTH } from './common/domain/password';
+import { clientModule, clientSource, entriesIn, numberIn, textsIn } from './common/testing/client-source';
+import { passwordProblem } from './common/domain/password';
 import { DEFAULT_PASSING_SCORE, MAX_SCORE, MIN_SCORE } from './common/domain/grading';
 import { COUNTRY_METADATA } from './common/domain/country';
 import { IMAGE_LIMITS_MB } from './storage/upload-limits';
@@ -9,10 +9,10 @@ import { CERTIFICATE_TEXT, MAX_LEGAL_TEXT_LENGTH } from './certificates/certific
 import { REALTIME_EVENTS } from './realtime/events';
 import { MAX_DURATION_HOURS, MAX_TITLE_LENGTH } from './courses/dto/courses.dto';
 import { RESOURCE_TYPES } from './courses/dto/resources.dto';
-import { COURSE_CODE_PATTERN, MAX_COURSE_CODE_LENGTH } from './common/validation/course-code';
 import { WAITING_REASONS } from './integrations/external-status';
 import { UpdateSettingsDto } from './settings/dto/update-settings.dto';
 import { maxLengthOf } from './common/testing/validation-metadata';
+import { EMAIL_TEMPLATES } from '../prisma/email-templates';
 
 /**
  * Reglas que el cliente repite para avisar antes de enviar nada. Quien decide es la API; si
@@ -45,7 +45,8 @@ describe('Reglas que repite el cliente', () => {
   it(
     'catálogo de eventos en tiempo real',
     mirror('src/lib/realtime/events.ts', (source) => {
-      expect(textsIn(source, 'REALTIME_EVENTS').sort()).toEqual([...REALTIME_EVENTS].sort());
+      const union = /type RealtimeEvent =([^;]+);/.exec(source)![1];
+      expect([...union.matchAll(/'([^']+)'/g)].map(([, event]) => event).sort()).toEqual([...REALTIME_EVENTS].sort());
     }),
   );
 
@@ -56,13 +57,27 @@ describe('Reglas que repite el cliente', () => {
     }),
   );
 
-  it(
-    'política de contraseñas',
-    mirror('src/lib/password.ts', (source) => {
-      expect(numberIn(source, 'MIN_PASSWORD_LENGTH')).toBe(MIN_PASSWORD_LENGTH);
-      expect(numberIn(source, 'MAX_PASSWORD_LENGTH')).toBe(MAX_PASSWORD_LENGTH);
-    }),
-  );
+  it('política de contraseñas: las dos partes aceptan las mismas y explican igual lo que falta', () => {
+    const client = clientModule<{ passwordProblem: typeof passwordProblem }>('src/lib/password.ts');
+    if (client === null) return console.warn('No está el cliente (src/lib/password.ts); se omite la comparación.');
+
+    for (const password of [
+      '',
+      '1',
+      'ab1!',
+      'abcdefg1',
+      'abcdef1!',
+      '12345678!',
+      'abcdefgh!',
+      'Ñandú 2026 ¿?',
+      'a1!'.repeat(43),
+    ]) {
+      expect({ password, problem: client.passwordProblem(password) }).toEqual({
+        password,
+        problem: passwordProblem(password),
+      });
+    }
+  });
 
   it(
     'escala de notas',
@@ -133,13 +148,15 @@ describe('Reglas que repite el cliente', () => {
     }),
   );
 
-  it(
-    'código de integración de un curso',
-    mirror('src/app/dashboard/course-builder/components/course-fields.ts', (source) => {
-      expect(numberIn(source, 'MAX_COURSE_CODE_LENGTH')).toBe(MAX_COURSE_CODE_LENGTH);
-      expect(source).toContain(`COURSE_CODE_PATTERN = ${COURSE_CODE_PATTERN}`);
-    }),
-  );
+  it('cada variable de los correos tiene su nombre y su ejemplo en el editor de plantillas', () => {
+    const path = 'src/app/dashboard/admin/emails/components/variables.ts';
+    const client = clientModule<{ variableData: (variable: string) => { example: string } }>(path);
+    if (client === null) return console.warn(`No está el cliente (${path}); se omite la comparación.`);
+
+    const declared = EMAIL_TEMPLATES.flatMap(({ variables }) => JSON.parse(variables) as string[]);
+    // A una variable que no conoce, el editor le inventa un ejemplo entre corchetes.
+    expect(declared.filter((variable) => client.variableData(variable).example === `[${variable}]`)).toEqual([]);
+  });
 
   it(
     'motivos por los que espera una matrícula pedida por otro sistema',

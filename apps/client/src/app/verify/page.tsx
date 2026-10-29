@@ -7,7 +7,7 @@ import { ArrowLeft, BadgeCheck, Search, ShieldAlert, ShieldCheck } from 'lucide-
 import api from '@/lib/api';
 import { formatScore } from '@/lib/grading';
 import { useRateLimitedForm } from '@/hooks/useRateLimitedForm';
-import { PageLoader } from '@/components/ui/PageLoader';
+import { FullScreenLoader } from '@/components/ui/PageLoader';
 import { FormError } from '@/components/ui/FormError';
 import { SubmitButton } from '@/components/ui/SubmitButton';
 import { longDate } from '@/lib/dates';
@@ -37,13 +37,7 @@ type Result = { status: 'valid'; certificate: VerifiedCertificate } | { status: 
 
 export default function VerificationPage() {
   return (
-    <Suspense
-      fallback={
-        <div className="min-h-screen flex items-center justify-center">
-          <PageLoader message="Cargando…" />
-        </div>
-      }
-    >
+    <Suspense fallback={<FullScreenLoader message="Cargando…" />}>
       <Verifier />
     </Suspense>
   );
