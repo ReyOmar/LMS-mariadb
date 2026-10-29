@@ -1,6 +1,7 @@
 import { Body, Controller, Delete, Get, Param, ParseIntPipe, Patch, Post, Query } from '@nestjs/common';
 import { NotificationsService } from './notifications.service';
 import { ChatService } from './chat.service';
+import { ChatContactsService } from './chat-contacts.service';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { JwtPayload } from '../common/interfaces/jwt-payload.interface';
 import {
@@ -20,6 +21,7 @@ export class NotificationsController {
   constructor(
     private readonly notifications: NotificationsService,
     private readonly chat: ChatService,
+    private readonly contacts: ChatContactsService,
   ) {}
 
   // ── Notificaciones ───────────────────────────────────────────────────────
@@ -52,23 +54,23 @@ export class NotificationsController {
   }
 
   @Get('/messages/contacts')
-  getContacts(@CurrentUser() user: JwtPayload) {
-    return this.chat.getContacts(user);
+  getConversations(@CurrentUser() user: JwtPayload) {
+    return this.chat.getConversations(user);
   }
 
   @Get('/messages/search')
   searchContacts(@CurrentUser() user: JwtPayload, @Query() query: ContactSearchDto) {
-    return this.chat.searchContactCandidates(query.q ?? '', user);
+    return this.contacts.searchCandidates(query.q ?? '', user);
   }
 
   @Get('/messages/requests')
   getRequests(@CurrentUser() user: JwtPayload) {
-    return this.chat.getPendingRequests(user);
+    return this.contacts.pending(user);
   }
 
   @Post('/messages/requests')
   requestContact(@CurrentUser() user: JwtPayload, @Body() dto: RequestContactDto) {
-    return this.chat.requestContact(dto.receiverGuid, dto.courseGuid, user);
+    return this.contacts.request(dto.receiverGuid, dto.courseGuid, user);
   }
 
   @Patch('/messages/requests/:id')
@@ -77,7 +79,7 @@ export class NotificationsController {
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: RespondToContactDto,
   ) {
-    return this.chat.respondToRequest(id, dto.accept, user);
+    return this.contacts.respond(id, dto.accept, user);
   }
 
   @Get('/messages/:contactGuid')

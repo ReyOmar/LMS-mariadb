@@ -1,28 +1,17 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import {
-  AlertTriangle,
-  CheckCircle,
-  Clock,
-  ExternalLink,
-  LogOut,
-  Paperclip,
-  Send,
-  Trophy,
-  XCircle,
-} from 'lucide-react';
-import api, { errorMessage, fileUrlFor } from '@/lib/api';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { AlertTriangle, Trophy } from 'lucide-react';
+import api, { errorMessage } from '@/lib/api';
 import { MAX_SCORE, formatScoreValue } from '@/lib/grading';
 import { useAlerts } from '@/contexts/AlertContext';
 import { useCountry } from '@/contexts/CountryContext';
 import { useRealtimeEvent, useRealtimeReconnect } from '@/contexts/RealtimeContext';
-import { useDialog } from '@/hooks/useDialog';
-import { sanitizeHTML } from '@/lib/sanitize';
-import { hasContent } from '@/lib/editor-html';
-import { externalUrl } from '@/lib/resources';
 import type { QuizState, QuizQuestion } from '@/types/models';
 import { clearQuizDraft, readQuizDraft, saveQuizDraft, type QuizAnswers } from './quiz-draft';
+import { QuizIntro } from './QuizIntro';
+import { AttemptBar, AttemptQuestions } from './QuizAttempt';
+import { ExitDialog, ResultDialog, SubmitDialog, type QuizResult } from './QuizDialogs';
 
 /**
  * Realización de un cuestionario.
@@ -33,14 +22,6 @@ import { clearQuizDraft, readQuizDraft, saveQuizDraft, type QuizAnswers } from '
  *
  * La corrección también ocurre sólo en el servidor: aquí no hay forma de calcular la nota.
  */
-
-interface Result {
-  score: number;
-  passed: boolean;
-  correct: number;
-  total: number;
-  outOfTime: boolean;
-}
 
 /** Intento abierto: sus preguntas y cuándo empezó a correr el tiempo, según el servidor. */
 interface StartedAttempt {
@@ -104,7 +85,7 @@ export default function QuizViewer({
 
   const [confirmSubmit, setConfirmSubmit] = useState(false);
   const [confirmExit, setConfirmExit] = useState(false);
-  const [result, setResult] = useState<Result | null>(null);
+  const [result, setResult] = useState<QuizResult | null>(null);
 
   const inProgress = questions.length > 0 && !result;
 
@@ -227,7 +208,7 @@ export default function QuizViewer({
     setSubmitting(true);
     setConfirmSubmit(false);
     try {
-      const { data } = await api.post<Result>(`/courses/quiz/${resourceGuid}/submit`, { answers });
+      const { data } = await api.post<QuizResult>(`/courses/quiz/${resourceGuid}/submit`, { answers });
       setResult(data);
       setQuestions([]);
       setRemainingSeconds(null);
@@ -254,8 +235,6 @@ export default function QuizViewer({
     setConfirmExit(false);
     await submitAnswers();
   };
-
-  const resultDialog = useDialog({ open: result !== null, onClose: close, label: 'Resultado del cuestionario' });
 
   // ── Vistas ─────────────────────────────────────────────────────────────
 
@@ -298,406 +277,50 @@ export default function QuizViewer({
   }
 
   const answered = Object.keys(answers).length;
-  const answeredPercent = questions.length > 0 ? (answered / questions.length) * 100 : 0;
 
   return (
     <div className="bg-card border border-border/50 rounded-[2.5rem] overflow-hidden shadow-sm relative">
-      {inProgress && (
-        <div className="bg-background/80 backdrop-blur-md border-b border-border/50 p-4 flex items-center justify-between sticky top-0 z-30">
-          <div className="flex items-center gap-4">
-            <button
-              onClick={() => setConfirmExit(true)}
-              className="p-2 hover:bg-red-500/10 text-red-500 rounded-full transition-colors"
-              title="Salir del cuestionario"
-            >
-              <LogOut className="h-5 w-5" />
-            </button>
-            <span className="font-bold text-sm truncate max-w-[150px] md:max-w-none">{resourceTitle}</span>
-          </div>
-
-          <div className="flex items-center gap-4">
-            {remainingSeconds !== null && (
-              <span
-                className={`flex items-center gap-2 px-3 py-1.5 rounded-xl font-black text-xs border ${
-                  remainingSeconds < 60
-                    ? 'bg-red-500/20 text-red-700 dark:text-red-400 border-red-500/50 animate-pulse'
-                    : 'bg-muted text-foreground border-border'
-                }`}
-              >
-                <Clock className="h-3 w-3" />
-                {formatTime(remainingSeconds)}
-              </span>
-            )}
-            <span className="text-xs font-bold text-muted-foreground hidden sm:block">
-              {answered} / {questions.length}
-            </span>
-          </div>
-
-          <div
-            className="absolute bottom-0 left-0 h-1 bg-primary transition-all duration-500"
-            style={{ width: `${answeredPercent}%` }}
+      {inProgress ? (
+        <>
+          <AttemptBar
+            title={resourceTitle}
+            remainingSeconds={remainingSeconds}
+            answered={answered}
+            total={questions.length}
+            onExit={() => setConfirmExit(true)}
           />
-        </div>
-      )}
-
-      {!inProgress ? (
-        <div>
-          <div className="p-6 md:p-10 border-b border-border bg-amber-500/10">
-            <h3 className="font-bold text-xs text-amber-700 dark:text-amber-500 uppercase tracking-widest mb-4">
-              Instrucciones
-            </h3>
-            <div
-              className="prose prose-slate dark:prose-invert max-w-none text-foreground"
-              dangerouslySetInnerHTML={sanitizeHTML(
-                hasContent(instructionsHtml)
-                  ? instructionsHtml
-                  : '<p class="text-muted-foreground italic">Sin instrucciones específicas.</p>',
-              )}
-            />
-
-            {(referenceUrl || attachmentUrl) && (
-              <div className="mt-8 space-y-3">
-                {referenceUrl && (
-                  <a
-                    href={externalUrl(referenceUrl)}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="flex items-center gap-3 p-4 bg-background/50 border border-primary/20 rounded-2xl text-sm text-primary font-bold hover:bg-primary/5 transition-all"
-                  >
-                    <ExternalLink className="h-5 w-5" />
-                    <span className="truncate">{referenceUrl}</span>
-                  </a>
-                )}
-                {attachmentUrl && (
-                  <a
-                    href={fileUrlFor(attachmentUrl) ?? ''}
-                    className="flex items-center gap-4 p-4 bg-background/50 border border-border rounded-2xl hover:bg-primary/5 hover:border-primary/20 transition-all"
-                  >
-                    <span className="w-10 h-10 bg-primary/10 rounded-xl flex items-center justify-center">
-                      <Paperclip className="h-5 w-5 text-primary" />
-                    </span>
-                    <span className="flex-1 min-w-0">
-                      <span className="text-sm font-black block truncate">{attachmentName || 'Material de apoyo'}</span>
-                      <span className="text-[10px] text-muted-foreground uppercase font-bold">Recurso de apoyo</span>
-                    </span>
-                  </a>
-                )}
-              </div>
-            )}
-          </div>
-
-          <div className="p-10 text-center relative overflow-hidden">
-            <div className="relative z-10 py-4">
-              <div className="w-20 h-20 bg-amber-500/20 rounded-full flex items-center justify-center mx-auto mb-6">
-                <CheckCircle className="h-10 w-10 text-amber-500" />
-              </div>
-
-              <h2 className="text-2xl font-black mb-6 uppercase tracking-widest">Información de la evaluación</h2>
-
-              <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 max-w-2xl mx-auto mb-10">
-                <Field
-                  icon={Clock}
-                  color="text-amber-500"
-                  value={status.timeLimitMinutes > 0 ? `${status.timeLimitMinutes} min` : 'Sin límite'}
-                  label="Tiempo"
-                />
-                <Field
-                  icon={Trophy}
-                  color="text-emerald-500"
-                  value={`${points(status.passingScore)} pts`}
-                  label="Para aprobar"
-                />
-                <Field
-                  icon={Send}
-                  color="text-blue-500"
-                  value={
-                    status.maxAttempts > 0
-                      ? `${status.attemptsMade} / ${status.maxAttempts}`
-                      : String(status.attemptsMade)
-                  }
-                  label="Intentos usados"
-                />
-                <Field icon={CheckCircle} color="text-primary" value={points(status.bestScore)} label="Mejor nota" />
-              </div>
-
-              {status.blockedReason ? (
-                <p className="mx-auto max-w-md rounded-2xl border border-amber-500/30 bg-amber-500/10 px-6 py-4 text-sm font-medium text-amber-700 dark:text-amber-400">
-                  {status.blockedReason}
-                </p>
-              ) : (
-                <>
-                  <p className="text-muted-foreground mb-8 text-sm max-w-md mx-auto italic">
-                    Al comenzar se registra el intento y, si hay límite, el tiempo empieza a correr.
-                  </p>
-                  <button
-                    onClick={startAttempt}
-                    disabled={starting}
-                    className="text-lg md:text-xl px-10 md:px-16 py-5 whitespace-nowrap rounded-[1.5rem] font-black bg-amber-500 hover:bg-amber-600 text-amber-950 shadow-2xl shadow-amber-500/30 transition-all hover:scale-105 active:scale-95 disabled:opacity-60 disabled:hover:scale-100"
-                  >
-                    {starting ? 'Preparando…' : 'Comenzar intento'}
-                  </button>
-                </>
-              )}
-            </div>
-          </div>
-        </div>
+          <AttemptQuestions
+            questions={questions}
+            answers={answers}
+            onAnswer={(questionId, optionId) => setAnswers((prev) => ({ ...prev, [questionId]: optionId }))}
+            submitting={submitting}
+            onSubmit={() => setConfirmSubmit(true)}
+          />
+        </>
       ) : (
-        <div className="p-6 md:p-12 space-y-8">
-          {questions.map((question, index) => (
-            <fieldset
-              key={question.id}
-              className="bg-background border border-border/60 rounded-[2rem] p-6 md:p-10 relative overflow-hidden"
-            >
-              <span className="absolute left-0 top-0 bottom-0 w-1.5 bg-primary/20" aria-hidden="true" />
-
-              <legend className="sr-only">Pregunta {index + 1}</legend>
-              <h3 className="font-bold text-xl md:text-2xl mb-8 flex gap-5 leading-relaxed">
-                <span className="shrink-0 w-10 h-10 md:w-12 md:h-12 rounded-2xl bg-primary/10 text-primary flex items-center justify-center text-lg font-black">
-                  {index + 1}
-                </span>
-                <span className="mt-2">{question.prompt}</span>
-              </h3>
-
-              <div className="space-y-3 md:pl-16">
-                {question.options.map((option) => {
-                  const chosen = answers[question.id] === option.id;
-                  return (
-                    <label
-                      key={option.id}
-                      className={`flex items-center gap-4 md:gap-5 p-5 md:p-6 rounded-[1.5rem] border-2 cursor-pointer transition-all ${
-                        chosen
-                          ? 'bg-primary/5 border-primary shadow-lg shadow-primary/5'
-                          : 'bg-background border-border hover:border-primary/30 hover:bg-muted/50'
-                      }`}
-                    >
-                      <input
-                        type="radio"
-                        name={question.id}
-                        checked={chosen}
-                        onChange={() => setAnswers((prev) => ({ ...prev, [question.id]: option.id }))}
-                        className="sr-only"
-                      />
-                      <span
-                        className={`w-6 h-6 md:w-7 md:h-7 rounded-full border-2 flex items-center justify-center shrink-0 ${
-                          chosen ? 'border-primary bg-primary/10' : 'border-muted-foreground/30'
-                        }`}
-                      >
-                        <span
-                          className={`w-3 h-3 md:w-3.5 md:h-3.5 bg-primary rounded-full transition-transform ${
-                            chosen ? 'scale-100' : 'scale-0'
-                          }`}
-                        />
-                      </span>
-                      <span
-                        className={`text-base md:text-lg ${chosen ? 'font-black' : 'text-muted-foreground font-semibold'}`}
-                      >
-                        {option.text}
-                      </span>
-                    </label>
-                  );
-                })}
-              </div>
-            </fieldset>
-          ))}
-
-          <div className="flex justify-center pt-10 pb-10">
-            <button
-              onClick={() => setConfirmSubmit(true)}
-              disabled={submitting}
-              className="bg-primary hover:bg-primary/90 text-primary-foreground px-6 md:px-12 py-5 rounded-[1.5rem] font-black shadow-2xl shadow-primary/30 transition-all hover:scale-105 active:scale-95 flex items-center gap-3 md:gap-4 text-lg md:text-xl whitespace-nowrap disabled:opacity-60"
-            >
-              <Send className="h-6 w-6" />
-              {submitting ? 'Enviando…' : 'Finalizar y enviar'}
-            </button>
-          </div>
-        </div>
-      )}
-
-      {confirmSubmit && (
-        <Dialog
-          icon={AlertTriangle}
-          tone="amber"
-          title="¿Terminar el intento?"
-          description="Revisa el resumen antes de enviar."
-          primaryAction={{ label: submitting ? 'Enviando…' : 'Confirmar envío', onClick: submitAnswers }}
-          secondaryAction={{ label: 'Volver', onClick: () => setConfirmSubmit(false) }}
-        >
-          <div className="bg-muted/50 rounded-[1.5rem] p-6 space-y-3 text-base border border-border/50">
-            <Row label="Total de preguntas" value={questions.length} />
-            <Row label="Respondidas" value={answered} tone="text-emerald-700 dark:text-emerald-400" />
-            <Row label="Sin responder" value={questions.length - answered} tone="text-amber-700 dark:text-amber-400" />
-          </div>
-        </Dialog>
-      )}
-
-      {confirmExit && (
-        <Dialog
-          icon={XCircle}
-          tone="red"
-          title="¿Abandonar el intento?"
-          description="Se enviará tal y como está y contará como un intento realizado."
-          primaryAction={{ label: 'Sí, salir', onClick: abandon, destructive: true }}
-          secondaryAction={{ label: 'No, continuar', onClick: () => setConfirmExit(false) }}
+        <QuizIntro
+          status={status}
+          instructionsHtml={instructionsHtml}
+          referenceUrl={referenceUrl}
+          attachmentUrl={attachmentUrl}
+          attachmentName={attachmentName}
+          points={points}
+          starting={starting}
+          onStart={startAttempt}
         />
       )}
 
-      {result && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-background/90 backdrop-blur-xl">
-          <div
-            {...resultDialog.dialogProps}
-            className="bg-card border border-border shadow-2xl rounded-[3rem] w-full max-w-sm p-10 text-center"
-          >
-            <div
-              className={`w-28 h-28 rounded-full flex items-center justify-center mx-auto mb-8 border ${
-                result.passed
-                  ? 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20'
-                  : 'bg-red-500/10 text-red-500 border-red-500/20'
-              }`}
-            >
-              {result.passed ? <Trophy className="h-14 w-14" /> : <XCircle className="h-14 w-14" />}
-            </div>
-
-            <p className="font-black text-6xl mb-4 tracking-tighter">
-              {points(result.score)}
-              <span className="text-2xl text-muted-foreground font-bold tracking-normal"> / {MAX_SCORE}</span>
-            </p>
-            <p
-              className={`font-black text-xl mb-4 uppercase tracking-widest ${
-                result.passed ? 'text-emerald-700 dark:text-emerald-400' : 'text-red-700 dark:text-red-400'
-              }`}
-            >
-              {result.passed ? 'Aprobado' : 'No aprobado'}
-            </p>
-
-            {result.outOfTime && (
-              <p className="mb-6 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-xs font-medium text-amber-700 dark:text-amber-400">
-                Se agotó el tiempo disponible, por eso el intento se calificó con 0.
-              </p>
-            )}
-
-            <div className="bg-muted/50 rounded-[2rem] p-6 mb-8 text-sm flex justify-around border border-border/50">
-              <div>
-                <p className="font-black text-3xl">{result.correct}</p>
-                <p className="text-muted-foreground text-[10px] font-black uppercase tracking-widest mt-1">Aciertos</p>
-              </div>
-              <span className="w-px bg-border/50" />
-              <div>
-                <p className="font-black text-3xl">{result.total - result.correct}</p>
-                <p className="text-muted-foreground text-[10px] font-black uppercase tracking-widest mt-1">Fallos</p>
-              </div>
-            </div>
-
-            {!result.passed && (
-              <p className="mb-6 text-sm text-muted-foreground leading-relaxed">
-                Necesitas {points(status.passingScore)} puntos. Repasa el módulo y vuelve a intentarlo.
-              </p>
-            )}
-
-            <button
-              onClick={close}
-              className="w-full py-5 font-black text-xl rounded-2xl bg-primary hover:bg-primary/90 text-primary-foreground shadow-2xl shadow-primary/30 transition-all hover:scale-105 active:scale-95"
-            >
-              Continuar
-            </button>
-          </div>
-        </div>
+      {confirmSubmit && (
+        <SubmitDialog
+          total={questions.length}
+          answered={answered}
+          submitting={submitting}
+          onConfirm={submitAnswers}
+          onCancel={() => setConfirmSubmit(false)}
+        />
       )}
-    </div>
-  );
-}
-
-function formatTime(seconds: number): string {
-  const minutes = Math.floor(seconds / 60);
-  const remainder = seconds % 60;
-  return `${minutes}:${String(remainder).padStart(2, '0')}`;
-}
-
-function Field({
-  icon: Icon,
-  color,
-  value,
-  label,
-}: {
-  icon: typeof Clock;
-  color: string;
-  value: string;
-  label: string;
-}) {
-  return (
-    <div className="bg-muted/30 p-5 rounded-[1.5rem] border border-border flex flex-col items-center">
-      <Icon className={`h-6 w-6 mb-2 ${color}`} />
-      <span className="text-lg font-black text-center">{value}</span>
-      <span className="text-[10px] text-muted-foreground uppercase font-black text-center">{label}</span>
-    </div>
-  );
-}
-
-function Row({ label, value, tone }: { label: string; value: number; tone?: string }) {
-  return (
-    <div className={`flex justify-between items-center font-black ${tone ?? ''}`}>
-      <span className={tone ? '' : 'font-bold text-muted-foreground'}>{label}:</span>
-      <span>{value}</span>
-    </div>
-  );
-}
-
-function Dialog({
-  icon: Icon,
-  tone,
-  title,
-  description,
-  primaryAction,
-  secondaryAction,
-  children,
-}: {
-  icon: typeof AlertTriangle;
-  tone: 'amber' | 'red';
-  title: string;
-  description: string;
-  primaryAction: { label: string; onClick: () => void; destructive?: boolean };
-  secondaryAction: { label: string; onClick: () => void };
-  children?: ReactNode;
-}) {
-  const colors = tone === 'amber' ? 'bg-amber-500/10 text-amber-500' : 'bg-red-500/10 text-red-500';
-  // Escape equivale a la acción secundaria («Volver», «No, continuar»): no envía nada.
-  const { dialogProps, titleId } = useDialog({ onClose: secondaryAction.onClick });
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-background/80 backdrop-blur-md">
-      <div {...dialogProps} className="bg-card border border-border shadow-2xl rounded-[2.5rem] w-full max-w-md p-8">
-        <div className="flex items-center gap-5 mb-6">
-          <span className={`w-14 h-14 rounded-full flex items-center justify-center shrink-0 ${colors}`}>
-            <Icon className="h-7 w-7" />
-          </span>
-          <div>
-            <h3 id={titleId} className="font-black text-2xl tracking-tight">
-              {title}
-            </h3>
-            <p className="text-sm text-muted-foreground font-bold mt-1">{description}</p>
-          </div>
-        </div>
-
-        {children && <div className="mb-8">{children}</div>}
-
-        <div className="flex gap-3">
-          <button
-            onClick={secondaryAction.onClick}
-            className="flex-1 py-4 bg-muted hover:bg-muted/80 font-black rounded-2xl transition-all"
-          >
-            {secondaryAction.label}
-          </button>
-          <button
-            onClick={primaryAction.onClick}
-            className={`flex-[2] py-4 font-black rounded-2xl shadow-lg transition-all ${
-              primaryAction.destructive
-                ? 'bg-red-600 hover:bg-red-700 text-white'
-                : 'bg-primary hover:bg-primary/90 text-primary-foreground'
-            }`}
-          >
-            {primaryAction.label}
-          </button>
-        </div>
-      </div>
+      {confirmExit && <ExitDialog onConfirm={abandon} onCancel={() => setConfirmExit(false)} />}
+      {result && <ResultDialog result={result} passingScore={status.passingScore} points={points} onClose={close} />}
     </div>
   );
 }

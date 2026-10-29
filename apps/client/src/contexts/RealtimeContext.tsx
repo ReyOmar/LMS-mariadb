@@ -1,6 +1,6 @@
 'use client';
 
-import React, { ReactNode, createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { ReactNode, createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { clearSession, readToken, redirectToLogin, type LogoutReason } from '@/lib/api';
 import { pollEvents } from '@/lib/realtime/poll';
 import {

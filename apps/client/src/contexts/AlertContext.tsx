@@ -1,8 +1,16 @@
 'use client';
 
-import React, { createContext, useContext, useState, useCallback, useMemo, useRef, useEffect, ReactNode } from 'react';
-import { AlertTriangle, CheckCircle, Info, XCircle, X, type LucideIcon } from 'lucide-react';
-import { useDialog } from '@/hooks/useDialog';
+import { createContext, useContext, useState, useCallback, useMemo, useRef, useEffect, ReactNode } from 'react';
+import {
+  AlertDialog,
+  ConfirmationDialog,
+  ToastStack,
+  type AlertState,
+  type AlertType,
+  type ConfirmationState,
+  type ConfirmationStyle,
+  type Toast,
+} from '@/components/ui/AlertViews';
 
 /**
  * Avisos al usuario: diálogos, mensajes pasajeros y confirmaciones.
@@ -25,39 +33,6 @@ import { useDialog } from '@/hooks/useDialog';
 
 let toastCounter = 0;
 let alertCounter = 0;
-
-type AlertType = 'success' | 'error' | 'warning' | 'info';
-type ConfirmationStyle = 'danger' | 'warning' | 'info';
-
-interface AlertState {
-  /** Distingue un aviso del siguiente aunque sean iguales: cada uno cuenta su propio cierre. */
-  id: number;
-  open: boolean;
-  type: AlertType;
-  title: string;
-  message: string;
-  /** Milisegundos hasta cerrarse solo; `false` lo desactiva. */
-  autoClose: number | false;
-}
-
-interface ConfirmationState {
-  open: boolean;
-  title: string;
-  message: string;
-  confirmText: string;
-  variant: ConfirmationStyle;
-  onConfirm: () => void;
-  onCancel: () => void;
-}
-
-interface Toast {
-  id: number;
-  type: AlertType;
-  title: string;
-  message: string;
-  durationMs: number;
-  closing: boolean;
-}
 
 type ShowAlert = (title: string, message?: string, autoClose?: number | false) => void;
 type Notify = (title: string, message?: string) => void;
@@ -94,55 +69,6 @@ const TOAST_DURATION_MS: Record<AlertType, number> = {
 };
 
 const MAX_TOASTS = 3;
-
-/** Icono y clases de color de cada tipo de aviso. */
-const ALERT_STYLES: Record<
-  AlertType,
-  { icon: LucideIcon; iconColor: string; iconBackground: string; border: string; bar: string; button: string }
-> = {
-  success: {
-    icon: CheckCircle,
-    iconColor: 'text-emerald-500',
-    iconBackground: 'bg-emerald-500/15',
-    border: 'border-l-emerald-500',
-    bar: 'bg-emerald-500',
-    button: 'bg-success hover:bg-success/90 text-success-foreground',
-  },
-  error: {
-    icon: XCircle,
-    iconColor: 'text-red-500',
-    iconBackground: 'bg-red-500/15',
-    border: 'border-l-red-500',
-    bar: 'bg-red-500',
-    button: 'bg-red-600 hover:bg-red-700 text-white',
-  },
-  warning: {
-    icon: AlertTriangle,
-    iconColor: 'text-amber-500',
-    iconBackground: 'bg-amber-500/15',
-    border: 'border-l-amber-500',
-    bar: 'bg-amber-500',
-    button: 'bg-amber-500 hover:bg-amber-600 text-amber-950',
-  },
-  info: {
-    icon: Info,
-    iconColor: 'text-blue-500',
-    iconBackground: 'bg-blue-500/15',
-    border: 'border-l-blue-500',
-    bar: 'bg-blue-500',
-    button: 'bg-blue-600 hover:bg-blue-700 text-white',
-  },
-};
-
-const CONFIRMATION_STYLES: Record<ConfirmationStyle, { background: string; icon: string; button: string }> = {
-  danger: { background: 'bg-red-500/15', icon: 'text-red-500', button: 'bg-red-600 hover:bg-red-700 text-white' },
-  warning: {
-    background: 'bg-amber-500/15',
-    icon: 'text-amber-500',
-    button: 'bg-amber-500 hover:bg-amber-600 text-amber-950',
-  },
-  info: { background: 'bg-blue-500/15', icon: 'text-blue-500', button: 'bg-blue-600 hover:bg-blue-700 text-white' },
-};
 
 export function AlertProvider({ children }: { children: ReactNode }) {
   const [alert, setAlert] = useState<AlertState>({
@@ -289,181 +215,12 @@ export function AlertProvider({ children }: { children: ReactNode }) {
 
   const contextValue = useMemo(() => ({ showAlert, notify, showConfirmation }), [showAlert, notify, showConfirmation]);
 
-  const alertStyle = ALERT_STYLES[alert.type];
-  const AlertIcon = alertStyle.icon;
-  const confirmationStyle = CONFIRMATION_STYLES[confirmation.variant];
-  const autoCloseMs = typeof alert.autoClose === 'number' && alert.autoClose > 0 ? alert.autoClose : null;
-
-  const alertDialog = useDialog({ open: alert.open, onClose: closeAlert, role: 'alertdialog' });
-  const confirmationDialog = useDialog({
-    open: confirmation.open,
-    onClose: confirmation.onCancel,
-    role: 'alertdialog',
-  });
-  const alertMessageId = `${alertDialog.titleId}-message`;
-  const confirmationMessageId = `${confirmationDialog.titleId}-message`;
-
   return (
     <AlertsContext.Provider value={contextValue}>
       {children}
-
-      {/* Ventana de aviso */}
-      {alert.open && (
-        <div
-          className={`fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 transition-opacity duration-150 ${closing ? 'opacity-0' : 'opacity-100 animate-in fade-in duration-200'}`}
-          onClick={(e) => {
-            if (e.target === e.currentTarget) closeAlert();
-          }}
-        >
-          <div
-            {...alertDialog.dialogProps}
-            aria-describedby={alert.message ? alertMessageId : undefined}
-            className={`relative bg-card border border-border rounded-2xl shadow-2xl w-full max-w-md overflow-hidden transition-all duration-150 ${closing ? 'scale-95 opacity-0' : 'animate-in zoom-in-95 duration-200'}`}
-          >
-            <button
-              type="button"
-              onClick={closeAlert}
-              className="absolute top-3 right-3 p-1 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
-              aria-label="Cerrar"
-            >
-              <X className="h-4 w-4" />
-            </button>
-            <div className="p-6 flex flex-col items-center text-center">
-              <div
-                className={`w-16 h-16 rounded-full flex items-center justify-center mb-4 ${alertStyle.iconBackground}`}
-              >
-                <AlertIcon className={`h-8 w-8 ${alertStyle.iconColor}`} />
-              </div>
-              <h3 id={alertDialog.titleId} className="text-xl font-bold text-foreground mb-2">
-                {alert.title}
-              </h3>
-              {alert.message && (
-                <p id={alertMessageId} className="text-muted-foreground text-sm leading-relaxed">
-                  {alert.message}
-                </p>
-              )}
-            </div>
-            {/* Barra del cierre automático */}
-            {autoCloseMs !== null && (
-              <div className="px-6 -mt-2 mb-2">
-                <div className="h-1 bg-muted rounded-full overflow-hidden">
-                  <div
-                    key={alert.id}
-                    className={`h-full rounded-full ${alertStyle.bar}`}
-                    style={{ animation: `shrink ${autoCloseMs}ms linear forwards` }}
-                  />
-                </div>
-              </div>
-            )}
-            <div className="px-6 pb-6 flex justify-center">
-              <button
-                type="button"
-                onClick={closeAlert}
-                className={`w-full font-bold py-3 rounded-xl transition-colors shadow-md ${alertStyle.button}`}
-              >
-                Aceptar
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Ventana de confirmación */}
-      {confirmation.open && (
-        <div
-          className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 backdrop-blur-sm animate-in fade-in duration-200 p-4"
-          onClick={(e) => {
-            if (e.target === e.currentTarget) confirmation.onCancel();
-          }}
-        >
-          <div
-            {...confirmationDialog.dialogProps}
-            aria-describedby={confirmation.message ? confirmationMessageId : undefined}
-            className="bg-card border border-border rounded-2xl shadow-2xl w-full max-w-md overflow-hidden animate-in zoom-in-95 duration-200"
-          >
-            <div className="p-6 flex flex-col items-center text-center">
-              <div
-                className={`w-16 h-16 ${confirmationStyle.background} rounded-full flex items-center justify-center mb-4`}
-              >
-                <AlertTriangle className={`h-8 w-8 ${confirmationStyle.icon}`} />
-              </div>
-              <h3 id={confirmationDialog.titleId} className="text-xl font-bold text-foreground mb-2">
-                {confirmation.title}
-              </h3>
-              {confirmation.message && (
-                <p id={confirmationMessageId} className="text-muted-foreground text-sm leading-relaxed">
-                  {confirmation.message}
-                </p>
-              )}
-            </div>
-            <div className="px-6 pb-6 flex items-center gap-3">
-              <button
-                type="button"
-                onClick={confirmation.onCancel}
-                className="flex-1 bg-muted hover:bg-border text-foreground font-bold py-3 rounded-xl transition-colors"
-              >
-                Cancelar
-              </button>
-              <button
-                type="button"
-                onClick={confirmation.onConfirm}
-                className={`flex-1 ${confirmationStyle.button} font-bold py-3 rounded-xl transition-colors shadow-md`}
-              >
-                {confirmation.confirmText}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Pila de mensajes pasajeros. La animación `shrink` de las barras está en globals.css.
-          Sigue activa con una ventana abierta: sus avisos tienen que leerse y poder cerrarse. */}
-      <div
-        data-keep-active
-        className="fixed top-4 right-4 z-[9998] flex flex-col gap-3 pointer-events-none"
-        style={{ maxWidth: '420px', width: '100%' }}
-      >
-        {toasts.map((toast) => {
-          const toastStyle = ALERT_STYLES[toast.type];
-          const ToastIcon = toastStyle.icon;
-          return (
-            <div
-              key={toast.id}
-              role={toast.type === 'error' ? 'alert' : 'status'}
-              className={`pointer-events-auto bg-card border border-border/60 rounded-xl shadow-2xl overflow-hidden border-l-4 ${toastStyle.border} transition-all duration-250 ${
-                toast.closing ? 'opacity-0 translate-x-8 scale-95' : 'animate-in slide-in-from-right-4 duration-300'
-              }`}
-            >
-              <div className="flex items-start gap-3 p-4">
-                <div className="shrink-0 mt-0.5">
-                  <ToastIcon className={`h-5 w-5 ${toastStyle.iconColor}`} />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-bold text-foreground leading-tight">{toast.title}</p>
-                  {toast.message && (
-                    <p className="text-xs text-muted-foreground mt-1 leading-relaxed">{toast.message}</p>
-                  )}
-                </div>
-                <button
-                  type="button"
-                  onClick={() => closeToast(toast.id)}
-                  aria-label="Cerrar aviso"
-                  className="shrink-0 p-1 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
-                >
-                  <X className="h-3.5 w-3.5" />
-                </button>
-              </div>
-              {/* Tiempo que le queda a la vista */}
-              <div className="h-1 bg-muted/30">
-                <div
-                  className={`h-full rounded-r-full ${toastStyle.bar}`}
-                  style={{ animation: `shrink ${toast.durationMs}ms linear forwards` }}
-                />
-              </div>
-            </div>
-          );
-        })}
-      </div>
+      <AlertDialog alert={alert} closing={closing} onClose={closeAlert} />
+      <ConfirmationDialog confirmation={confirmation} />
+      <ToastStack toasts={toasts} onClose={closeToast} />
     </AlertsContext.Provider>
   );
 }

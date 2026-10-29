@@ -2,7 +2,9 @@ import { Body, Controller, Delete, Get, Param, ParseIntPipe, Patch, Post, Query,
 import { Throttle } from '@nestjs/throttler';
 import type { FastifyRequest } from 'fastify';
 import { AuthService } from './auth.service';
+import { AccessRequestsService } from './access-requests.service';
 import { UserService } from './user.service';
+import { ProfileService } from './profile.service';
 import { Public } from '../common/decorators/public.decorator';
 import { BeforeConsent } from '../common/decorators/before-consent.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
@@ -26,6 +28,8 @@ import { CREDENTIALS_LIMIT, EMAIL_LIMIT } from '../common/guards/rate-limit.guar
 export class AuthController {
   constructor(
     private readonly auth: AuthService,
+    private readonly accessRequests: AccessRequestsService,
+    private readonly profile: ProfileService,
     private readonly users: UserService,
   ) {}
 
@@ -49,7 +53,7 @@ export class AuthController {
   @Throttle(EMAIL_LIMIT)
   @Post('access-requests')
   requestAccess(@Body() dto: RequestAccessDto) {
-    return this.auth.requestAccess(dto);
+    return this.accessRequests.submit(dto);
   }
 
   @Public()
@@ -89,7 +93,7 @@ export class AuthController {
   @BeforeConsent()
   @Post('logout')
   async logout(@CurrentUser() user: JwtPayload) {
-    await this.users.logout(user.sub, user.jti);
+    await this.auth.logout(user.sub, user.jti);
     return { message: 'Sesión cerrada.' };
   }
 
@@ -98,19 +102,19 @@ export class AuthController {
   @BeforeConsent()
   @Get('me')
   getMyProfile(@CurrentUser() user: JwtPayload) {
-    return this.users.getUserProfile(user.sub, user.country);
+    return this.profile.get(user.sub, user.country);
   }
 
   /** Aceptación de la política de tratamiento de datos vigente. */
   @BeforeConsent()
   @Post('me/data-consent')
   acceptDataPolicy(@CurrentUser() user: JwtPayload) {
-    return this.users.acceptDataPolicy(user.sub, user.country);
+    return this.profile.acceptDataPolicy(user.sub, user.country);
   }
 
   @Patch('me')
   updateMyProfile(@CurrentUser() user: JwtPayload, @Body() dto: UpdateProfileDto) {
-    return this.users.updateProfile(user.sub, dto);
+    return this.profile.update(user.sub, dto);
   }
 
   @Post('me/photo')
@@ -118,12 +122,12 @@ export class AuthController {
   async uploadMyPhoto(@CurrentUser() user: JwtPayload, @Req() req: FastifyRequest) {
     // El límite de las fotos se aplica al recibir: lo que lo supere no llega a escribirse.
     const file = await receiveFile(req, uploadLimit('avatars'));
-    return this.users.uploadProfilePhoto(user.sub, file.filePath, file.name);
+    return this.profile.uploadPhoto(user.sub, file.filePath, file.name);
   }
 
   @Delete('me/photo')
   deleteMyPhoto(@CurrentUser() user: JwtPayload) {
-    return this.users.deleteProfilePhoto(user.sub);
+    return this.profile.deletePhoto(user.sub);
   }
 
   // ── Administración de cuentas ────────────────────────────────────────────
@@ -177,19 +181,19 @@ export class AuthController {
   @Roles('ADMIN')
   @Get('access-requests/pending-count')
   countPendingRequests(@CurrentUser() user: JwtPayload) {
-    return this.users.countPendingRequests(user.country);
+    return this.accessRequests.countPending(user.country);
   }
 
   @Roles('ADMIN')
   @Get('access-requests')
   getPendingAccessRequests(@CurrentUser() user: JwtPayload) {
-    return this.auth.getPendingAccessRequests(user.country);
+    return this.accessRequests.pending(user.country);
   }
 
   @Roles('ADMIN')
   @Post('access-requests/:id/approve')
   approveAccessRequest(@CurrentUser() user: JwtPayload, @Param('id', ParseIntPipe) id: number) {
-    return this.auth.approveAccessRequest(id, user.country);
+    return this.accessRequests.approve(id, user.country);
   }
 
   @Roles('ADMIN')
@@ -199,6 +203,6 @@ export class AuthController {
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: RejectAccessRequestDto,
   ) {
-    return this.auth.rejectAccessRequest(id, user.country, dto.reason);
+    return this.accessRequests.reject(id, user.country, dto.reason);
   }
 }

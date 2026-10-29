@@ -9,7 +9,7 @@ import type { Resource } from '@/types/models';
 import QuizViewer from '@/components/quiz/QuizViewer';
 import AssignmentViewer from '@/components/assignments/AssignmentViewer';
 import { ResourceTarget, resourceLabel } from '@/components/resources/ResourceTarget';
-import { ResourceExtras } from '@/app/dashboard/course-builder/components/ResourceExtras';
+import { SupportMaterials } from '@/components/resources/SupportMaterials';
 
 const NO_CONTENT = '<p class="text-muted-foreground italic">Sin contenido.</p>';
 
@@ -60,7 +60,11 @@ export function ResourceView({
             className="prose prose-slate dark:prose-invert max-w-none bg-card rounded-2xl p-4 sm:p-8 border border-border/50 shadow-sm"
             dangerouslySetInnerHTML={sanitizeHTML(hasContent(resource.contentHtml) ? resource.contentHtml : NO_CONTENT)}
           />
-          <ResourceExtras resource={resource} />
+          <SupportMaterials
+            referenceUrl={resource.referenceUrl}
+            attachmentUrl={resource.attachmentUrl}
+            attachmentName={resource.attachmentName}
+          />
           {canMarkCompleted && <MarkCompletedButton onClick={onMarkCompleted} busy={marking} />}
         </div>
       )}

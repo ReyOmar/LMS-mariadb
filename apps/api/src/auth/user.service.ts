@@ -8,43 +8,27 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-import { StorageService } from '../storage/storage.service';
 import { FileOwnershipService } from '../storage/file-ownership.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { Country } from '../common/domain/country';
 import { encodeCursor, rowsPerPage, decodeCursor } from '../common/domain/pagination';
-import { generateTemporaryPassword, hashPassword, passwordMatches, validateStrength } from '../common/domain/password';
+import { generateTemporaryPassword, hashPassword } from '../common/domain/password';
 import { CreateUserDto } from './dto/create-user.dto';
 import { ListAccountsDto } from './dto/list-accounts.dto';
-import { UpdateProfileDto } from './dto/update-profile.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { personSearch } from '../prisma/person-search';
 import { plural } from '../common/domain/text';
 import { UserRole } from '../common/interfaces/jwt-payload.interface';
-import { SettingsService } from '../settings/settings.service';
 import { MailService } from '../mail/mail.service';
 import { NOTIFICATION_REF } from '../notifications/notification-ref';
-
-/** Campos que se devuelven al listar o consultar una cuenta. Nunca incluyen el hash. */
-const PUBLIC_FIELDS = {
-  guid: true,
-  email: true,
-  firstName: true,
-  lastName: true,
-  role: true,
-  country: true,
-  createdAt: true,
-  updatedAt: true,
-  lastAccessAt: true,
-  usesDefaultPassword: true,
-  photoUrl: true,
-} as const;
+import { ACCOUNT_VIEW } from './account-view';
 
 /** Roles que pueden ser responsables de un curso. */
 const COURSE_HOLDER_ROLES: UserRole[] = ['ADMIN', 'TEACHER'];
 
 /**
- * Gestión de cuentas ya creadas: listado, perfil, foto, alta directa y baja.
+ * Las cuentas de la sede, que gestiona un administrador: listado, alta directa, edición y baja.
+ * La cuenta propia de cada persona está en `ProfileService`.
  * Todas las operaciones están acotadas a una sede: el `country` que reciben procede siempre
  * de la sesión, nunca del cliente.
  */
@@ -54,9 +38,7 @@ export class UserService {
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly storage: StorageService,
     private readonly realtime: RealtimeService,
-    private readonly settings: SettingsService,
     private readonly mail: MailService,
     private readonly files: FileOwnershipService,
   ) {}
@@ -102,7 +84,7 @@ export class UserService {
         // repetirse o perderse al pasar de página.
         orderBy: [{ createdAt: 'desc' }, { guid: 'desc' }],
         take: take + 1, // uno de más: así se sabe si queda algo sin pedir otra página
-        select: PUBLIC_FIELDS,
+        select: ACCOUNT_VIEW,
       }),
       cursor ? Promise.resolve(null) : this.summarizeAccounts(country, matchFilter, filter.role, Boolean(search)),
     ]);
@@ -180,36 +162,6 @@ export class UserService {
     return { total: role ? byRole[role] : matching, byRole, registered: registered ?? matching };
   }
 
-  /** Perfil de una cuenta concreta de la sede. */
-  async getUserProfile(guid: string, country: Country) {
-    const user = await this.prisma.user.findFirst({
-      where: { guid, country },
-      select: { ...PUBLIC_FIELDS, dataConsentVersion: true },
-    });
-    if (!user) throw new NotFoundException('Usuario no encontrado.');
-
-    const { dataConsentVersion, ...profile } = user;
-    return { ...profile, consentRequired: dataConsentVersion !== (await this.settings.legalVersion(country)) };
-  }
-
-  /**
-   * Registra que la persona acepta la política de datos vigente de su sede. La fecha y la
-   * versión quedan como prueba de la autorización.
-   */
-  async acceptDataPolicy(guid: string, country: Country) {
-    await this.prisma.user.update({
-      where: { guid },
-      data: { dataConsentAt: new Date(), dataConsentVersion: await this.settings.legalVersion(country) },
-    });
-    return { consentRequired: false };
-  }
-
-  /** Solicitudes de acceso de la sede que esperan revisión. */
-  async countPendingRequests(country: Country) {
-    const count = await this.prisma.accessRequest.count({ where: { status: 'PENDING', country } });
-    return { count };
-  }
-
   // ── Alta ─────────────────────────────────────────────────────────────────
 
   /**
@@ -247,7 +199,7 @@ export class UserService {
           password: await hashPassword(temporaryPassword),
           usesDefaultPassword: true,
         },
-        select: PUBLIC_FIELDS,
+        select: ACCOUNT_VIEW,
       }),
       this.prisma.accessRequest.updateMany({
         where: { email: dto.email, status: 'PENDING' },
@@ -352,121 +304,12 @@ export class UserService {
       throw new BadRequestException('No hay ningún cambio que guardar.');
     }
 
-    const updated = await this.prisma.user.update({ where: { guid }, data, select: PUBLIC_FIELDS });
+    const updated = await this.prisma.user.update({ where: { guid }, data, select: ACCOUNT_VIEW });
 
     if (roleChanges) this.realtime.revokeSession(guid, 'role_changed');
-    this.notifyAccountChanged(guid, country);
+    this.realtime.emitToRole('user:updated', { guid }, country, 'ADMIN');
 
     return { message: 'Cuenta actualizada.', user: updated };
-  }
-
-  // ── Sesión ───────────────────────────────────────────────────────────────
-
-  /**
-   * Cierra la sesión indicada: sin sesión vigente, su token deja de valer.
-   * El borrado se condiciona al `jti` para que un cierre tardío de una sesión ya desplazada
-   * no eche al dispositivo que entró después.
-   */
-  async logout(guid: string, jti: string): Promise<void> {
-    await this.prisma.user.updateMany({
-      where: { guid, currentSessionJti: jti },
-      data: { currentSessionJti: null },
-    });
-  }
-
-  // ── Perfil propio ────────────────────────────────────────────────────────
-
-  /**
-   * Actualiza nombre, apellido y contraseña del propio usuario.
-   * Cambiar la contraseña cierra todas sus sesiones, también la actual, que el cliente
-   * vuelve a abrir con la clave nueva: si alguien tenía la cuenta comprometida, queda fuera.
-   */
-  async updateProfile(guid: string, dto: UpdateProfileDto) {
-    const user = await this.prisma.user.findUnique({ where: { guid }, select: { password: true } });
-    if (!user) throw new NotFoundException('Usuario no encontrado.');
-
-    const data: Prisma.UserUpdateInput = {};
-    if (dto.firstName !== undefined) data.firstName = dto.firstName;
-    if (dto.lastName !== undefined) data.lastName = dto.lastName;
-
-    const { newPassword } = dto;
-    if (newPassword) {
-      if (!dto.currentPassword) {
-        throw new BadRequestException('Escribe tu contraseña actual para poder cambiarla.');
-      }
-      if (!(await passwordMatches(dto.currentPassword, user.password))) {
-        throw new BadRequestException('La contraseña actual no es correcta.');
-      }
-      validateStrength(newPassword);
-      data.password = await hashPassword(newPassword);
-      data.usesDefaultPassword = false;
-      data.currentSessionJti = null;
-    }
-
-    if (Object.keys(data).length === 0) {
-      throw new BadRequestException('No hay ningún cambio que guardar.');
-    }
-
-    const updated = await this.prisma.user.update({ where: { guid }, data, select: PUBLIC_FIELDS });
-
-    if (newPassword) this.realtime.revokeSession(guid, 'password_changed');
-    this.notifyAccountChanged(guid, updated.country);
-
-    return { message: 'Perfil actualizado correctamente.', user: updated };
-  }
-
-  // ── Foto de perfil ───────────────────────────────────────────────────────
-
-  /** Sustituye la foto de perfil y retira la anterior del almacenamiento. */
-  async uploadProfilePhoto(guid: string, filePath: string, originalName: string) {
-    const user = await this.prisma.user.findUnique({ where: { guid }, select: { country: true } });
-    if (!user) throw new NotFoundException('Usuario no encontrado.');
-
-    const key = await this.storage.uploadFromDisk(filePath, originalName, 'avatars', {
-      sub: guid,
-      country: user.country,
-    });
-    await this.files.adoptUpload(
-      key,
-      () => this.swapPhoto(guid, key),
-      (previousPhoto) => previousPhoto,
-    );
-
-    this.notifyAccountChanged(guid, user.country);
-    return { message: 'Foto de perfil actualizada.', photoUrl: key };
-  }
-
-  /** Con la fila bloqueada, para que dos cambios a la vez no retiren la misma foto anterior y dejen otra sin dueño. */
-  private swapPhoto(guid: string, photoUrl: string): Promise<string | null> {
-    return this.prisma.$transaction(async (tx) => {
-      const [current] = await tx.$queryRaw<{ photoUrl: string | null }[]>`
-        SELECT foto_url AS photoUrl FROM usuarios WHERE guid = ${guid} FOR UPDATE`;
-      await tx.user.update({ where: { guid }, data: { photoUrl } });
-      return current?.photoUrl ?? null;
-    });
-  }
-
-  /** Quita la foto de perfil y la retira del almacenamiento. */
-  async deleteProfilePhoto(guid: string) {
-    const user = await this.prisma.user.findUnique({
-      where: { guid },
-      select: { photoUrl: true, country: true },
-    });
-    if (!user) throw new NotFoundException('Usuario no encontrado.');
-    if (!user.photoUrl) throw new BadRequestException('No tienes foto de perfil.');
-
-    const photo = { folder: 'avatars' as const, current: user.photoUrl, next: null };
-    await this.files.replace([photo], { uploader: guid }, () =>
-      this.prisma.user.update({ where: { guid }, data: { photoUrl: null } }),
-    );
-
-    this.notifyAccountChanged(guid, user.country);
-    return { message: 'Foto de perfil eliminada.' };
-  }
-
-  /** La lista de cuentas de los administradores es la que enseña nombre, rol y foto. */
-  private notifyAccountChanged(guid: string, country: Country): void {
-    this.realtime.emitToRole('user:updated', { guid }, country, 'ADMIN');
   }
 
   // ── Baja ─────────────────────────────────────────────────────────────────

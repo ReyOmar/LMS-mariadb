@@ -1,53 +1,27 @@
 'use client';
 
-import { CheckCircle, Clock, ExternalLink, Paperclip, RefreshCcw, UploadCloud } from 'lucide-react';
-import { fileUrlFor } from '@/lib/api';
+import { CheckCircle, Clock, RefreshCcw } from 'lucide-react';
 import type { Resource } from '@/types/models';
-import { isQuiz, externalUrl } from '@/lib/resources';
+import { isQuiz } from '@/lib/resources';
 import { quizSummary } from '@/lib/quiz-config';
 import { plural } from '@/lib/text';
+import { SupportMaterials } from '@/components/resources/SupportMaterials';
 import { attemptsLabel } from './resources';
 
-/** Lo que acompaña al contenido en la vista previa: enlace de referencia, adjunto, límite de entrega y cuestionario. */
+/** Lo que acompaña al contenido en la vista previa: material de apoyo, límite de entrega y cuestionario. */
 export function ResourceExtras({ resource }: { resource: Resource }) {
   const quiz = quizSummary(resource.quizConfig);
   const uploadLimit = resource.maxUploadMb && resource.type === 'ASSIGNMENT' && !isQuiz(resource);
 
-  if (!resource.referenceUrl && !resource.attachmentKey && !uploadLimit && !quiz) return null;
+  if (!resource.referenceUrl && !resource.attachmentUrl && !uploadLimit && !quiz) return null;
 
   return (
-    <div className="space-y-2 mt-4">
-      {resource.referenceUrl && (
-        <div className="flex items-center gap-2 p-3 bg-primary/5 border border-primary/20 rounded-xl">
-          <ExternalLink className="h-4 w-4 text-primary flex-shrink-0" />
-          <a
-            href={externalUrl(resource.referenceUrl)}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-sm text-primary font-medium truncate hover:underline"
-          >
-            {resource.referenceUrl}
-          </a>
-        </div>
-      )}
-
-      {resource.attachmentKey && (
-        <a
-          href={fileUrlFor(resource.attachmentUrl) ?? ''}
-          className="flex items-center gap-3 p-3 bg-muted/30 border border-border rounded-xl hover:bg-primary/10 hover:border-primary/30 transition-colors cursor-pointer group"
-        >
-          <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center group-hover:bg-primary/20 transition-colors">
-            <Paperclip className="h-4 w-4 text-primary" />
-          </div>
-          <div className="flex-1 min-w-0">
-            <span className="text-sm font-bold text-foreground truncate block">
-              {resource.attachmentName || 'Archivo adjunto'}
-            </span>
-            <span className="text-xs text-muted-foreground">Clic para descargar</span>
-          </div>
-          <UploadCloud className="h-4 w-4 text-primary rotate-180 flex-shrink-0" />
-        </a>
-      )}
+    <div className="space-y-3 mt-4">
+      <SupportMaterials
+        referenceUrl={resource.referenceUrl}
+        attachmentUrl={resource.attachmentUrl}
+        attachmentName={resource.attachmentName}
+      />
 
       {uploadLimit && (
         <div className="flex items-center gap-2 p-2 px-3 bg-amber-500/10 border border-amber-500/20 rounded-lg text-xs text-amber-700 dark:text-amber-500">

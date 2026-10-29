@@ -1,6 +1,6 @@
 'use client';
 
-import React, { ReactNode, createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import { ReactNode, createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { Country, DEFAULT_COUNTRY, saveCountry, countryName, savedCountry } from '@/lib/country';
 
 /**

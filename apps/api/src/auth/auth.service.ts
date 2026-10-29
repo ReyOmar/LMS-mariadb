@@ -1,24 +1,14 @@
-import { BadRequestException, Injectable, Logger, NotFoundException, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import * as crypto from 'crypto';
-import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { MailService } from '../mail/mail.service';
-import { MAIL_CONCURRENCY } from '../mail/mail-transport';
 import { RealtimeService } from '../realtime/realtime.service';
 import { SettingsService } from '../settings/settings.service';
-import { Country, countryName } from '../common/domain/country';
-import { countRejected, settleWithConcurrency } from '../common/domain/concurrency';
+import { Country } from '../common/domain/country';
 import { plural } from '../common/domain/text';
-import {
-  generateTemporaryPassword,
-  hashPassword,
-  passwordMatches,
-  simulatePasswordCheck,
-  validateStrength,
-} from '../common/domain/password';
+import { hashPassword, passwordMatches, simulatePasswordCheck, validateStrength } from '../common/domain/password';
 import { JwtClaims, UserRole } from '../common/interfaces/jwt-payload.interface';
-import { RequestAccessDto } from './dto/request-access.dto';
 
 /** Vigencia del enlace de recuperación de contraseña. */
 const RESET_VALIDITY_MS = 60 * 60 * 1000;
@@ -33,10 +23,6 @@ const RESEND_DELAY_MS = 60 * 1000;
 const MAX_CODE_ATTEMPTS = 5;
 
 const CODE_EXHAUSTED = 'Has agotado los intentos con este código. Solicita uno nuevo.';
-
-const REQUEST_ALREADY_RESOLVED = 'Esta solicitud ya fue procesada.';
-
-const REQUEST_PENDING = 'Ya tienes una solicitud pendiente de revisión con este correo.';
 
 /**
  * Respuesta neutra de recuperación de contraseña.
@@ -58,8 +44,9 @@ const INVALID_TEMPORARY_PASSWORD =
   'No se pudo verificar la contraseña temporal. Si ya creaste la tuya, entra con ella o usa «¿Olvidaste tu contraseña?».';
 
 /**
- * Flujos de autenticación: entrada, alta de cuenta y recuperación de contraseña.
- * La gestión de cuentas ya creadas (perfil, listado, borrado) vive en `UserService`.
+ * Flujos de autenticación: entrada y salida, primer acceso con la clave temporal, verificación de
+ * correo y recuperación de contraseña. Las solicitudes de acceso están en `AccessRequestsService`;
+ * la cuenta propia, en `ProfileService`, y las demás cuentas de la sede, en `UserService`.
  */
 @Injectable()
 export class AuthService {
@@ -73,7 +60,7 @@ export class AuthService {
     private readonly settings: SettingsService,
   ) {}
 
-  // ── Entrada ──────────────────────────────────────────────────────────────
+  // ── Entrada y salida ─────────────────────────────────────────────────────
 
   /**
    * Autentica a un usuario en una sede concreta.
@@ -165,6 +152,18 @@ export class AuthService {
   }
 
   /**
+   * Cierra la sesión indicada: sin sesión vigente, su token deja de valer.
+   * El borrado se condiciona al `jti` para que un cierre tardío de una sesión ya desplazada
+   * no eche al dispositivo que entró después.
+   */
+  async logout(guid: string, jti: string): Promise<void> {
+    await this.prisma.user.updateMany({
+      where: { guid, currentSessionJti: jti },
+      data: { currentSessionJti: null },
+    });
+  }
+
+  /**
    * Emite el token y lo deja registrado como la sesión activa de la cuenta.
    *
    * El campus admite **una sesión por cuenta**: al entrar desde un dispositivo nuevo, el
@@ -206,191 +205,6 @@ export class AuthService {
       photoUrl: user.photoUrl,
       consentRequired: user.dataConsentVersion !== (await this.settings.legalVersion(user.country)),
     };
-  }
-
-  // ── Solicitudes de acceso ────────────────────────────────────────────────
-
-  /**
-   * Registra una solicitud de acceso a una sede.
-   * Exige que el correo haya sido verificado antes y consume esa verificación, para que un
-   * mismo código no sirva para solicitudes repetidas. Sólo después, con el buzón ya probado,
-   * se dice si el correo tiene cuenta: antes serviría para averiguar quién está registrado.
-   */
-  async requestAccess(dto: RequestAccessDto) {
-    const verification = await this.prisma.emailVerification.findFirst({
-      where: { email: dto.email, verified: true, expiresAt: { gt: new Date() } },
-      orderBy: { createdAt: 'desc' },
-    });
-    if (!verification) {
-      throw new BadRequestException('Verifica tu correo electrónico antes de enviar la solicitud.');
-    }
-
-    const alreadyExists = await this.prisma.user.findUnique({
-      where: { email: dto.email },
-      select: { guid: true },
-    });
-    if (alreadyExists) {
-      throw new BadRequestException('Este correo ya tiene una cuenta. Inicia sesión directamente.');
-    }
-
-    const existing = await this.prisma.accessRequest.findUnique({ where: { email: dto.email } });
-    if (existing?.status === 'PENDING') {
-      throw new BadRequestException(REQUEST_PENDING);
-    }
-
-    const consentVersion = await this.settings.legalVersion(dto.country);
-
-    const accessRequest = await this.prisma.$transaction(async (tx) => {
-      // La verificación se consume aquí para que no pueda reutilizarse.
-      await tx.emailVerification.deleteMany({ where: { email: dto.email } });
-
-      const data = {
-        // La búsqueda no distingue tildes: una solicitud antigua de `juan@empresá.com`
-        // vuelve como la de `juan@empresa.com`. Se reescribe el correo para que la clave
-        // temporal de la aprobación vaya al buzón verificado, no al de la solicitud antigua.
-        email: dto.email,
-        firstName: dto.firstName,
-        lastName: dto.lastName,
-        requestedRole: dto.requestedRole,
-        country: dto.country,
-        status: 'PENDING' as const,
-        rejectionReason: null,
-        consentAt: new Date(),
-        consentVersion,
-      };
-
-      // Volver a pedir acceso tras un rechazo es una solicitud nueva: se fecha y se ordena como tal.
-      return existing
-        ? tx.accessRequest.update({ where: { id: existing.id }, data: { ...data, createdAt: new Date() } })
-        : tx.accessRequest.create({ data });
-    });
-
-    this.realtime.emitToRole('request:new', { id: accessRequest.id }, dto.country, 'ADMIN');
-    void this.notifyAdmins(dto);
-
-    return {
-      message: `Solicitud enviada a los administradores de ${countryName(dto.country)}. Recibirás un correo cuando sea revisada.`,
-      requestId: accessRequest.id,
-    };
-  }
-
-  /** Avisa por correo a los administradores de la sede. Los fallos se registran, no se propagan. */
-  private async notifyAdmins(dto: RequestAccessDto): Promise<void> {
-    try {
-      const admins = await this.prisma.user.findMany({
-        where: { role: 'ADMIN', country: dto.country },
-        select: { email: true, firstName: true },
-      });
-      const results = await settleWithConcurrency(admins, MAIL_CONCURRENCY, (admin) =>
-        this.mail.sendAccessRequest(admin.email, admin.firstName, {
-          firstName: dto.firstName,
-          lastName: dto.lastName,
-          email: dto.email,
-          requestedRole: dto.requestedRole,
-          country: dto.country,
-        }),
-      );
-      const failed = countRejected(results);
-      if (failed > 0) this.logger.error(`No se pudo avisar a ${failed} administrador(es) de ${dto.country}`);
-    } catch (error) {
-      this.logger.error(`No se pudo avisar a los administradores de ${dto.country}`, error);
-    }
-  }
-
-  /** Solicitudes pendientes de la sede del administrador que consulta. */
-  getPendingAccessRequests(country: Country) {
-    return this.prisma.accessRequest.findMany({
-      where: { status: 'PENDING', country },
-      orderBy: { createdAt: 'desc' },
-    });
-  }
-
-  /**
-   * Aprueba una solicitud y crea la cuenta con una clave temporal.
-   * La cuenta hereda el país de la solicitud, nunca el del administrador: así una
-   * solicitud sólo puede acabar en la sede a la que se dirigió.
-   *
-   * Si la persona ya tiene cuenta, la solicitud se da por atendida sin crear otra ni escribirle.
-   */
-  async approveAccessRequest(id: number, country: Country) {
-    const accessRequest = await this.pendingRequest(id, country);
-
-    const temporaryPassword = generateTemporaryPassword();
-    const hash = await hashPassword(temporaryPassword);
-
-    const user = await this.prisma.$transaction(async (tx) => {
-      await this.resolveRequest(tx, id, { status: 'ACCEPTED', rejectionReason: null });
-
-      // Comprobación dentro de la transacción: entre la solicitud y la aprobación
-      // pudo crearse la cuenta por otra vía.
-      const duplicate = await tx.user.findUnique({ where: { email: accessRequest.email }, select: { guid: true } });
-      if (duplicate) return null;
-
-      return tx.user.create({
-        data: {
-          email: accessRequest.email,
-          firstName: accessRequest.firstName,
-          lastName: accessRequest.lastName,
-          role: accessRequest.requestedRole,
-          country: accessRequest.country,
-          password: hash,
-          usesDefaultPassword: true,
-          dataConsentAt: accessRequest.consentAt,
-          dataConsentVersion: accessRequest.consentVersion,
-        },
-      });
-    });
-
-    this.realtime.emitToRole('request:resolved', { id, action: 'approved' }, country, 'ADMIN');
-    if (!user) return { message: 'Esta persona ya tenía cuenta: la solicitud queda atendida sin enviarle nada.' };
-    this.realtime.emitToRole('user:created', { guid: user.guid }, country, 'ADMIN');
-
-    this.mail
-      .sendWelcome(accessRequest.email, accessRequest.firstName, temporaryPassword, accessRequest.country)
-      .catch((error) => this.logger.error('No se pudo enviar el correo de bienvenida', error));
-
-    return { message: 'Solicitud aprobada. La persona recibirá por correo una contraseña temporal propia.' };
-  }
-
-  /**
-   * Rechaza una solicitud conservando el registro, para que quede constancia de quién fue
-   * rechazado y por qué, y se lo comunica por correo a quien la envió.
-   */
-  async rejectAccessRequest(id: number, country: Country, reason?: string | null) {
-    const accessRequest = await this.pendingRequest(id, country);
-    const rejectionReason = reason?.trim() || null;
-
-    await this.resolveRequest(this.prisma, id, { status: 'REJECTED', rejectionReason });
-
-    this.realtime.emitToRole('request:resolved', { id, action: 'rejected' }, country, 'ADMIN');
-
-    this.mail
-      .sendAccessRequestRejected(accessRequest.email, accessRequest.firstName, rejectionReason, accessRequest.country)
-      .catch((error) => this.logger.error('No se pudo enviar el aviso de solicitud rechazada', error));
-
-    return { message: 'Solicitud rechazada. La persona recibirá un correo con la decisión.' };
-  }
-
-  /** Carga una solicitud comprobando que es de la sede del administrador y sigue pendiente. */
-  private async pendingRequest(id: number, country: Country) {
-    const accessRequest = await this.prisma.accessRequest.findFirst({ where: { id, country } });
-    if (!accessRequest) throw new NotFoundException('Solicitud no encontrada.');
-    if (accessRequest.status !== 'PENDING') throw new BadRequestException(REQUEST_ALREADY_RESOLVED);
-    return accessRequest;
-  }
-
-  /**
-   * Anota la decisión sólo si la solicitud sigue pendiente. Si dos administradores la
-   * resuelven a la vez, la segunda decisión no se aplica: ni se crea una cuenta que otro
-   * acaba de rechazar ni la persona recibe dos correos con decisiones opuestas.
-   */
-  private async resolveRequest(
-    db: Prisma.TransactionClient,
-    id: number,
-    decision: { status: 'ACCEPTED' | 'REJECTED'; rejectionReason: string | null },
-  ): Promise<void> {
-    const { count } = await db.accessRequest.updateMany({ where: { id, status: 'PENDING' }, data: decision });
-    if (count === 0) throw new BadRequestException(REQUEST_ALREADY_RESOLVED);
   }
 
   // ── Recuperación de contraseña ───────────────────────────────────────────

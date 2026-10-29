@@ -7,7 +7,6 @@ import {
   Loader2,
   Trophy,
   AlertTriangle,
-  Paperclip,
   CheckCircle2,
   Download,
   Award,
@@ -21,7 +20,7 @@ import { useCountry } from '@/contexts/CountryContext';
 import { useRealtimeEvent } from '@/contexts/RealtimeContext';
 import { sanitizeHTML } from '@/lib/sanitize';
 import { hasContent } from '@/lib/editor-html';
-import { externalUrl } from '@/lib/resources';
+import { SupportMaterials } from '@/components/resources/SupportMaterials';
 import type { Submission } from '@/types/models';
 import { fullDate } from '@/lib/dates';
 import { ALLOWED_EXTENSIONS, fileTypeWarning } from './allowed-files';
@@ -192,61 +191,7 @@ export default function AssignmentViewer({
         </div>
       </div>
 
-      {/* Recursos de apoyo que aporta el administrador */}
-      {(attachmentUrl || referenceUrl) && (
-        <div className="bg-blue-500/5 border border-blue-500/20 rounded-2xl p-6 space-y-4">
-          <h3 className="font-bold text-sm text-blue-700 dark:text-blue-400 uppercase tracking-wider flex items-center gap-2">
-            <Paperclip className="h-4 w-4" /> Recursos de apoyo
-          </h3>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            {referenceUrl && (
-              <a
-                href={externalUrl(referenceUrl)}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="flex items-center gap-3 p-3 bg-background border border-border rounded-xl hover:border-blue-500/50 hover:shadow-md transition-all group"
-              >
-                <div className="h-10 w-10 bg-blue-500/10 text-blue-500 flex items-center justify-center rounded-lg group-hover:scale-110 transition-transform">
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    width="20"
-                    height="20"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  >
-                    <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
-                    <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
-                  </svg>
-                </div>
-                <div className="flex-1 overflow-hidden">
-                  <div className="text-sm font-bold truncate">Enlace de referencia</div>
-                  <div className="text-xs text-muted-foreground truncate">{referenceUrl}</div>
-                </div>
-              </a>
-            )}
-            {attachmentUrl && (
-              <a
-                href={fileUrlFor(attachmentUrl) ?? ''}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="flex items-center gap-3 p-3 bg-background border border-border rounded-xl hover:border-blue-500/50 hover:shadow-md transition-all group"
-              >
-                <div className="h-10 w-10 bg-blue-500/10 text-blue-500 flex items-center justify-center rounded-lg group-hover:scale-110 transition-transform">
-                  <Paperclip className="h-5 w-5" />
-                </div>
-                <div className="flex-1 overflow-hidden">
-                  <div className="text-sm font-bold truncate">{attachmentName || 'Archivo adjunto'}</div>
-                  <div className="text-xs text-muted-foreground">Descargar documento</div>
-                </div>
-              </a>
-            )}
-          </div>
-        </div>
-      )}
+      <SupportMaterials referenceUrl={referenceUrl} attachmentUrl={attachmentUrl} attachmentName={attachmentName} />
 
       <div className="bg-card border border-border rounded-2xl overflow-hidden shadow-sm">
         {/* Nota y comentario del examinador */}

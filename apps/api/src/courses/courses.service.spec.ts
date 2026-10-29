@@ -1,5 +1,6 @@
 import { BadRequestException, ForbiddenException } from '@nestjs/common';
 import { CoursesService } from './courses.service';
+import { CourseStatusChanges } from './course-status-changes';
 import { sessionFor } from '../common/testing/test-campus';
 import { fileOwnershipDouble } from '../common/testing/file-ownership-double';
 
@@ -56,12 +57,11 @@ function serviceWith(prisma: Record<string, unknown>, course: Record<string, unk
     client as never,
     access as never,
     storage as never,
-    mail as never,
     realtime as never,
-    notifications as never,
     ownership.files,
     removal as never,
     events as never,
+    new CourseStatusChanges(client as never, mail as never, notifications as never),
   );
   return { service, files: ownership, emitted, notifications, mail, removal, events, deletedFiles: ownership.retired };
 }
