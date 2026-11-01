@@ -7,9 +7,11 @@ interface EventBatch {
   cursor: number;
   reset: boolean;
   events: RealtimeMessage[];
+  /** Cuánto pide el servidor que se espere, como mínimo, antes de la siguiente consulta. */
+  next: number;
 }
 
-/** Cada cuánto pregunta una pestaña a la vista y una en segundo plano; al volver a una, en el acto. */
+/** Cada cuánto pregunta, como mínimo, una pestaña a la vista y una en segundo plano; al volver a una, en el acto. */
 const VISIBLE_INTERVAL_MS = 4_000;
 const HIDDEN_INTERVAL_MS = 30_000;
 
@@ -33,6 +35,7 @@ interface PollOptions {
  */
 export async function pollEvents({ onMessage, onReset, signal }: PollOptions): Promise<void> {
   let cursor: number | null = null;
+  let serverInterval = 0;
   let failures = 0;
 
   while (!signal.aborted) {
@@ -42,17 +45,27 @@ export async function pollEvents({ onMessage, onReset, signal }: PollOptions): P
       failures = 0;
       if (batch.reset) onReset();
       cursor = batch.cursor;
+      serverInterval = batch.next;
       batch.events.forEach(onMessage);
     } catch (error) {
       if (signal.aborted || (axios.isAxiosError(error) && error.response?.status === 401)) return;
       failures++;
     }
-    await pause(failures > 0 ? spread(Math.min(1_000 * 2 ** failures, MAX_RETRY_MS)) : nextInterval(), signal);
+    const wait =
+      failures > 0
+        ? spread(Math.min(1_000 * 2 ** failures, MAX_RETRY_MS))
+        : pollInterval(serverInterval, document.visibilityState === 'visible');
+    await pause(wait, signal);
   }
 }
 
-function nextInterval(): number {
-  return document.visibilityState === 'visible' ? VISIBLE_INTERVAL_MS : HIDDEN_INTERVAL_MS;
+/**
+ * Espera hasta la siguiente consulta: la de la pestaña, a la vista o en segundo plano, o la que pida
+ * el servidor si es mayor. Con mucha gente conectada, el servidor espacia las consultas para no
+ * pasar de las que atiende con holgura.
+ */
+export function pollInterval(serverInterval: number, visible: boolean): number {
+  return Math.max(visible ? VISIBLE_INTERVAL_MS : HIDDEN_INTERVAL_MS, serverInterval);
 }
 
 /**

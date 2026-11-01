@@ -2,6 +2,7 @@ import { Injectable, OnModuleDestroy } from '@nestjs/common';
 import { Country } from '../common/domain/country';
 import { JwtPayload, UserRole } from '../common/interfaces/jwt-payload.interface';
 import { EventDestination, EventName, EventMessage } from './events';
+import { PollPacing } from './poll-pacing';
 
 /**
  * Cuánto se guarda cada evento: de sobra para la espera más larga entre dos consultas de una
@@ -18,8 +19,19 @@ const MAX_LOGGED_EVENTS = 10_000;
  */
 const PRESENCE_TIMEOUT_MS = 90_000;
 
-/** Cada cuánto se repasa quién dejó de preguntar y se descartan los eventos caducados. */
+/**
+ * Cada cuánto se repasa quién dejó de preguntar, se descartan los eventos caducados y se mide lo
+ * ocupado que está el proceso.
+ */
 const SWEEP_INTERVAL_MS = 15_000;
+
+/**
+ * Quienes ven quién está en línea: el administrador, en la lista de cuentas, y el examinador, en
+ * el monitoreo de sus alumnos. Al alumno no se le muestra, y anunciárselo haría que cada entrada
+ * llegara a todos los conectados de la sede: en un pico de miles de entradas, el reparto crecería
+ * con el cuadrado de la gente conectada.
+ */
+const PRESENCE_WATCHERS: readonly UserRole[] = ['ADMIN', 'TEACHER'];
 
 /** Lo que recibe el navegador en cada consulta. */
 export interface EventBatch {
@@ -31,6 +43,8 @@ export interface EventBatch {
    */
   reset: boolean;
   events: EventMessage[];
+  /** Cuánto esperar, como mínimo, antes de la siguiente consulta, en milisegundos. */
+  next: number;
 }
 
 interface LoggedEvent {
@@ -55,7 +69,8 @@ interface Visitor {
  * CloudLinux cada petición en curso ocupa uno de los «procesos de entrada» de la cuenta (unos 20):
  * un flujo que se mantiene abierto (Server-Sent Events, *long polling*) ocupa uno por pestaña, y
  * con veinte pestañas abiertas Apache respondería 508 a todo el campus. Una consulta dura
- * milisegundos, así que cientos de personas caben de sobra.
+ * milisegundos, y cada respuesta dice cuándo volver a preguntar (`PollPacing`): con mucha gente o
+ * el proceso ocupado, las consultas se espacian en lugar de saturarlo.
  *
  * Todo envío exige un destino con país, y todo estado que se reparte —presencia y cursos en
  * edición— se filtra por país: nada cruza entre sedes.
@@ -71,6 +86,7 @@ export class RealtimeService implements OnModuleDestroy {
   /** Los eventos hasta este número ya no se guardan: quien no los haya visto, recibe `reset`. */
   private discardedUpTo = this.lastSeq;
   private readonly visitors = new Map<string, Visitor>();
+  private readonly pacing = new PollPacing();
   private readonly sweeper: ReturnType<typeof setInterval>;
 
   /**
@@ -92,24 +108,22 @@ export class RealtimeService implements OnModuleDestroy {
 
   /**
    * Los eventos posteriores a `after` que le tocan a quien pregunta, que con ello queda en línea.
-   * Sin `after` —la primera consulta— o si se perdió algo, el estado de ahora: quién está en línea
-   * y cuáles de sus cursos se están editando.
+   * Sin `after` —la primera consulta— o si se perdió algo, el estado de ahora: quién está en línea,
+   * a quien lo ve, y cuáles de sus cursos se están editando.
    */
   poll(user: JwtPayload, after: number | null): EventBatch {
     const visitor = this.markSeen(user);
     const cursor = this.lastSeq;
+    const next = this.pacing.interval(this.visitors.size);
     if (after !== null && after >= this.discardedUpTo && after <= cursor) {
-      return { cursor, reset: false, events: this.eventsAfter(after, visitor) };
+      return { cursor, reset: false, events: this.eventsAfter(after, visitor), next };
     }
     const now = Date.now();
-    return {
-      cursor,
-      reset: after !== null,
-      events: [
-        { event: 'presence:sync', data: { onlineUsers: this.onlineUsers(user.country) }, ts: now },
-        { event: 'course:editing-sync', data: this.editorsFor(visitor), ts: now },
-      ],
-    };
+    const events: EventMessage[] = [{ event: 'course:editing-sync', data: this.editorsFor(visitor), ts: now }];
+    if (PRESENCE_WATCHERS.includes(user.role)) {
+      events.unshift({ event: 'presence:sync', data: { onlineUsers: this.onlineUsers(user.country) }, ts: now });
+    }
+    return { cursor, reset: after !== null, events, next };
   }
 
   private eventsAfter(after: number, visitor: Visitor): EventMessage[] {
@@ -185,9 +199,9 @@ export class RealtimeService implements OnModuleDestroy {
     return [...this.visitors.values()].filter((visitor) => visitor.country === country).map(({ guid }) => guid);
   }
 
-  /** Sólo el cambio: la lista completa llega en `presence:sync`, con la primera consulta. */
+  /** Sólo el cambio, y a quien lo ve: la lista completa llega en `presence:sync`, con la primera consulta. */
   private announcePresence(country: Country, guid: string, status: 'online' | 'offline'): void {
-    this.emitToCountry('presence:update', { guid, status }, country);
+    for (const role of PRESENCE_WATCHERS) this.emitToRole('presence:update', { guid, status }, country, role);
   }
 
   // ── Bloqueo de edición de cursos ─────────────────────────────────────────
@@ -238,7 +252,7 @@ export class RealtimeService implements OnModuleDestroy {
 
   // ── Mantenimiento ────────────────────────────────────────────────────────
 
-  /** Da por ido a quien dejó de preguntar y descarta los eventos caducados. */
+  /** Da por ido a quien dejó de preguntar, descarta los eventos caducados y mide la carga. */
   private sweep(): void {
     const now = Date.now();
     for (const visitor of this.visitors.values()) {
@@ -246,6 +260,7 @@ export class RealtimeService implements OnModuleDestroy {
     }
     const kept = this.log.findIndex(({ message }) => now - message.ts <= RETENTION_MS);
     this.discard(kept === -1 ? this.log.length : kept);
+    this.pacing.measure();
   }
 
   /** Descarta los `count` eventos más antiguos. */

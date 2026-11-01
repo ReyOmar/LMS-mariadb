@@ -451,10 +451,13 @@ El historial del repositorio conserva una clave de Google Maps en un archivo ant
 
 ## Tiempo real sin conexiones abiertas
 
-Cada pestaña pregunta a la API qué ha pasado desde su última consulta: cada 4 segundos si está a
-la vista, cada 30 si está en segundo plano y en el acto al volver a ella. La API guarda los
-avisos de los últimos minutos y contesta con los que le tocan a cada uno. Un mensaje, una nota o
-un aviso de la campana llegan así en unos segundos, sin recargar.
+Cada pestaña pregunta a la API qué ha pasado desde su última consulta, y la API le dice cuándo
+volver a preguntar. Con poca gente, cada 4 segundos si la pestaña está a la vista; con mucha gente
+conectada, o con el proceso ocupado, espacia las consultas —hasta 30 segundos— para que entre
+todas no pasen de unas 350 por segundo, y las vuelve a acercar cuando se calma. En segundo plano,
+cada 30 segundos, y en el acto al volver a la pestaña. La API guarda los avisos de los últimos
+minutos y contesta con los que le tocan a cada uno. Un mensaje, una nota o un aviso de la campana
+llegan así en unos segundos, sin recargar.
 
 No se mantiene ninguna conexión abierta, y es a propósito:
 
@@ -467,10 +470,11 @@ No se mantiene ninguna conexión abierta, y es a propósito:
   Resource Limit Is Reached_.
 
 Una consulta dura milisegundos, así que cientos de personas a la vez ocupan una fracción de un
-proceso. Lo que se nota es una espera de unos segundos en los avisos y que «En línea» tarde
-hasta un minuto y medio en apagarse cuando alguien cierra el campus. Si una consulta falla, se
-reintenta sin perder nada; si la pestaña estuvo dormida más de unos minutos, al volver vuelve a
-pedir los datos de la pantalla.
+proceso. Lo que se nota es una espera de unos segundos en los avisos —hasta medio minuto en los
+picos— y que «En línea», que sólo ven administradores y examinadores, tarde hasta un minuto y
+medio en apagarse cuando alguien cierra el campus. Si una consulta falla, se reintenta sin perder
+nada; si la pestaña estuvo dormida más de unos minutos, al volver vuelve a pedir los datos de la
+pantalla.
 
 ## La API corre en un solo proceso
 
@@ -479,9 +483,11 @@ cursos, el límite de peticiones y la cola que atiende las matrículas de otros 
 la memoria del proceso: con varios, un aviso sólo lo vería quien pregunte al mismo proceso, dos
 administradores podrían editar el mismo curso a la vez, el tope de intentos de acceso se
 multiplicaría y una misma solicitud podría atenderse dos veces. Un proceso aguanta de sobra este uso
-(medido: 60 personas a la vez, 375 peticiones por segundo, el 95 % por debajo de 280 ms; y 600
-personas con el campus abierto, con el tiempo real, 173 peticiones por segundo, el 99 % por debajo
-de 20 ms).
+(medido en un servidor de pruebas: 60 personas a la vez, 375 peticiones por segundo, el 95 % por
+debajo de 280 ms; 600 personas con el campus abierto, con el tiempo real, 173 peticiones por
+segundo, el 99 % por debajo de 20 ms; y, con el ritmo adaptativo, 2 000 personas con el campus
+abierto sin un solo error, el 99 % por debajo de 60 ms, y 1 000 durante 40 minutos con la memoria
+estable, en unos 420 MB).
 
 ## Tareas programadas
 

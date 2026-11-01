@@ -67,10 +67,11 @@ describe('RealtimeService · estado inicial por sede', () => {
 
   it('la presencia inicial sólo incluye a los de la misma sede', () => {
     tab(service, sessionFor('STUDENT', 'COLOMBIA', 'alumno-co'));
+    tab(service, sessionFor('STUDENT', 'MEXICO', 'alumno-mx'));
 
-    const mexico = tab(service, sessionFor('STUDENT', 'MEXICO', 'alumno-mx'));
+    const mexico = tab(service, sessionFor('ADMIN', 'MEXICO', 'admin-mx'));
 
-    expect(mexico.received('presence:sync')[0].data).toEqual({ onlineUsers: ['alumno-mx'] });
+    expect(mexico.received('presence:sync')[0].data).toEqual({ onlineUsers: ['alumno-mx', 'admin-mx'] });
   });
 
   it('la primera consulta no pide recargar nada: la pantalla acaba de cargar sus datos', () => {
@@ -166,6 +167,23 @@ describe('RealtimeService · presencia', () => {
     expect(admin.events).toContainEqual({ event: 'presence:update', data: { guid: 'alumno-co', status: 'online' } });
   });
 
+  it('sólo lo ven administradores y examinadores: a un alumno no le llega quién entra ni quién está', () => {
+    const student = tab(service, sessionFor('STUDENT', 'COLOMBIA', 'alumno-co'));
+    const teacher = tab(service, sessionFor('TEACHER', 'COLOMBIA', 'profe-co'));
+    tab(service, sessionFor('STUDENT', 'COLOMBIA', 'otro-alumno'));
+
+    student.poll();
+    teacher.poll();
+
+    expect(student.received('presence:sync')).toEqual([]);
+    expect(student.received('presence:update')).toEqual([]);
+    expect(teacher.received('presence:sync')[0].data).toEqual({ onlineUsers: ['alumno-co', 'profe-co'] });
+    expect(teacher.events).toContainEqual({
+      event: 'presence:update',
+      data: { guid: 'otro-alumno', status: 'online' },
+    });
+  });
+
   it('quien sigue preguntando sigue en línea; quien deja de hacerlo, se da por ido y libera su curso', () => {
     const admin = tab(service, sessionFor('ADMIN', 'COLOMBIA', 'admin-co'));
     const teacher = tab(service, sessionFor('TEACHER', 'COLOMBIA', 'profe-co'));
@@ -186,6 +204,30 @@ describe('RealtimeService · presencia', () => {
     // Al volver a preguntar, vuelve a estar en línea.
     admin.poll();
     expect(admin.events.at(-1)).toEqual({ event: 'presence:update', data: { guid: 'profe-co', status: 'online' } });
+  });
+});
+
+describe('RealtimeService · picos', () => {
+  const connect = (count: number) => {
+    for (let i = 0; i < count; i++) service.poll(sessionFor('STUDENT', 'COLOMBIA', `alumno-${i}`), null);
+  };
+
+  it('con poca gente cada pestaña pregunta cada 4 s', () => {
+    connect(1_399);
+
+    expect(service.poll(sessionFor('ADMIN', 'COLOMBIA', 'admin-co'), null).next).toBe(4_000);
+  });
+
+  it('con mucha, las consultas se espacian para no pasar de las que el proceso atiende con holgura', () => {
+    connect(3_499);
+
+    expect(service.poll(sessionFor('ADMIN', 'COLOMBIA', 'admin-co'), null).next).toBe(10_000);
+  });
+
+  it('nunca pide esperar más que una pestaña en segundo plano', () => {
+    connect(20_000);
+
+    expect(service.poll(sessionFor('ADMIN', 'COLOMBIA', 'admin-co'), null).next).toBe(30_000);
   });
 });
 

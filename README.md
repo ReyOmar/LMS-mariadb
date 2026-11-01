@@ -125,15 +125,18 @@ plantillas de correo. La configuración de cada sede la crea la API al arrancar.
 
 ## Cómo funciona el tiempo real
 
-Cada pestaña pregunta cada pocos segundos qué ha pasado (`GET /api/realtime/events?after=…`) y la
-API le contesta con los avisos recientes que le tocan. No hay conexiones abiertas: en cPanel,
+Cada pestaña pregunta qué ha pasado (`GET /api/realtime/events?after=…`) y la API le contesta con
+los avisos recientes que le tocan y con cuánto esperar antes de volver a preguntar (`next`): 4
+segundos con poca gente; con mucha gente conectada o con el proceso ocupado, más, hasta 30
+(`PollPacing`, en `apps/api/src/realtime/poll-pacing.ts`). No hay conexiones abiertas: en cPanel,
 Apache no deja pasar los WebSockets y, con CloudLinux, un flujo abierto por pestaña agotaría los
 procesos de la cuenta. El motivo está explicado en
 [docs/DESPLIEGUE-CPANEL.md](docs/DESPLIEGUE-CPANEL.md#tiempo-real-sin-conexiones-abiertas).
 
-Ningún evento cruza entre sedes: todo envío exige un destino con país. Los avisos recientes y
-quién está en línea viven en la memoria del proceso, así que la API debe correr en **un solo
-proceso**: ver [docs/DESPLIEGUE-CPANEL.md](docs/DESPLIEGUE-CPANEL.md#la-api-corre-en-un-solo-proceso).
+Ningún evento cruza entre sedes: todo envío exige un destino con país. Quién está en línea sólo se
+envía a administradores y examinadores, que son quienes lo ven. Los avisos recientes y quién está
+en línea viven en la memoria del proceso, así que la API debe correr en **un solo proceso**: ver
+[docs/DESPLIEGUE-CPANEL.md](docs/DESPLIEGUE-CPANEL.md#la-api-corre-en-un-solo-proceso).
 
 ---
 
