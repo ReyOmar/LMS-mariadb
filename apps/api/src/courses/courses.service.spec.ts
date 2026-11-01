@@ -42,6 +42,12 @@ function serviceWith(prisma: Record<string, unknown>, course: Record<string, unk
   const storage = { downloadUrl: (key: string) => `/descargas/${key}` };
   const defaults = {
     enrollment: { findMany: async () => [] },
+    // Un curso con contenido completo: se puede publicar.
+    resource: {
+      findMany: async () => [
+        { title: 'Lectura', type: 'TEXT', quizConfig: null, contentHtml: '<p>Hola</p>', fileUrl: null },
+      ],
+    },
   };
   const client: Record<string, unknown> = {
     ...defaults,
@@ -592,5 +598,58 @@ describe('CoursesService · avisos de mantenimiento', () => {
     ]);
     // Y quien lo esperaba desde otro sistema puede entrar ya.
     expect(events.emit).toHaveBeenCalledWith('course.opened', expect.objectContaining({ courseGuid: 'curso-1' }));
+  });
+});
+
+/**
+ * Publicar exige lo mismo que el constructor: contenido, y nada que un alumno no pudiera completar.
+ * Aquí lo cumple también quien llama a la API directamente.
+ */
+describe('CoursesService · qué se puede publicar', () => {
+  function draftWithResources(resources: Record<string, unknown>[]) {
+    const update = jest.fn(async () => ({ ...PUBLISHED }));
+    const { service } = serviceWith(
+      {
+        resource: { findMany: async () => resources },
+        resourceProgress: { findFirst: async () => null },
+        submission: { findFirst: async () => null },
+        course: { update },
+      },
+      { ...PUBLISHED, status: 'DRAFT' },
+    );
+    return { service, update };
+  }
+
+  it('un curso sin recursos no se publica', async () => {
+    const { service, update } = draftWithResources([]);
+
+    await expect(service.updateCourse('curso-1', { status: 'PUBLISHED' }, ADMIN)).rejects.toThrow(
+      'El curso no tiene contenido todavía',
+    );
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('ni con un cuestionario sin preguntas o un enlace sin dirección, y dice cuáles son', async () => {
+    const { service, update } = draftWithResources([
+      { title: 'Lectura', type: 'TEXT', quizConfig: null, contentHtml: '<p>Hola</p>', fileUrl: null },
+      { title: '[QUIZ] Evaluación final', type: 'ASSIGNMENT', quizConfig: null, contentHtml: null, fileUrl: null },
+      { title: 'Video de apoyo', type: 'LINK', quizConfig: null, contentHtml: '  ', fileUrl: null },
+    ]);
+
+    await expect(service.updateCourse('curso-1', { status: 'PUBLISHED' }, ADMIN)).rejects.toThrow(
+      'Antes de publicar, completa estos recursos: «Evaluación final», «Video de apoyo».',
+    );
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('una tarea normal y un enlace a un archivo del campus están completos', async () => {
+    const { service, update } = draftWithResources([
+      { title: 'Informe', type: 'ASSIGNMENT', quizConfig: null, contentHtml: '<p>Sube tu informe.</p>', fileUrl: null },
+      { title: 'Guía', type: 'LINK', quizConfig: null, contentHtml: null, fileUrl: 'recursos/guia.pdf' },
+    ]);
+
+    await service.updateCourse('curso-1', { status: 'PUBLISHED' }, ADMIN);
+
+    expect(update).toHaveBeenCalled();
   });
 });

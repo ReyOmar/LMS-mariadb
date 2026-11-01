@@ -6,7 +6,7 @@ import { MAIL_CONCURRENCY } from '../mail/mail-transport';
 import { NotificationsService } from '../notifications/notifications.service';
 import { NOTIFICATION_REF } from '../notifications/notification-ref';
 import { CourseAccessInfo } from './course-access.service';
-import { parseQuizConfig } from './quiz-config';
+import { markedAsQuiz, parseQuizConfig, quizDisplayTitle } from './quiz-config';
 import { isAttemptLive } from './quiz.service';
 import { Country } from '../common/domain/country';
 import { countRejected, settleWithConcurrency } from '../common/domain/concurrency';
@@ -44,6 +44,30 @@ function timeLimitOf(stored: string | null): number {
   }
 }
 
+/** Lo que hace falta de un recurso para saber si un alumno podría completarlo. */
+interface PublishableResource {
+  title: string;
+  type: string;
+  quizConfig: string | null;
+  contentHtml: string | null;
+  fileUrl: string | null;
+}
+
+/**
+ * Recurso que un alumno no podría completar: un cuestionario sin preguntas o un enlace que no lleva
+ * a ninguna parte. Es la regla de `isUnconfigured` en el constructor del cliente.
+ */
+function isUnfinished(resource: PublishableResource): boolean {
+  if (resource.type === 'ASSIGNMENT' && markedAsQuiz(resource.title)) {
+    try {
+      return parseQuizConfig(resource.quizConfig).questions.length === 0;
+    } catch {
+      return true;
+    }
+  }
+  return resource.type === 'LINK' && !resource.contentHtml?.trim() && !resource.fileUrl?.trim();
+}
+
 /**
  * El paso de un curso entre Borrador y Publicado: cuándo no se permite, qué cambio es para sus
  * alumnos —mantenimiento, reapertura o primera publicación— y el aviso que reciben.
@@ -59,17 +83,42 @@ export class CourseStatusChanges {
   ) {}
 
   /**
-   * Un curso publicado no vuelve a borrador mientras haya alguien haciendo un examen:
-   * el intento quedaría huérfano y el alumno perdería su tiempo y su intento.
+   * Un curso se publica con contenido y sin nada a medias, y no vuelve a borrador mientras haya
+   * alguien haciendo un examen: el intento quedaría huérfano y el alumno perdería su tiempo y su
+   * intento.
    */
   async ensureAllowed(course: CourseAccessInfo, newStatus: CourseStatus): Promise<void> {
-    if (course.status !== 'PUBLISHED' || newStatus === 'PUBLISHED') return;
+    if (newStatus === 'PUBLISHED') return this.ensurePublishable(course.guid);
+    if (course.status !== 'PUBLISHED') return;
 
     const examinees = await this.studentsTakingQuizzes(course.guid);
     if (examinees > 0) {
       const who = examinees === 1 ? 'un estudiante está' : `${examinees} estudiantes están`;
       throw new BadRequestException(
         `No se puede pasar a Borrador: ${who} realizando un cuestionario ahora mismo. Espera a que terminen.`,
+      );
+    }
+  }
+
+  /**
+   * Lo mismo que exige el constructor antes de dejar publicar, aquí para cualquiera que llame a la
+   * API: un curso vacío, o con un recurso que nadie podría completar, dejaría atascado a quien se
+   * matricule, también a quien llegue por la integración porque el título nombra su infracción.
+   */
+  private async ensurePublishable(courseGuid: string): Promise<void> {
+    const resources = await this.prisma.resource.findMany({
+      where: { module: { courseGuid } },
+      select: { title: true, type: true, quizConfig: true, contentHtml: true, fileUrl: true },
+    });
+    if (resources.length === 0) {
+      throw new BadRequestException(
+        'El curso no tiene contenido todavía: añade al menos un recurso antes de publicarlo.',
+      );
+    }
+    const unfinished = resources.filter(isUnfinished).map((resource) => `«${quizDisplayTitle(resource.title)}»`);
+    if (unfinished.length > 0) {
+      throw new BadRequestException(
+        `Antes de publicar, completa ${plural(unfinished.length, 'este recurso', 'estos recursos')}: ${unfinished.join(', ')}. Un cuestionario necesita preguntas y un enlace, su dirección.`,
       );
     }
   }

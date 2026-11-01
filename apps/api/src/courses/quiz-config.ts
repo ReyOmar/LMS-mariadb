@@ -129,6 +129,11 @@ export function quizDisplayTitle(storedTitle: string): string {
   return storedTitle.replace(QUIZ_MARKER, '');
 }
 
+/** Si el constructor lo creó como cuestionario, tenga ya preguntas o no. */
+export function markedAsQuiz(storedTitle: string): boolean {
+  return QUIZ_MARKER.test(storedTitle);
+}
+
 /** Resumen que acompaña a la ficha del curso del alumno: sin preguntas ni respuestas. */
 export function quizOverview(config: QuizConfig): QuizOverview {
   return {
