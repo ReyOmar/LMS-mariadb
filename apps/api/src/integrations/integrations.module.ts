@@ -12,6 +12,7 @@ import { InfractionsService } from './infractions.service';
 import { IntegrationCourses } from './integration-courses';
 import { IntegrationViews } from './integration-views';
 import { IntegrationWebhooks } from './integration-webhooks';
+import { WebhookTransport } from './webhook-transport';
 
 /**
  * Interoperabilidad: otros sistemas, como el del PESV, piden que una persona haga el curso de una
@@ -31,6 +32,7 @@ import { IntegrationWebhooks } from './integration-webhooks';
     IntegrationCourses,
     IntegrationViews,
     IntegrationWebhooks,
+    WebhookTransport,
   ],
   exports: [WaitingRequestsService, IntegrationWebhooks],
 })

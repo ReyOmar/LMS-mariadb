@@ -1,6 +1,7 @@
 import { createHmac } from 'node:crypto';
 import { ConflictException, NotFoundException } from '@nestjs/common';
 import { IntegrationWebhooks } from './integration-webhooks';
+import { InternalAddressError, NoAnswerError } from './webhook-transport';
 
 /**
  * Avisos al sistema que pidió cada matrícula. Lo que importa: que lleguen firmados, que uno que no
@@ -42,7 +43,7 @@ function webhooksWith(clients: ClientRow[], requests: { guid: string; clientId: 
   // La solicitud tal como se le contestaría: aquí basta con su estado.
   const views = { request: async ({ guid, status }: { guid: string; status: string }) => ({ id: guid, status }) };
   const realtime = { emitToRole: jest.fn() };
-  const webhooks = new IntegrationWebhooks(prisma as never, views as never, realtime as never);
+  const webhooks = new IntegrationWebhooks(prisma as never, views as never, realtime as never, { post } as never);
   return { webhooks, rows, clients, realtime, resumed: prisma.externalEnrollment.updateMany };
 }
 
@@ -54,12 +55,12 @@ const PESV: ClientRow = {
   noticeError: null,
 };
 
-const fetchMock = jest.fn();
+/** El transporte (ver `WebhookTransport`): recibe dirección, cabeceras, cuerpo y espera, y da el código. */
+const post = jest.fn<Promise<number>, [string, Record<string, string>, string, number]>();
 
 beforeEach(() => {
   jest.useFakeTimers({ now: NOW, doNotFake: ['setImmediate', 'nextTick', 'queueMicrotask'] });
-  fetchMock.mockReset().mockResolvedValue(new Response(null, { status: 204 }));
-  global.fetch = fetchMock;
+  post.mockReset().mockResolvedValue(204);
 });
 afterEach(() => jest.useRealTimers());
 
@@ -72,28 +73,24 @@ describe('IntegrationWebhooks · avisos pendientes', () => {
 
     await expect(webhooks.deliverPending()).resolves.toBe(1);
 
-    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit & { headers: Record<string, string> }];
+    const [url, headers, body, timeoutMs] = post.mock.calls[0];
     expect(url).toBe('https://pesv.example/avisos');
-    expect(init).toMatchObject({ method: 'POST', redirect: 'manual' });
-    expect(JSON.parse(init.body as string)).toEqual({
+    expect(timeoutMs).toBe(10_000);
+    expect(JSON.parse(body)).toEqual({
       event: 'enrollment-request.updated',
       sentAt: new Date(NOW).toISOString(),
       request: { id: 's-1', status: 'COMPLETED' },
     });
     const timestamp = NOW / 1000;
-    const digest = createHmac('sha256', KEY_HASH)
-      .update(`${timestamp}.${init.body as string}`)
-      .digest('hex');
-    expect(init.headers['X-Lms-Signature']).toBe(`t=${timestamp},v1=${digest}`);
+    const digest = createHmac('sha256', KEY_HASH).update(`${timestamp}.${body}`).digest('hex');
+    expect(headers['X-Lms-Signature']).toBe(`t=${timestamp},v1=${digest}`);
 
     expect(rows[0]).toMatchObject({ notifiedStatus: 'COMPLETED', noticeRetryAt: null });
     expect(clients[0]).toMatchObject({ lastNoticeAt: new Date(NOW), noticeError: null });
   });
 
   it('si el sistema no contesta, lo reintenta a los 15 minutos y no insiste en la misma pasada', async () => {
-    fetchMock.mockRejectedValue(
-      Object.assign(new Error('The operation was aborted due to timeout'), { name: 'TimeoutError' }),
-    );
+    post.mockRejectedValue(new NoAnswerError());
     const { webhooks, rows, clients, realtime } = webhooksWith(
       [{ ...PESV }],
       [
@@ -104,7 +101,7 @@ describe('IntegrationWebhooks · avisos pendientes', () => {
 
     await expect(webhooks.deliverPending()).resolves.toBe(0);
 
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(post).toHaveBeenCalledTimes(1);
     expect(rows[0]).toMatchObject({ notifiedStatus: null, noticeRetryAt: new Date(NOW + 15 * 60_000) });
     expect(rows[1]).toMatchObject({ notifiedStatus: null, noticeRetryAt: null });
     expect(clients[0].noticeError).toBe('No respondió en 10 s.');
@@ -113,9 +110,7 @@ describe('IntegrationWebhooks · avisos pendientes', () => {
   });
 
   it('un sistema que falla no frena los avisos a los demás', async () => {
-    fetchMock.mockImplementation(async (url: string) =>
-      url.includes('caido') ? new Response(null, { status: 503 }) : new Response(null, { status: 200 }),
-    );
+    post.mockImplementation(async (url) => (url.includes('caido') ? 503 : 200));
     const { webhooks, rows } = webhooksWith(
       [
         { ...PESV, callbackUrl: 'https://caido.example/avisos' },
@@ -132,19 +127,22 @@ describe('IntegrationWebhooks · avisos pendientes', () => {
   });
 
   it.each([
-    [async () => new Response(null, { status: 500 }), 'Respondió con el código 500.'],
-    [
-      async () => new Response(null, { status: 302, headers: { Location: 'https://otra.example' } }),
-      'La dirección redirige a otra: escribe la definitiva.',
-    ],
+    [async () => 500, 'Respondió con el código 500.'],
+    [async () => 302, 'La dirección redirige a otra: escribe la definitiva.'],
     [
       async () => {
-        throw new TypeError('fetch failed', { cause: new Error('getaddrinfo ENOTFOUND pesv.example') });
+        throw new Error('getaddrinfo ENOTFOUND pesv.example');
       },
       'No se pudo conectar: getaddrinfo ENOTFOUND pesv.example',
     ],
+    [
+      async () => {
+        throw new InternalAddressError('10.0.0.5');
+      },
+      'La dirección apunta a una red interna (10.0.0.5). Los avisos sólo van a direcciones públicas.',
+    ],
   ])('dice por qué no llegó: %#', async (outcome, reason) => {
-    fetchMock.mockImplementation(outcome);
+    post.mockImplementation(outcome);
     const { webhooks, clients } = webhooksWith([{ ...PESV }], [{ guid: 's-1', clientId: 1, status: 'REJECTED' }]);
 
     await webhooks.deliverPending();
@@ -153,7 +151,7 @@ describe('IntegrationWebhooks · avisos pendientes', () => {
   });
 
   it('si ya fallaba igual, no vuelve a refrescar los paneles; al recuperarse, sí', async () => {
-    fetchMock.mockResolvedValue(new Response(null, { status: 500 }));
+    post.mockResolvedValue(500);
     const { webhooks, realtime } = webhooksWith(
       [{ ...PESV, noticeError: 'Respondió con el código 500.' }],
       [{ guid: 's-1', clientId: 1, status: 'ENROLLED' }],
@@ -162,7 +160,7 @@ describe('IntegrationWebhooks · avisos pendientes', () => {
     await webhooks.deliverPending();
     expect(realtime.emitToRole).not.toHaveBeenCalled();
 
-    fetchMock.mockResolvedValue(new Response(null, { status: 200 }));
+    post.mockResolvedValue(200);
     await webhooks.deliverPending();
     expect(realtime.emitToRole).toHaveBeenCalledTimes(1);
   });
@@ -180,7 +178,7 @@ describe('IntegrationWebhooks · avisos pendientes', () => {
     );
 
     await expect(webhooks.deliverPending()).resolves.toBe(0);
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(post).not.toHaveBeenCalled();
     expect(rows.map((row) => row.notifiedStatus)).toEqual([null, null]);
   });
 });
@@ -193,7 +191,7 @@ describe('IntegrationWebhooks · aviso de prueba', () => {
       delivered: true,
       message: 'El sistema recibió el aviso de prueba.',
     });
-    expect(JSON.parse(fetchMock.mock.calls[0][1].body as string)).toEqual({
+    expect(JSON.parse(post.mock.calls[0][2])).toEqual({
       event: 'ping',
       sentAt: new Date(NOW).toISOString(),
     });
@@ -205,7 +203,7 @@ describe('IntegrationWebhooks · aviso de prueba', () => {
   });
 
   it('si no llega, dice por qué sin tratarlo como un error del campus', async () => {
-    fetchMock.mockResolvedValue(new Response(null, { status: 404 }));
+    post.mockResolvedValue(404);
     const { webhooks, clients, resumed } = webhooksWith([{ ...PESV }], []);
 
     await expect(webhooks.ping(1, 'COLOMBIA')).resolves.toEqual({
@@ -228,6 +226,6 @@ describe('IntegrationWebhooks · aviso de prueba', () => {
     await expect(webhooks.ping(1, 'COLOMBIA')).rejects.toBeInstanceOf(ConflictException);
     await expect(webhooks.ping(2, 'COLOMBIA')).rejects.toBeInstanceOf(ConflictException);
     await expect(webhooks.ping(2, 'MEXICO')).rejects.toBeInstanceOf(NotFoundException);
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(post).not.toHaveBeenCalled();
   });
 });

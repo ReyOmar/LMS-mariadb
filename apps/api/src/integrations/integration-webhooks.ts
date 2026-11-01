@@ -6,6 +6,7 @@ import { RealtimeService } from '../realtime/realtime.service';
 import { Country } from '../common/domain/country';
 import { refreshIntegrationPanels, REQUEST_FIELDS } from './external-request';
 import { ExternalEnrollmentView, IntegrationViews } from './integration-views';
+import { InternalAddressError, NoAnswerError, WebhookTransport } from './webhook-transport';
 
 /** Lo que se espera a que conteste el otro sistema. */
 const TIMEOUT_MS = 10_000;
@@ -49,6 +50,7 @@ export class IntegrationWebhooks {
     private readonly prisma: PrismaService,
     private readonly views: IntegrationViews,
     private readonly realtime: RealtimeService,
+    private readonly transport: WebhookTransport,
   ) {}
 
   /**
@@ -82,7 +84,7 @@ export class IntegrationWebhooks {
       if (outcomes.get(client.id)?.error || !client.callbackUrl || !client.keyHash) continue;
 
       const view = await this.views.request(request);
-      const error = await send(client.callbackUrl, client.keyHash, {
+      const error = await this.send(client.callbackUrl, client.keyHash, {
         event: 'enrollment-request.updated',
         sentAt: new Date().toISOString(),
         request: view,
@@ -112,7 +114,10 @@ export class IntegrationWebhooks {
     if (!client.keyHash)
       throw new ConflictException('El sistema está desconectado: genera su clave para poder avisarle.');
 
-    const error = await send(client.callbackUrl, client.keyHash, { event: 'ping', sentAt: new Date().toISOString() });
+    const error = await this.send(client.callbackUrl, client.keyHash, {
+      event: 'ping',
+      sentAt: new Date().toISOString(),
+    });
     await this.record(new Map([[id, { country, before: client.noticeError, error }]]));
     if (error) return { delivered: false, message: `El aviso de prueba no llegó. ${error}` };
 
@@ -138,37 +143,35 @@ export class IntegrationWebhooks {
       if (error !== before) refreshIntegrationPanels(this.realtime, country);
     }
   }
-}
 
-/**
- * Envía un aviso firmado a la dirección del sistema.
- *
- * La firma, en `X-Lms-Signature`, es `t=<segundos>,v1=<HMAC-SHA256 en hexadecimal de "<t>.<cuerpo>">`.
- * Su secreto es el resumen SHA-256 de la clave del sistema, que el campus guarda y el sistema puede
- * calcular: no hay otro secreto que entregar, y renovar la clave lo renueva. No sigue redirecciones:
- * el aviso va sólo a la dirección configurada.
- *
- * @returns Por qué no lo recibió, o `null` si contestó con un 2xx.
- */
-async function send(url: string, keyHash: string, notice: Notice): Promise<string | null> {
-  const body = JSON.stringify(notice);
-  const timestamp = Math.floor(Date.now() / 1000);
-  const digest = createHmac('sha256', keyHash).update(`${timestamp}.${body}`).digest('hex');
-  try {
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Lms-Signature': `t=${timestamp},v1=${digest}` },
-      body,
-      redirect: 'manual',
-      signal: AbortSignal.timeout(TIMEOUT_MS),
-    });
-    await response.body?.cancel();
-    if (response.ok) return null;
-    if (response.status >= 300 && response.status < 400) return 'La dirección redirige a otra: escribe la definitiva.';
-    return `Respondió con el código ${response.status}.`;
-  } catch (error) {
-    if (error instanceof Error && error.name === 'TimeoutError') return `No respondió en ${TIMEOUT_MS / 1000} s.`;
-    const cause = error instanceof Error && error.cause instanceof Error ? error.cause : error;
-    return `No se pudo conectar: ${cause instanceof Error ? cause.message : String(cause)}`.slice(0, 255);
+  /**
+   * Envía un aviso firmado a la dirección del sistema.
+   *
+   * La firma, en `X-Lms-Signature`, es `t=<segundos>,v1=<HMAC-SHA256 en hexadecimal de "<t>.<cuerpo>">`.
+   * Su secreto es el resumen SHA-256 de la clave del sistema, que el campus guarda y el sistema puede
+   * calcular: no hay otro secreto que entregar, y renovar la clave lo renueva. No sigue redirecciones
+   * ni va a una red interna (ver `WebhookTransport`): el aviso va sólo a la dirección configurada.
+   *
+   * @returns Por qué no lo recibió, o `null` si contestó con un 2xx.
+   */
+  private async send(url: string, keyHash: string, notice: Notice): Promise<string | null> {
+    const body = JSON.stringify(notice);
+    const timestamp = Math.floor(Date.now() / 1000);
+    const digest = createHmac('sha256', keyHash).update(`${timestamp}.${body}`).digest('hex');
+    try {
+      const status = await this.transport.post(
+        url,
+        { 'X-Lms-Signature': `t=${timestamp},v1=${digest}` },
+        body,
+        TIMEOUT_MS,
+      );
+      if (status >= 200 && status < 300) return null;
+      if (status >= 300 && status < 400) return 'La dirección redirige a otra: escribe la definitiva.';
+      return `Respondió con el código ${status}.`;
+    } catch (error) {
+      if (error instanceof NoAnswerError) return `No respondió en ${TIMEOUT_MS / 1000} s.`;
+      if (error instanceof InternalAddressError) return `${error.message} Los avisos sólo van a direcciones públicas.`;
+      return `No se pudo conectar: ${error instanceof Error ? error.message : String(error)}`.slice(0, 255);
+    }
   }
 }

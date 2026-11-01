@@ -129,6 +129,14 @@ directamente: el campus no sigue redirecciones. Sin dirección, el PESV tendrá 
 estado por su cuenta; los avisos de lo que cambie mientras tanto esperan y salen en cuanto la
 tenga.
 
+Ese nombre, además, tiene que llevar a una dirección pública. Si el servidor lo resuelve a su red
+interna (127.0.0.1, 10.x, 192.168.x…), el campus no envía el aviso, y el panel dice «La dirección
+apunta a una red interna (…)»: así la dirección de avisos no sirve para alcanzar servicios
+internos del servidor. Que el PESV esté alojado en el mismo servidor no lo impide, mientras su
+dominio lleve a la IP pública. Si de verdad está en la red interna, quien administra el servidor
+puede permitir su nombre (o su IP) con la variable `WEBHOOK_PRIVATE_HOSTS`; si son varios, separados
+por comas. Desde el panel del campus no se puede.
+
 ## Referencia de la API
 
 | Entorno    | URL base                                                    |

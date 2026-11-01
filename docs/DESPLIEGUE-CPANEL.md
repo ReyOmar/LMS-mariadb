@@ -526,6 +526,7 @@ PESV que no llegó a la primera, por ejemplo, podría no reintentarse hasta la m
 | `UPLOAD_TMP_DIR`                                   | No             | Carpeta temporal de las subidas si `/tmp` es pequeño                                   |
 | `STORAGE_SECRET`                                   | No             | Firma de las descargas; por defecto, `JWT_SECRET`                                      |
 | `TRUST_PROXY`                                      | No             | No hace falta en cPanel: por defecto confía en el bucle local, por donde entra Apache  |
+| `WEBHOOK_PRIVATE_HOSTS`                            | No             | Nombres o IP internos a los que se puede avisar, separados por comas (INTEGRACION.md)  |
 
 Reinicia la API después de cambiar cualquier variable: se leen al arrancar.
 
