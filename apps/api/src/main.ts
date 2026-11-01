@@ -34,16 +34,17 @@ const REQUEST_ID_PATTERN = /^[\w-]{1,64}$/;
 /**
  * De quién se acepta la cabecera que dice cuál es la IP real del visitante.
  *
- * En cPanel la API vive detrás de Apache, así que todas las peticiones le llegan desde el
- * propio servidor. Sin esto, el límite de peticiones dejaría de ser por visitante para
- * pasar a ser del sitio entero: con unas pocas personas trabajando a la vez, la
+ * En cPanel la API vive detrás de LiteSpeed, que le entrega cada petición como si llegara del
+ * propio servidor (127.0.0.1). Sin esto, el límite de peticiones dejaría de ser por visitante
+ * para pasar a ser del sitio entero: con unas pocas personas trabajando a la vez, la
  * plataforma empezaría a rechazar a todo el mundo por igual.
  *
- * Se confía sólo en el bucle local, que es por donde entra Apache, y no se puede engañar:
+ * Se confía sólo en el bucle local, que es por donde entra LiteSpeed, y no se puede engañar:
  * la cabecera se lee de derecha a izquierda hasta el primer remitente que no sea de
  * confianza. Quien la falsifique sólo consigue ensuciar el principio de la lista, porque
- * Apache añade detrás su dirección real, que es la que acaba contando. Y quien llegue a
- * la API sin pasar por el proxy no es de confianza, así que su cabecera se ignora entera.
+ * LiteSpeed añade detrás la dirección real del visitante, que es la que acaba contando. Y
+ * quien llegue a la API sin pasar por el proxy no es de confianza, así que su cabecera se
+ * ignora entera.
  *
  * `TRUST_PROXY` permite declarar otras direcciones o rangos si algún día hay otro proxy
  * delante. Ampliarlo de más sí abre la puerta a falsificarla: sólo direcciones propias.

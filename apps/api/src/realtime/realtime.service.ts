@@ -65,12 +65,13 @@ interface Visitor {
  * Tiempo real del LMS: cada navegador pregunta cada pocos segundos qué ha pasado desde su última
  * consulta, y el servidor guarda los eventos recientes para contestarle.
  *
- * No hay conexiones abiertas, a propósito. En cPanel, Apache no propaga los WebSockets, y con
- * CloudLinux cada petición en curso ocupa uno de los «procesos de entrada» de la cuenta (unos 20):
- * un flujo que se mantiene abierto (Server-Sent Events, *long polling*) ocupa uno por pestaña, y
- * con veinte pestañas abiertas Apache respondería 508 a todo el campus. Una consulta dura
- * milisegundos, y cada respuesta dice cuándo volver a preguntar (`PollPacing`): con mucha gente o
- * el proceso ocupado, las consultas se espacian en lugar de saturarlo.
+ * No hay conexiones abiertas, a propósito. En cPanel, LiteSpeed sí deja pasar los WebSockets y los
+ * flujos abiertos (Server-Sent Events, *long polling*), pero cada conexión abierta ocupa uno de los
+ * pocos turnos que el servidor da a la aplicación: en una prueba en el plan E4, con 4 flujos
+ * abiertos dejó de atender. Con CloudLinux, además, cada petición en curso cuenta para los
+ * «procesos de entrada» de la cuenta. Una consulta dura milisegundos, y cada respuesta dice cuándo
+ * volver a preguntar (`PollPacing`): con mucha gente o el proceso ocupado, las consultas se
+ * espacian en lugar de saturarlo.
  *
  * Todo envío exige un destino con país, y todo estado que se reparte —presencia y cursos en
  * edición— se filtra por país: nada cruza entre sedes.

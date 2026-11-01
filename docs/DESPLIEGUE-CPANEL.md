@@ -30,7 +30,7 @@ variables de la API en _Setup Node.js App_.
 | Notas                  | 0–5, aprobación 3,0                          | 0–100. Las notas se multiplican por 20: un 4,5 pasa a 90 y la aprobación 3,0 a **60** (se puede subir por curso)          |
 | Estructura de un curso | Curso › módulo › lección › recurso           | Curso › módulo › recurso. Los recursos de cada lección quedan seguidos en su módulo, en el mismo orden                    |
 | Archivos               | `apps/api/uploads`, dentro de la aplicación  | `/home/investig/lms-data/uploads`, fuera de la aplicación; el material reservado se sirve con enlace firmado              |
-| Tiempo real            | WebSockets (no funcionaban detrás de Apache) | Cada pestaña pregunta cada pocos segundos qué ha pasado: peticiones HTTP cortas, sin configurar nada                      |
+| Tiempo real            | WebSockets (nunca funcionaron en el hosting) | Cada pestaña pregunta cada pocos segundos qué ha pasado: peticiones HTTP cortas, sin configurar nada                      |
 | Arranque de la API     | `app.js`                                     | `dist/main.js`                                                                                                            |
 | Base de datos          | MySQL o MariaDB                              | **Sólo MariaDB** (10.6 o superior): la API usa `max_statement_time`, que MySQL no tiene                                   |
 | Sesiones               | Varias por cuenta                            | Una por cuenta. **Todo el mundo tendrá que volver a entrar** después de actualizar                                        |
@@ -407,9 +407,9 @@ lugar seguro y bórrala del servidor: contiene la base entera.
 
 ## Seguridad
 
-Lo que Apache encuentra en la raíz web de un dominio se lo entrega a quien lo pida. Con una
-carpeta `.git` a la vista, por ejemplo, se reconstruye el proyecto entero y cualquier clave que
-haya pasado por él. Por eso:
+Lo que el servidor web —LiteSpeed, en este alojamiento— encuentra en la raíz web de un dominio se
+lo entrega a quien lo pida. Con una carpeta `.git` a la vista, por ejemplo, se reconstruye el
+proyecto entero y cualquier clave que haya pasado por él. Por eso:
 
 - **El proyecto vive fuera de la raíz web** (`~/lms-pesv-project`, nunca en `public_html`). La
   raíz de cada subdominio (cPanel → _Dominios_) sólo contiene el `.htaccess` que crea cPanel; ni
@@ -421,7 +421,8 @@ haya pasado por él. Por eso:
   _Remote MySQL_ no tiene ningún host.
 
 En el `.htaccess` de la raíz de cada subdominio (cliente y API), fuera del bloque
-`CLOUDLINUX PASSENGER CONFIGURATION`, añade:
+`CLOUDLINUX PASSENGER CONFIGURATION`, añade lo siguiente. LiteSpeed lee ese mismo `.htaccess`,
+también el bloque de cPanel, que se llama así aunque por detrás no haya Passenger:
 
 ```apache
 Options -Indexes
@@ -431,11 +432,12 @@ RedirectMatch 404 "/\.(?!well-known/)"
 La primera línea impide listar carpetas; la segunda responde 404 a cualquier ruta con una parte
 que empiece por punto (`/.git/config`, `/.env`…), salvo `/.well-known/`, que usa AutoSSL para
 renovar los certificados. Para comprobarlo, y buscar restos en la cuenta y rastros de que alguien
-los haya pedido:
+los haya pedido (un `403` también vale: es el propio servidor el que ya las bloquea; lo que nunca
+debe salir es `200`):
 
 ```bash
-curl -o /dev/null -sw '%{http_code}\n' https://api-lms.investigaciongipia.com/.git/config   # 404
-curl -o /dev/null -sw '%{http_code}\n' https://lms.investigaciongipia.com/.env              # 404
+curl -o /dev/null -sw '%{http_code}\n' https://api-lms.investigaciongipia.com/.git/config   # 404 o 403
+curl -o /dev/null -sw '%{http_code}\n' https://lms.investigaciongipia.com/.env              # 404 o 403
 find ~ -maxdepth 4 \( -name .git -o -name '.env*' \) -not -path '*/node_modules/*' -not -path '*/nodevenv/*'
 grep -hE '"[A-Z]+ [^"]*/\.(git|env)' ~/access-logs/* | tail
 ```
@@ -459,28 +461,40 @@ cada 30 segundos, y en el acto al volver a la pestaña. La API guarda los avisos
 minutos y contesta con los que le tocan a cada uno. Un mensaje, una nota o un aviso de la campana
 llegan así en unos segundos, sin recargar.
 
-No se mantiene ninguna conexión abierta, y es a propósito:
+No se mantiene ninguna conexión abierta, y es a propósito. LiteSpeed sí deja pasar los WebSockets
+y los flujos abiertos (Server-Sent Events o _long polling_): en una prueba hecha en este
+alojamiento (plan E4), los eventos llegaban al instante. Pero cada conexión abierta ocupa uno de
+los pocos turnos que el servidor da a la aplicación a la vez, y no lo suelta mientras siga
+abierta. En esa misma prueba, con 4 flujos abiertos la aplicación dejó de atender: de 10 flujos
+pedidos, 6 recibieron un error 500, y fallaron 26 de las 27 consultas normales hechas mientras
+tanto. Con un flujo por pestaña, unas pocas personas con el campus abierto bastarían para dejarlo
+sin responder. Con CloudLinux, además, cada petición en curso cuenta para los «procesos de
+entrada» de la cuenta: al pasar de su límite, todo lo de la cuenta, portada incluida, responde
+_508 Resource Limit Is Reached_.
 
-- **WebSockets** no llegan a la aplicación: Apache con Passenger no propaga la cabecera
-  `Upgrade`. Por eso el tiempo real de julio no funcionaba.
-- **Un flujo abierto** (Server-Sent Events o _long polling_) sí atraviesa Apache, pero en un
-  servidor con CloudLinux —el que da _Setup Node.js App_— cada petición en curso ocupa uno de
-  los «procesos de entrada» de la cuenta, 20 por defecto. Con un flujo por pestaña, la
-  vigésima pestaña abierta dejaría a todo el campus, portada incluida, respondiendo _508
-  Resource Limit Is Reached_.
-
-Una consulta dura milisegundos, así que cientos de personas a la vez ocupan una fracción de un
-proceso. Lo que se nota es una espera de unos segundos en los avisos —hasta medio minuto en los
-picos— y que «En línea», que sólo ven administradores y examinadores, tarde hasta un minuto y
+Una consulta dura milisegundos y suelta su turno al terminar, así que cientos de personas a la vez
+caben de sobra. Lo que se nota es una espera de unos segundos en los avisos —hasta medio minuto en
+los picos— y que «En línea», que sólo ven administradores y examinadores, tarde hasta un minuto y
 medio en apagarse cuando alguien cierra el campus. Si una consulta falla, se reintenta sin perder
 nada; si la pestaña estuvo dormida más de unos minutos, al volver vuelve a pedir los datos de la
 pantalla.
 
 ## La API corre en un solo proceso
 
-No subas el número de procesos de la API. Los avisos del tiempo real, el bloqueo de edición de
-cursos, el límite de peticiones y la cola que atiende las matrículas de otros sistemas viven en
-la memoria del proceso: con varios, un aviso sólo lo vería quien pregunte al mismo proceso, dos
+LiteSpeed arranca la API con la primera petición y atiende todas las siguientes con ese mismo
+proceso: en una prueba en el plan E4, tres flujos y diez consultas simultáneas los atendió un único
+proceso. No hay nada que configurar, pero conviene comprobarlo de vez en cuando en la Terminal:
+
+```bash
+ps -u $USER -o pid,etime,rss,args | grep [l]snode
+```
+
+Debe salir un proceso por cada aplicación de Node en marcha (la API, el cliente y cualquier otra
+que tenga la cuenta). Si la API tiene más de uno, ver _Problemas frecuentes_.
+
+Tiene que ser uno solo porque los avisos del tiempo real, el bloqueo de edición de cursos, el
+límite de peticiones y la cola que atiende las matrículas de otros sistemas viven en la memoria
+del proceso: con varios, un aviso sólo lo vería quien pregunte al mismo proceso, dos
 administradores podrían editar el mismo curso a la vez, el tope de intentos de acceso se
 multiplicaría y una misma solicitud podría atenderse dos veces. Un proceso aguanta de sobra este uso
 (medido en un servidor de pruebas: 60 personas a la vez, 375 peticiones por segundo, el 95 % por
@@ -494,8 +508,8 @@ estable, en unos 420 MB).
 La API hace sola, a su hora, lo que no espera a nadie: avisa a los otros sistemas de lo que
 cambió en sus solicitudes (cada minuto, y reintenta cada 15 los que no llegan), atiende las
 matrículas en espera (cada hora), manda los recordatorios de inactividad (a las 8:00) y limpia
-lo caducado (de madrugada). Para eso el proceso tiene que estar en marcha, y Passenger lo detiene
-tras unos minutos sin peticiones (5, por defecto) y no lo arranca hasta la siguiente. Mientras
+lo caducado (de madrugada). Para eso el proceso tiene que estar en marcha, y LiteSpeed lo detiene
+cuando lleva un rato sin peticiones y no lo arranca hasta la siguiente. Mientras
 alguien tiene el campus abierto, sus consultas lo mantienen vivo; para las noches y los fines de
 semana, crea en cPanel → _Cron Jobs_ una tarea que lo despierte cada 4 minutos:
 
@@ -525,7 +539,7 @@ PESV que no llegó a la primera, por ejemplo, podría no reintentarse hasta la m
 | `MAX_UPLOAD_MB`                                    | No             | Tope técnico de una subida (2048 por defecto, 4096 como mucho)                         |
 | `UPLOAD_TMP_DIR`                                   | No             | Carpeta temporal de las subidas si `/tmp` es pequeño                                   |
 | `STORAGE_SECRET`                                   | No             | Firma de las descargas; por defecto, `JWT_SECRET`                                      |
-| `TRUST_PROXY`                                      | No             | No hace falta en cPanel: por defecto confía en el bucle local, por donde entra Apache  |
+| `TRUST_PROXY`                                      | No             | No hace falta: por defecto confía en el bucle local, por donde entra LiteSpeed         |
 | `WEBHOOK_PRIVATE_HOSTS`                            | No             | Nombres o IP internos a los que se puede avisar, separados por comas (INTEGRACION.md)  |
 
 Reinicia la API después de cambiar cualquier variable: se leen al arrancar.
@@ -553,10 +567,12 @@ la copia del directorio personal. La API crea al arrancar las subcarpetas:
 Restaura siempre la base y esta carpeta **del mismo momento**. `GET /api/health` dice
 `storage: ok` si la API puede escribir en ella.
 
-Para subidas de más de 1 GB, Apache las corta antes de llegar a la API: añade
-`LimitRequestBody 0` al `.htaccess` del subdominio de la API, fuera del bloque de cPanel. Si hay
-ModSecurity o el proxy de Cloudflare delante del subdominio de la API, también limitan el
-tamaño (en Cloudflare, ponlo en _DNS only_).
+LiteSpeed tiene su propio tope para el tamaño de una petición, que se fija en la configuración del
+servidor (_Max Request Body Size_ y, por dominio, `MaxReqBodySize`) y no desde la cuenta. Si una
+subida grande falla antes de llegar a la API —el navegador recibe un `413` o la subida se corta—,
+pide al proveedor del alojamiento que lo suba para el subdominio de la API, al menos hasta
+`MAX_UPLOAD_MB`. Si hay ModSecurity o el proxy de Cloudflare delante del subdominio de la API,
+también limitan el tamaño (en Cloudflare, ponlo en _DNS only_).
 
 ## Correo
 
@@ -653,6 +669,7 @@ Esta actualización pide, además:
 | `/api/health` dice `storage: error`                                          | `STORAGE_DIR` no existe, no es de la cuenta o el disco está lleno | Revisa la ruta y el espacio; el registro de arranque dice qué falló                   |
 | Una imagen o un PDF antiguo no se ve                                         | El archivo no estaba en el origen al ejecutar `archivos`          | `comprobar` lista los que faltan; búscalos en la copia y repite `archivos`            |
 | `max_user_connections` o `Too many connections` en el registro               | La API y otras herramientas superan el cupo del usuario de base   | Baja `DATABASE_POOL_SIZE` y reinicia                                                  |
+| `ps` muestra más de un proceso `lsnode` de la API                            | Quedaron procesos de reinicios anteriores                         | Reinicia la API; si siguen, `pkill -u $USER -f lsnode` (vuelven a arrancar solos)     |
 | Los certificados salen sin logotipo                                          | El logotipo de la sede no es PNG ni JPG                           | Panel → _Tema y apariencia_: súbelo en PNG o JPG                                      |
 | Un alumno no puede entrar                                                    | Está en la sede equivocada                                        | Que cambie de sede con el selector de la pantalla de acceso                           |
 

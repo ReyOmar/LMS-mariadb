@@ -128,9 +128,10 @@ plantillas de correo. La configuración de cada sede la crea la API al arrancar.
 Cada pestaña pregunta qué ha pasado (`GET /api/realtime/events?after=…`) y la API le contesta con
 los avisos recientes que le tocan y con cuánto esperar antes de volver a preguntar (`next`): 4
 segundos con poca gente; con mucha gente conectada o con el proceso ocupado, más, hasta 30
-(`PollPacing`, en `apps/api/src/realtime/poll-pacing.ts`). No hay conexiones abiertas: en cPanel,
-Apache no deja pasar los WebSockets y, con CloudLinux, un flujo abierto por pestaña agotaría los
-procesos de la cuenta. El motivo está explicado en
+(`PollPacing`, en `apps/api/src/realtime/poll-pacing.ts`). No hay conexiones abiertas: en el
+alojamiento (LiteSpeed con CloudLinux) cada conexión abierta ocupa uno de los pocos turnos que el
+servidor da a la aplicación, y un flujo por pestaña los agotaría con unas pocas personas. El
+motivo, con la prueba hecha en el servidor, está explicado en
 [docs/DESPLIEGUE-CPANEL.md](docs/DESPLIEGUE-CPANEL.md#tiempo-real-sin-conexiones-abiertas).
 
 Ningún evento cruza entre sedes: todo envío exige un destino con país. Quién está en línea sólo se
