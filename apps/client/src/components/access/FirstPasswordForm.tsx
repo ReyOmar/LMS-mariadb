@@ -8,7 +8,7 @@ import type { RateLimitedForm } from '@/hooks/useRateLimitedForm';
 import { Field, PasswordInput, SecondaryButton } from '@/components/ui/FormFields';
 import { FormError } from '@/components/ui/FormError';
 import { SubmitButton } from '@/components/ui/SubmitButton';
-import type { OpenedSession, PendingSetup } from '../auth-responses';
+import type { OpenedSession, PendingSetup } from './auth-responses';
 
 interface Props {
   form: RateLimitedForm;

@@ -1,39 +1,13 @@
 'use client';
 
-import { Suspense, useCallback, useEffect, useState, type FormEvent } from 'react';
+import { Suspense, useEffect } from 'react';
 import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
-import { ArrowLeft, BadgeCheck, Search, ShieldAlert, ShieldCheck } from 'lucide-react';
-import api from '@/lib/api';
-import { formatScore } from '@/lib/grading';
-import { useRateLimitedForm } from '@/hooks/useRateLimitedForm';
+import { ArrowLeft, BadgeCheck, ShieldCheck } from 'lucide-react';
 import { FullScreenLoader } from '@/components/ui/PageLoader';
-import { FormError } from '@/components/ui/FormError';
-import { SubmitButton } from '@/components/ui/SubmitButton';
-import { longDate } from '@/lib/dates';
-import { plural } from '@/lib/text';
-import { issuedBy, type CertificateIssuer } from './issuer';
-
-/** Lo justo para confirmar el documento que se tiene delante, sin datos de contacto ni historial de nadie. */
-interface VerifiedCertificate {
-  /** Nombre del titular tal como figura en el diploma. */
-  studentName: string;
-  course: string;
-  issuedAt: string;
-  /** Hasta cuándo acredita. Nulo cuando la sede no declara vigencia. */
-  validUntil: string | null;
-  /** El certificado es auténtico igualmente; esto dice si sigue en plazo. */
-  unexpired: boolean;
-  hours: number;
-  averageScore: number | null;
-  verificationCode: string;
-  /** Plataforma y sede que lo emitieron; puede ser la otra sede. */
-  issuer: CertificateIssuer;
-}
-
-type VerifyResponse = { valid: true; certificate: VerifiedCertificate } | { valid: false; message: string };
-
-type Result = { status: 'valid'; certificate: VerifiedCertificate } | { status: 'invalid'; message: string };
+import { useCertificateVerification } from '@/components/verification/useCertificateVerification';
+import { CertificateCodeForm } from '@/components/verification/CertificateCodeForm';
+import { CertificateVerdict } from '@/components/verification/CertificateVerdict';
 
 export default function VerificationPage() {
   return (
@@ -45,27 +19,8 @@ export default function VerificationPage() {
 
 function Verifier() {
   const params = useSearchParams();
-  const [code, setCode] = useState('');
-  const [result, setResult] = useState<Result | null>(null);
-  const form = useRateLimitedForm();
-  const { submit } = form;
-
-  const verify = useCallback(
-    (codeToCheck: string) => {
-      const cleaned = codeToCheck.trim();
-      if (!cleaned) return;
-      void submit(async () => {
-        setResult(null);
-        const { data } = await api.get<VerifyResponse>(`/certificates/verify/${encodeURIComponent(cleaned)}`);
-        setResult(
-          data.valid
-            ? { status: 'valid', certificate: data.certificate }
-            : { status: 'invalid', message: data.message },
-        );
-      }, 'No se pudo comprobar el certificado.');
-    },
-    [submit],
-  );
+  const verification = useCertificateVerification();
+  const { setCode, verify } = verification;
 
   // Permite enlazar directamente desde un QR o un correo: /verify?code=CERT-...
   useEffect(() => {
@@ -73,12 +28,7 @@ function Verifier() {
     if (!fromUrl) return;
     setCode(fromUrl);
     verify(fromUrl);
-  }, [params, verify]);
-
-  const verifyTyped = (event: FormEvent) => {
-    event.preventDefault();
-    verify(code);
-  };
+  }, [params, setCode, verify]);
 
   return (
     <div className="min-h-screen bg-background flex flex-col">
@@ -109,97 +59,10 @@ function Verifier() {
             </p>
           </div>
 
-          <form onSubmit={verifyTyped} className="flex flex-col sm:flex-row gap-3 mb-10">
-            <div className="relative flex-1">
-              <Search className="absolute left-4 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-              <input
-                type="text"
-                value={code}
-                onChange={(event) => setCode(event.target.value.toUpperCase())}
-                placeholder="CERT-XXXXXXXXXX-XXXXXX"
-                aria-label="Código de verificación"
-                className="h-13 w-full rounded-2xl border border-border bg-card pl-11 pr-4 py-4 font-mono text-sm tracking-wider focus:outline-none focus:ring-2 focus:ring-primary"
-              />
-            </div>
-            <SubmitButton
-              form={form}
-              idle="Verificar"
-              busy="Comprobando…"
-              disabled={!code.trim()}
-              className="h-13 w-full sm:w-auto sm:min-w-36"
-            />
-          </form>
-
-          <FormError message={form.error} />
-
-          {result?.status === 'invalid' && (
-            <div className="rounded-3xl border border-amber-500/30 bg-amber-500/5 p-8 text-center">
-              <ShieldAlert className="h-12 w-12 text-amber-500 mx-auto mb-4" />
-              <h2 className="text-xl font-bold mb-2">Certificado no encontrado</h2>
-              <p className="text-muted-foreground">{result.message}</p>
-            </div>
-          )}
-
-          {result?.status === 'valid' && (
-            <div className="rounded-3xl border-2 border-emerald-500/30 bg-emerald-500/5 p-8">
-              <div className="flex items-center gap-3 mb-6">
-                <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-emerald-500/15">
-                  <ShieldCheck className="h-6 w-6 text-emerald-600 dark:text-emerald-400" />
-                </span>
-                <div>
-                  <h2 className="text-xl font-bold">Certificado auténtico</h2>
-                  <p className="text-sm text-muted-foreground">
-                    {issuedBy(result.certificate.issuer)}
-                    {!result.certificate.unexpired && ' Su periodo de vigencia ya terminó.'}
-                  </p>
-                </div>
-              </div>
-
-              <dl className="space-y-4">
-                <CertificateFact label="Titular" value={result.certificate.studentName} highlighted />
-                <CertificateFact label="Programa" value={result.certificate.course} highlighted />
-                <CertificateFact label="Fecha de emisión" value={longDate(result.certificate.issuedAt)} />
-                <CertificateFact
-                  label="Intensidad horaria"
-                  value={`${result.certificate.hours} ${plural(result.certificate.hours, 'hora', 'horas')}`}
-                />
-                {result.certificate.validUntil && (
-                  <CertificateFact
-                    label={result.certificate.unexpired ? 'Válido hasta' : 'Venció el'}
-                    value={longDate(result.certificate.validUntil)}
-                  />
-                )}
-                <CertificateFact
-                  label="Calificación"
-                  value={formatScore(result.certificate.averageScore, result.certificate.issuer.country)}
-                />
-                <CertificateFact label="Código" value={result.certificate.verificationCode} monospace />
-              </dl>
-            </div>
-          )}
+          <CertificateCodeForm verification={verification} />
+          <CertificateVerdict verdict={verification.verdict} />
         </div>
       </main>
-    </div>
-  );
-}
-
-function CertificateFact({
-  label,
-  value,
-  highlighted,
-  monospace,
-}: {
-  label: string;
-  value: string;
-  highlighted?: boolean;
-  monospace?: boolean;
-}) {
-  return (
-    <div className="flex flex-col sm:flex-row sm:items-baseline gap-1 sm:gap-4">
-      <dt className="w-40 shrink-0 text-xs font-bold uppercase tracking-wider text-muted-foreground">{label}</dt>
-      <dd className={`${highlighted ? 'text-lg font-bold' : 'font-medium'} ${monospace ? 'font-mono text-sm' : ''}`}>
-        {value}
-      </dd>
     </div>
   );
 }

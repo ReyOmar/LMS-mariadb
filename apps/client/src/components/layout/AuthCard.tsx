@@ -47,13 +47,24 @@ export function AuthDone({ title, children }: { title: string; children: ReactNo
   );
 }
 
-export function BackToSignIn() {
-  return (
-    <Link
-      href="/login"
-      className="inline-flex items-center gap-1.5 text-sm font-medium text-muted-foreground hover:text-foreground"
-    >
+const BACK_TO_SIGN_IN =
+  'inline-flex items-center gap-1.5 text-sm font-medium text-muted-foreground hover:text-foreground';
+
+/** Vuelve al acceso: a su página o, con `onClick`, a su vista dentro del mismo panel. */
+export function BackToSignIn({ onClick }: { onClick?: () => void }) {
+  const content = (
+    <>
       <ArrowLeft className="h-3.5 w-3.5" /> Volver al inicio de sesión
+    </>
+  );
+
+  return onClick ? (
+    <button type="button" onClick={onClick} className={BACK_TO_SIGN_IN}>
+      {content}
+    </button>
+  ) : (
+    <Link href="/login" className={BACK_TO_SIGN_IN}>
+      {content}
     </Link>
   );
 }
