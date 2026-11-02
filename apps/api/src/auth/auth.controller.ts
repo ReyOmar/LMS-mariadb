@@ -17,7 +17,7 @@ import { LoginDto } from './dto/login.dto';
 import { RequestAccessDto } from './dto/request-access.dto';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { SetPasswordDto } from './dto/set-password.dto';
-import { RequestPasswordResetDto, ResetPasswordDto } from './dto/password-reset.dto';
+import { RequestPasswordResetDto, ResetPasswordDto, ResetTokenDto } from './dto/password-reset.dto';
 import { ConfirmCodeDto, RequestCodeDto } from './dto/email-verification.dto';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
@@ -82,6 +82,14 @@ export class AuthController {
   @Post('reset-password')
   resetPassword(@Body() dto: ResetPasswordDto) {
     return this.auth.resetPassword(dto.token, dto.newPassword);
+  }
+
+  /** Si el enlace de recuperación todavía sirve. Por POST, para que el código no quede en los registros. */
+  @Public()
+  @Throttle(CREDENTIALS_LIMIT)
+  @Post('reset-password/check')
+  checkResetToken(@Body() dto: ResetTokenDto) {
+    return this.auth.checkResetToken(dto.token);
   }
 
   // ── Sesión ───────────────────────────────────────────────────────────────

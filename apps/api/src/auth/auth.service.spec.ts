@@ -47,6 +47,40 @@ describe('AuthService · restablecer contraseña', () => {
 });
 
 /**
+ * La página de la contraseña nueva comprueba el enlace al abrirse: así no pide una contraseña con un
+ * enlace que ya no vale. Comprobarlo no lo gasta.
+ */
+describe('AuthService · comprobar un enlace de recuperación', () => {
+  const serviceWith = (reset: object | null, user: object | null = USER) => {
+    const prisma = {
+      passwordReset: { findUnique: async () => reset, update: jest.fn() },
+      user: { findUnique: async () => user },
+    };
+    return {
+      service: new AuthService(prisma as never, {} as never, {} as never, {} as never, {} as never),
+      markUsed: prisma.passwordReset.update,
+    };
+  };
+  const fresh = { id: 7, email: USER.email, used: false, expiresAt: new Date(Date.now() + 60_000) };
+
+  it('dice que sirve sin gastarlo', async () => {
+    const { service, markUsed } = serviceWith(fresh);
+    await expect(service.checkResetToken('enlace-valido')).resolves.toEqual({ valid: true });
+    expect(markUsed).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['no existe', null, USER, 'Este enlace no es válido o ya fue utilizado. Solicita uno nuevo.'],
+    ['ya se usó', { ...fresh, used: true }, USER, 'Este enlace no es válido o ya fue utilizado. Solicita uno nuevo.'],
+    ['caducó', { ...fresh, expiresAt: new Date(Date.now() - 1) }, USER, 'El enlace ha caducado. Solicita uno nuevo.'],
+    ['su cuenta ya no existe', fresh, null, 'Este enlace no es válido. Solicita uno nuevo.'],
+  ])('lo rechaza con su motivo si %s', async (_case, reset, user, message) => {
+    const { service } = serviceWith(reset, user);
+    await expect(service.checkResetToken('enlace')).rejects.toThrow(message);
+  });
+});
+
+/**
  * La base compara los correos sin distinguir tildes: `alumna@pesv.tést` encuentra la cuenta
  * de `alumna@pesv.test`. Si el enlace saliera hacia lo escrito, quien controle ese otro
  * dominio recibiría la llave de una cuenta ajena.

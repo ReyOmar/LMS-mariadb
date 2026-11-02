@@ -245,17 +245,7 @@ export class AuthService {
    */
   async resetPassword(token: string, newPassword: string) {
     validateStrength(newPassword);
-
-    const record = await this.prisma.passwordReset.findUnique({ where: { token } });
-    if (!record || record.used) {
-      throw new BadRequestException('Este enlace no es válido o ya fue utilizado. Solicita uno nuevo.');
-    }
-    if (record.expiresAt < new Date()) {
-      throw new BadRequestException('El enlace ha caducado. Solicita uno nuevo.');
-    }
-
-    const user = await this.prisma.user.findUnique({ where: { email: record.email } });
-    if (!user) throw new BadRequestException('Este enlace no es válido. Solicita uno nuevo.');
+    const { record, user } = await this.usableReset(token);
 
     // Un enlace de recuperación se usa precisamente cuando la sesión anterior puede haber
     // quedado expuesta: sin sesión vigente, su token deja de valer en la siguiente petición.
@@ -270,6 +260,30 @@ export class AuthService {
     this.realtime.revokeSession(user.guid, 'password_reset');
 
     return { message: 'Contraseña restablecida. Ya puedes iniciar sesión.' };
+  }
+
+  /**
+   * Si un enlace de recuperación todavía sirve, sin gastarlo: la página lo comprueba al abrirse
+   * para no pedir una contraseña nueva con un enlace que ya no vale.
+   */
+  async checkResetToken(token: string): Promise<{ valid: true }> {
+    await this.usableReset(token);
+    return { valid: true };
+  }
+
+  /** El enlace y su cuenta, si el enlace existe, no se usó, no caducó y la cuenta sigue ahí. */
+  private async usableReset(token: string) {
+    const record = await this.prisma.passwordReset.findUnique({ where: { token } });
+    if (!record || record.used) {
+      throw new BadRequestException('Este enlace no es válido o ya fue utilizado. Solicita uno nuevo.');
+    }
+    if (record.expiresAt < new Date()) {
+      throw new BadRequestException('El enlace ha caducado. Solicita uno nuevo.');
+    }
+
+    const user = await this.prisma.user.findUnique({ where: { email: record.email } });
+    if (!user) throw new BadRequestException('Este enlace no es válido. Solicita uno nuevo.');
+    return { record, user };
   }
 
   // ── Verificación de correo ───────────────────────────────────────────────

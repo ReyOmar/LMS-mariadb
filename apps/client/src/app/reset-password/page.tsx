@@ -1,10 +1,11 @@
 'use client';
 
-import { Suspense, useState, type FormEvent } from 'react';
+import { Suspense, useEffect, useState, type FormEvent } from 'react';
 import Link from 'next/link';
+import { isAxiosError } from 'axios';
 import { useSearchParams } from 'next/navigation';
 import { Loader2, Lock } from 'lucide-react';
-import api from '@/lib/api';
+import api, { errorMessage } from '@/lib/api';
 import { PASSWORD_HINT, passwordProblem } from '@/lib/password';
 import { useRateLimitedForm } from '@/hooks/useRateLimitedForm';
 import { AuthCard, AuthDone, BackToSignIn } from '@/components/layout/AuthCard';
@@ -31,8 +32,34 @@ function NewPasswordForm() {
   const [password, setPassword] = useState('');
   const [confirmation, setConfirmation] = useState('');
   const [done, setDone] = useState(false);
+  // Si el enlace sigue sirviendo, comprobado al abrir: `undefined` mientras se comprueba.
+  const [linkProblem, setLinkProblem] = useState<string | null | undefined>(undefined);
+
+  useEffect(() => {
+    if (!token) return;
+    let current = true;
+    api
+      .post('/auth/reset-password/check', { token })
+      .then(() => current && setLinkProblem(null))
+      .catch((error: unknown) => {
+        if (!current) return;
+        // Sólo un rechazo del enlace lo da por perdido; sin red o con el límite de intentos se
+        // deja el formulario, y al enviarlo el servidor lo vuelve a comprobar.
+        const rejected = isAxiosError(error) && error.response?.status === 400;
+        setLinkProblem(rejected ? errorMessage(error, 'Este enlace no es válido. Solicita uno nuevo.') : null);
+      });
+    return () => {
+      current = false;
+    };
+  }, [token]);
 
   if (!token) return <InvalidLink />;
+  if (linkProblem === undefined) {
+    return (
+      <Loader2 className="h-6 w-6 animate-spin mx-auto text-muted-foreground" aria-label="Comprobando el enlace" />
+    );
+  }
+  if (linkProblem) return <InvalidLink title="Este enlace ya no sirve" message={linkProblem} />;
 
   if (done) {
     return (
@@ -98,11 +125,17 @@ function NewPasswordForm() {
   );
 }
 
-function InvalidLink() {
+function InvalidLink({
+  title = 'Enlace inválido',
+  message = 'No se encontró un token de recuperación en la URL.',
+}: {
+  title?: string;
+  message?: string;
+}) {
   return (
     <div className="text-center">
-      <p className="text-red-700 dark:text-red-400 font-bold">Enlace inválido</p>
-      <p className="text-muted-foreground text-sm mt-2">No se encontró un token de recuperación en la URL.</p>
+      <p className="text-red-700 dark:text-red-400 font-bold">{title}</p>
+      <p className="text-muted-foreground text-sm mt-2">{message}</p>
       <Link href="/forgot-password" className="inline-flex mt-4 text-primary font-bold text-sm hover:underline">
         Solicitar uno nuevo
       </Link>
