@@ -38,6 +38,11 @@ export function SignInForm({
 
   const signIn = (event: FormEvent) => {
     event.preventDefault();
+    // El aviso es el del campus y no el globo del navegador, que sale en su idioma.
+    if (!email.trim() || !password) {
+      form.showError(email.trim() ? 'Escribe tu contraseña.' : 'Escribe tu correo electrónico.');
+      return;
+    }
     void form.submit(async () => {
       const { data } = await api.post<LoginResponse>('/auth/login', { email, password, country });
       if ('requireSetup' in data) onSetupRequired({ email, temporaryPassword: password, message: data.message });
@@ -47,7 +52,7 @@ export function SignInForm({
 
   return (
     <>
-      <form onSubmit={signIn} className="space-y-5">
+      <form onSubmit={signIn} noValidate className="space-y-5">
         <FormError message={form.error} />
         <Field label="Correo electrónico" htmlFor="email">
           <IconInput

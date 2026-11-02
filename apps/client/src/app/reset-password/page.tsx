@@ -89,7 +89,7 @@ function NewPasswordForm() {
   };
 
   return (
-    <form onSubmit={save} className="space-y-5">
+    <form onSubmit={save} noValidate className="space-y-5">
       <FormError message={form.error} />
       <Field label="Nueva contraseña" htmlFor="new-password" hint={PASSWORD_HINT}>
         <PasswordInput

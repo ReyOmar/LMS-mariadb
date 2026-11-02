@@ -10,7 +10,7 @@ export function DashboardShell({ sidebar, children }: { sidebar: ReactNode; chil
       {sidebar}
       <main
         id="main-content"
-        className="flex-1 lg:ml-80 p-4 pt-16 lg:p-8 lg:pt-8 relative min-h-screen overflow-hidden"
+        className="flex-1 lg:ml-80 p-4 pt-[calc(4.5rem+env(safe-area-inset-top))] lg:p-8 lg:pt-8 relative min-h-screen overflow-hidden"
       >
         {children}
       </main>

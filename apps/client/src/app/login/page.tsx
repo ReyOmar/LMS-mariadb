@@ -11,6 +11,7 @@ import { useCountry } from '@/contexts/CountryContext';
 import { useSession } from '@/contexts/SessionContext';
 import { useConfig } from '@/contexts/ConfigContext';
 import { useRateLimitedForm } from '@/hooks/useRateLimitedForm';
+import { ThemeToggle } from '@/components/ui/ThemeToggle';
 import { SessionAlert } from './components/SessionAlert';
 import { SignInForm } from './components/SignInForm';
 import { FirstPasswordForm } from './components/FirstPasswordForm';
@@ -198,6 +199,9 @@ function LoginContent() {
 function LoginFrame({ backgroundUrl, children }: { backgroundUrl: string | null; children: ReactNode }) {
   return (
     <div className="min-h-screen flex items-center justify-center bg-muted/30 p-4 relative overflow-hidden">
+      <div className="absolute top-4 right-4 z-20">
+        <ThemeToggle />
+      </div>
       {backgroundUrl ? (
         <img src={backgroundUrl} alt="" className="absolute inset-0 w-full h-full object-cover z-0" />
       ) : (

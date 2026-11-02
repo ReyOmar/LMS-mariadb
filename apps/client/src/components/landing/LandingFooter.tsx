@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import Link from 'next/link';
 import { Shield } from 'lucide-react';
+import { ThemeToggle } from '@/components/ui/ThemeToggle';
 import { COUNTRY_INFO, type Country } from '@/lib/country';
 import { CountryFlag } from '@/components/ui/CountryFlag';
 import { BrandMark } from './BrandMark';
@@ -68,6 +69,7 @@ export function LandingFooter({
           <p className="flex items-center gap-1">
             <Shield className="h-4 w-4 text-primary" /> Comprometidos con la seguridad vial
           </p>
+          <ThemeToggle />
         </div>
       </div>
     </footer>

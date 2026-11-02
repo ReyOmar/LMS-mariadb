@@ -72,13 +72,13 @@ function ModuleItem({
   onSelect: (resource: Resource) => void;
 }) {
   const ModuleIcon = !item.open ? Lock : item.finished ? Trophy : BookOpen;
-  const iconColor = !item.open ? 'text-muted-foreground' : item.finished ? 'text-emerald-500' : 'text-primary';
+  const iconColor = !item.open ? 'text-muted-foreground' : item.finished ? 'text-success' : 'text-primary';
 
   return (
     <li className="rounded-xl border border-border/50 overflow-hidden">
       <p
         className={`flex items-center gap-2 p-3 text-sm font-bold ${
-          !item.open ? 'opacity-50' : item.finished ? 'text-emerald-700 dark:text-emerald-400' : ''
+          !item.open ? 'opacity-50' : item.finished ? 'text-success' : ''
         }`}
       >
         <ModuleIcon className={`h-4 w-4 shrink-0 ${iconColor}`} />
@@ -112,7 +112,7 @@ function ResourceItem({
   const { resource, open, completed, awaitingGrade } = entry;
   const { Icon, colorClass } = resourcePresentation(resource);
   const ItemIcon = open ? Icon : Lock;
-  const iconColor = !open ? 'text-muted-foreground/50' : completed ? 'text-emerald-500' : colorClass;
+  const iconColor = !open ? 'text-muted-foreground/50' : completed ? 'text-success' : colorClass;
 
   return (
     <li>
@@ -142,7 +142,7 @@ function ResourceItem({
         ) : (
           completed && (
             <StatusMark label="Completado">
-              <CheckCircle className="h-3 w-3 text-emerald-500" />
+              <CheckCircle className="h-3 w-3 text-success" />
             </StatusMark>
           )
         )}

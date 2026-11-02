@@ -94,7 +94,7 @@ function TemplateRow({ template, essential, toggling, onEdit, onToggleActive }: 
         <button
           type="button"
           onClick={onEdit}
-          className="p-2 bg-card hover:bg-muted border border-border/50 rounded-lg text-muted-foreground hover:text-foreground transition-colors"
+          className="tap-target inline-flex items-center justify-center p-2 bg-card hover:bg-muted border border-border/50 rounded-lg text-muted-foreground hover:text-foreground transition-colors"
           title="Editar plantilla"
           aria-label={`Editar plantilla ${template.internalName}`}
         >
@@ -103,7 +103,7 @@ function TemplateRow({ template, essential, toggling, onEdit, onToggleActive }: 
         {essential ? (
           <span
             role="img"
-            className="p-2 border border-border/50 rounded-lg text-muted-foreground flex items-center justify-center"
+            className="tap-target p-2 border border-border/50 rounded-lg text-muted-foreground flex items-center justify-center"
             title="Imprescindible para entrar al campus: se puede editar, pero no desactivar"
             aria-label={`${template.internalName}: imprescindible, no se puede desactivar`}
           >
@@ -116,7 +116,7 @@ function TemplateRow({ template, essential, toggling, onEdit, onToggleActive }: 
             disabled={toggling}
             title={toggleLabel}
             aria-label={`${toggleLabel} de ${template.internalName}`}
-            className={`p-2 border rounded-lg transition-colors flex items-center justify-center disabled:opacity-50 disabled:pointer-events-none ${
+            className={`tap-target p-2 border rounded-lg transition-colors flex items-center justify-center disabled:opacity-50 disabled:pointer-events-none ${
               template.active
                 ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-700 dark:text-emerald-400 hover:bg-red-500/10 hover:text-red-500 hover:border-red-500/20'
                 : 'bg-muted border-border/50 text-muted-foreground hover:bg-emerald-500/10 hover:text-emerald-500 hover:border-emerald-500/20'

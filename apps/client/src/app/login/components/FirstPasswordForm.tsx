@@ -41,7 +41,7 @@ export function FirstPasswordForm({ form, setup, onCancel, onSignedIn, entering 
   };
 
   return (
-    <form onSubmit={save} className="space-y-5">
+    <form onSubmit={save} noValidate className="space-y-5">
       <p className="flex items-center justify-center gap-2 rounded-xl border border-emerald-500/20 bg-emerald-500/10 px-4 py-3 text-sm font-medium text-emerald-700 dark:text-emerald-400 text-center">
         <CheckCircle2 className="h-4 w-4 shrink-0" />
         {setup.message}

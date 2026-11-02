@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { Check, Download, FileText, Loader2, MessageSquare } from 'lucide-react';
 import { useCountry } from '@/contexts/CountryContext';
-import { formatNumber } from '@/lib/country';
+import { decimalSeparator, formatNumber } from '@/lib/country';
 import { MAX_SCORE, MIN_SCORE } from '@/lib/grading';
 import { shortLabel } from '../../components/summary-charts';
 import type { ExaminerSubmission } from '../../types';
@@ -22,6 +22,7 @@ interface Props {
 export function GradingPanel({ submission, downloadUrl, saving, onCancel, onSave }: Props) {
   const [start] = useState(() => gradingStart(submission));
   const [value, setValue] = useState(start.score);
+  const { country } = useCountry();
   const [feedback, setFeedback] = useState(start.feedback);
 
   const score = Number.parseFloat(value);
@@ -55,7 +56,7 @@ export function GradingPanel({ submission, downloadUrl, saving, onCancel, onSave
               value={value}
               onChange={(e) => setValue(normalizeTypedScore(e.target.value))}
               className="w-full bg-background border-2 border-border rounded-xl pl-4 pr-12 py-4 text-2xl font-black text-primary focus:outline-none focus:border-primary/50 focus:ring-4 focus:ring-primary/20 transition-all"
-              placeholder="0.0"
+              placeholder={`0${decimalSeparator(country)}0`}
               autoFocus
             />
             <div className="absolute right-4 top-1/2 -translate-y-1/2 text-sm font-bold text-muted-foreground">

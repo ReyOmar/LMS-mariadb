@@ -126,8 +126,8 @@ function CompletedQuiz({ resource }: { resource: Resource }) {
           dangerouslySetInnerHTML={sanitizeHTML(resource.contentHtml)}
         />
       )}
-      <p className="bg-emerald-500/5 border border-emerald-500/20 rounded-xl p-4 flex items-center gap-3 text-sm text-emerald-700 dark:text-emerald-400 font-medium">
-        <CheckCircle className="h-5 w-5 text-emerald-500 shrink-0" />
+      <p className="bg-success/5 border border-success/20 rounded-xl p-4 flex items-center gap-3 text-sm text-success font-medium">
+        <CheckCircle className="h-5 w-5 text-success shrink-0" />
         Este cuestionario ya fue completado.
       </p>
     </div>

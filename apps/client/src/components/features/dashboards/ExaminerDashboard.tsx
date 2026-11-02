@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { Lock, Presentation } from 'lucide-react';
+import { BookOpen, Presentation } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useSession } from '@/contexts/SessionContext';
 import { useRealtimeEvent } from '@/contexts/RealtimeContext';
@@ -55,8 +55,9 @@ export function ExaminerDashboard() {
 
       {courses.length === 0 ? (
         <EmptyState
-          icon={<Lock className="h-10 w-10" />}
-          title="Sin cursos asignados"
+          className="bg-card border border-dashed border-border rounded-2xl"
+          icon={<BookOpen className="h-10 w-10" />}
+          title="No hay cursos asignados"
           description="Aún no tienes cursos asignados. Contacta con un administrador para que te asigne cursos para supervisar."
         />
       ) : (

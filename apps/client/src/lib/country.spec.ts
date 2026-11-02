@@ -1,4 +1,12 @@
-import { DEFAULT_COUNTRY, isCountry, saveCountry, countryName, savedCountry, formatNumber } from './country';
+import {
+  DEFAULT_COUNTRY,
+  isCountry,
+  saveCountry,
+  countryName,
+  savedCountry,
+  formatNumber,
+  decimalSeparator,
+} from './country';
 
 /**
  * Sede que se muestra antes de iniciar sesión.
@@ -86,6 +94,11 @@ describe('cifras con el formato de la sede', () => {
   it('México agrupa los miles con coma y escribe el decimal con punto', () => {
     expect(formatNumber(6023, 'MEXICO')).toBe('6,023');
     expect(formatNumber(83.2, 'MEXICO')).toBe('83.2');
+  });
+
+  it('cada sede tiene su separador decimal', () => {
+    expect(decimalSeparator('COLOMBIA')).toBe(',');
+    expect(decimalSeparator('MEXICO')).toBe('.');
   });
 
   it('las cifras pequeñas quedan como están', () => {

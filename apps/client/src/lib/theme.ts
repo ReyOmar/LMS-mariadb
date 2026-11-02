@@ -65,6 +65,13 @@ const LIGHT_SURFACE: Hsl = WHITE;
 const DARK_SURFACE: Hsl = { h: 220, s: 18, l: 14 };
 /** En modo oscuro el primario nunca baja de esta luminosidad, para que destaque sobre el fondo. */
 const DARK_MIN_LIGHTNESS = 62;
+/**
+ * Saturación mínima del primario en el modo oscuro: una marca apagada (el azul pizarra de México,
+ * por ejemplo), aclarada sin más, se ve gris sobre el fondo oscuro. Por debajo de `GREY_SATURATION`
+ * la marca es un gris de verdad y se respeta.
+ */
+const DARK_MIN_SATURATION = 45;
+const GREY_SATURATION = 10;
 
 /** Convierte `#RGB` o `#RRGGBB` a HSL redondeado. */
 export function hexToHsl(hex: string): Hsl | null {
@@ -123,11 +130,13 @@ export function readableForeground(background: Hsl): Hsl {
 
 /**
  * El primario para el modo oscuro: el mismo tono, aclarado lo necesario para que se lea
- * como texto sobre el fondo oscuro y su texto encima también se lea.
+ * como texto sobre el fondo oscuro y su texto encima también se lea, y con color suficiente
+ * para no verse gris.
  */
 export function darkModeVariant(color: Hsl): Hsl {
+  const s = color.s >= GREY_SATURATION ? Math.max(color.s, DARK_MIN_SATURATION) : color.s;
   for (let l = Math.max(color.l, DARK_MIN_LIGHTNESS); l < 100; l++) {
-    const candidate = { ...color, l };
+    const candidate = { ...color, s, l };
     if (
       contrastRatio(candidate, DARK_SURFACE) >= MIN_CONTRAST &&
       contrastRatio(candidate, readableForeground(candidate)) >= MIN_CONTRAST
@@ -135,7 +144,7 @@ export function darkModeVariant(color: Hsl): Hsl {
       return candidate;
     }
   }
-  return { ...color, l: 100 };
+  return { ...color, s, l: 100 };
 }
 
 interface ModeColors {

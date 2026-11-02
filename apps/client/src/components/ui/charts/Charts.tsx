@@ -55,6 +55,12 @@ const TOOLTIP = {
   labelStyle: { color: 'hsl(var(--muted-foreground))' },
 };
 
+/**
+ * Texto de las leyendas en el color del texto: Recharts lo pinta del color de la serie, y el verde,
+ * el ámbar o el rojo sobre una tarjeta blanca no se leen. El punto de color sigue indicando la serie.
+ */
+const legendText = (value: string) => <span style={{ color: 'hsl(var(--foreground))' }}>{value}</span>;
+
 const AXIS = {
   axisLine: false as const,
   tickLine: false as const,
@@ -169,6 +175,7 @@ export function Donut({
           iconType="circle"
           iconSize={8}
           wrapperStyle={{ fontSize: '13px', fontWeight: 500, paddingLeft: 20 }}
+          formatter={legendText}
         />
       )}
     </PieChart>
@@ -178,12 +185,13 @@ export function Donut({
 /** Barras con un color propio por tramo. Se usa para repartos de notas o de avance. */
 export function BarsByRange({
   ranges,
-  unit = 'estudiantes',
+  units = ['estudiante', 'estudiantes'],
   empty,
   icon,
 }: {
   ranges: RangeBucket[];
-  unit?: string;
+  /** Cómo se llama lo que se cuenta, en singular y en plural. */
+  units?: readonly [one: string, many: string];
   empty?: string;
   icon?: ReactNode;
 }) {
@@ -197,7 +205,10 @@ export function BarsByRange({
       <CartesianGrid {...GRID} />
       <XAxis dataKey="name" {...AXIS} tick={RangeTick} interval={0} />
       <YAxis allowDecimals={false} {...AXIS} tickFormatter={format} />
-      <Tooltip {...TOOLTIP} formatter={(value) => [`${format(value)} ${unit}`, 'Cantidad']} />
+      <Tooltip
+        {...TOOLTIP}
+        formatter={(value) => [`${format(value)} ${Number(value) === 1 ? units[0] : units[1]}`, 'Cantidad']}
+      />
       <Bar dataKey="count" radius={[6, 6, 0, 0]} maxBarSize={60} isAnimationActive={false}>
         {ranges.map((range) => (
           <Cell key={range.name} fill={range.fill} />
@@ -265,7 +276,7 @@ export function GroupedBars({
       <XAxis dataKey="name" {...AXIS} tick={{ ...AXIS.tick, fontWeight: 600 }} dy={8} />
       <YAxis allowDecimals={false} {...AXIS} tickFormatter={format} />
       <Tooltip {...TOOLTIP} formatter={format} />
-      <Legend wrapperStyle={{ fontSize: 12, paddingTop: 10 }} />
+      <Legend wrapperStyle={{ fontSize: 12, paddingTop: 10 }} formatter={legendText} />
       {series.map((item) => (
         <Bar
           key={item.dataKey}

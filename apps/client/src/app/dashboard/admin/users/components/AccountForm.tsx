@@ -25,9 +25,12 @@ const FIELDS = [
   { key: 'lastName', id: 'account-last-name', label: 'Apellido', example: 'Pérez' },
 ] as const;
 
+/** Dónde está cada campo obligatorio, para llevar el foco al primero que falte. */
+const FIELD_IDS = { firstName: 'account-first-name', lastName: 'account-last-name', email: 'account-email' } as const;
+
 const LABEL_CLASS = 'block text-xs font-bold text-muted-foreground uppercase tracking-wider mb-1.5';
 const INPUT_CLASS =
-  'w-full px-3 py-2.5 bg-background border border-border rounded-xl text-sm font-medium focus:border-primary focus:ring-1 focus:ring-primary outline-none transition-all';
+  'w-full px-3 py-2.5 bg-background border border-border rounded-xl text-sm font-medium focus:border-primary focus:ring-1 focus:ring-primary outline-none transition-all aria-[invalid=true]:border-destructive aria-[invalid=true]:ring-1 aria-[invalid=true]:ring-destructive/40';
 
 /** El correo no se edita: identifica la cuenta al recuperar la contraseña. */
 export function AccountForm({ account, initialRole = 'STUDENT', isSelf = false, onClose, onSaved }: Props) {
@@ -39,6 +42,12 @@ export function AccountForm({ account, initialRole = 'STUDENT', isSelf = false, 
     role: account?.role ?? initialRole,
   });
   const [saving, setSaving] = useState(false);
+  // Campos obligatorios que estaban vacíos al intentar guardar: se marcan hasta que se escriben.
+  const [missing, setMissing] = useState<ReadonlySet<string>>(new Set());
+  const edit = (key: 'firstName' | 'lastName' | 'email', value: string) => {
+    setForm((current) => ({ ...current, [key]: value }));
+    if (missing.has(key)) setMissing((current) => new Set([...current].filter((field) => field !== key)));
+  };
   const { dialogProps, titleId } = useDialog<HTMLFormElement>({ onClose });
 
   const editing = Boolean(account);
@@ -55,8 +64,13 @@ export function AccountForm({ account, initialRole = 'STUDENT', isSelf = false, 
     if (saving || unchanged) return;
 
     const email = form.email.trim();
-    if (!firstName || !lastName || !email) {
-      notify.warning('Todos los campos son obligatorios.');
+    const empty = [!firstName && 'firstName', !lastName && 'lastName', !editing && !email && 'email'].filter(
+      (field): field is string => Boolean(field),
+    );
+    if (empty.length > 0) {
+      setMissing(new Set(empty));
+      document.getElementById(FIELD_IDS[empty[0] as keyof typeof FIELD_IDS])?.focus();
+      notify.warning('Completa los campos marcados.');
       return;
     }
 
@@ -142,10 +156,13 @@ export function AccountForm({ account, initialRole = 'STUDENT', isSelf = false, 
                   id={id}
                   type="text"
                   value={form[key]}
-                  onChange={(event) => setForm((current) => ({ ...current, [key]: event.target.value }))}
+                  onChange={(event) => edit(key, event.target.value)}
                   className={INPUT_CLASS}
                   placeholder={example}
+                  aria-invalid={missing.has(key)}
+                  aria-describedby={missing.has(key) ? `${id}-error` : undefined}
                 />
+                {missing.has(key) && <RequiredNote id={`${id}-error`} />}
               </div>
             ))}
           </div>
@@ -161,11 +178,14 @@ export function AccountForm({ account, initialRole = 'STUDENT', isSelf = false, 
                   id="account-email"
                   type="email"
                   value={form.email}
-                  onChange={(event) => setForm((current) => ({ ...current, email: event.target.value }))}
+                  onChange={(event) => edit('email', event.target.value)}
                   className={`${INPUT_CLASS} pl-10 pr-4`}
                   placeholder="correo@ejemplo.com"
+                  aria-invalid={missing.has('email')}
+                  aria-describedby={missing.has('email') ? 'account-email-error' : undefined}
                 />
               </div>
+              {missing.has('email') && <RequiredNote id="account-email-error" />}
             </div>
           )}
 
@@ -230,5 +250,14 @@ export function AccountForm({ account, initialRole = 'STUDENT', isSelf = false, 
         </div>
       </form>
     </div>
+  );
+}
+
+/** Aviso bajo un campo obligatorio que se dejó vacío. */
+function RequiredNote({ id }: { id: string }) {
+  return (
+    <p id={id} className="mt-1 text-xs font-medium text-destructive">
+      Obligatorio.
+    </p>
   );
 }

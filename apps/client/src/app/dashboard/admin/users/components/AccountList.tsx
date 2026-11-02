@@ -51,10 +51,10 @@ export function AccountList({ accounts, tab, search, onTabChange, onSearch, onOp
                 aria-label={`${label} (${formatNumber(counts[role], country)})`}
                 title={label}
                 onClick={() => onTabChange(role)}
-                className={`flex flex-1 sm:flex-none items-center justify-center gap-1.5 px-3 sm:px-4 py-2 rounded-lg text-xs sm:text-sm font-bold transition-all whitespace-nowrap ${tab === role ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
+                className={`tap-target flex flex-1 sm:flex-none items-center justify-center gap-1.5 px-3 sm:px-4 py-2 rounded-lg text-xs sm:text-sm font-bold transition-all whitespace-nowrap ${tab === role ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
               >
                 <Icon className={`h-4 w-4 ${ROLE_STYLE[role].text} shrink-0`} />
-                <span className="hidden sm:inline">{label}</span> ({formatNumber(counts[role], country)})
+                <span>{label}</span> ({formatNumber(counts[role], country)})
               </button>
             ))}
           </div>

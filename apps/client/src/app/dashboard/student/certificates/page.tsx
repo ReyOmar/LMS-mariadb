@@ -111,7 +111,7 @@ function Summary({ certificates }: { certificates: Certificate[] }) {
         color="success"
       />
       <HighlightedStat
-        label="Horas de capacitación"
+        label="Horas certificadas"
         value={hours}
         suffix="h"
         icon={<Clock className="h-5 w-5" />}

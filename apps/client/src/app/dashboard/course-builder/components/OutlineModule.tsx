@@ -63,7 +63,7 @@ export function OutlineModule({
             type="button"
             onClick={onToggle}
             aria-expanded={expanded}
-            className="p-1 bg-background border border-border shadow-sm hover:border-primary/50 hover:bg-muted rounded-md transition-colors"
+            className="tap-target inline-flex items-center justify-center p-1 bg-background border border-border shadow-sm hover:border-primary/50 hover:bg-muted rounded-md transition-colors"
             title={expanded ? 'Contraer módulo' : 'Desplegar módulo'}
           >
             {expanded ? (

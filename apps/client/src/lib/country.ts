@@ -61,6 +61,11 @@ export function formatNumber(value: number, country: Country): string {
   return value.toLocaleString(`es-${COUNTRY_INFO[country].iso}`, { maximumFractionDigits: 1 });
 }
 
+/** Separador decimal de la sede: coma en Colombia («97,5») y punto en México («97.5»). */
+export function decimalSeparator(country: Country): string {
+  return formatNumber(1.5, country).charAt(1);
+}
+
 /** Sede de partida de quien llega sin haber elegido nunca. */
 export const DEFAULT_COUNTRY: Country = 'COLOMBIA';
 

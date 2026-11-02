@@ -31,6 +31,11 @@ export function ValiditySettings({ months, onChange }: Props) {
         <span className="text-sm font-medium text-muted-foreground">meses</span>
       </div>
       <div className="mt-3 space-y-2 text-xs text-muted-foreground">
+        <p className="font-medium text-foreground">
+          {months
+            ? `Ahora: cada certificado vence ${months} ${months === 1 ? 'mes' : 'meses'} después de emitirse.`
+            : 'Ahora: los certificados no caducan.'}
+        </p>
         <p>
           <strong className="text-foreground">Lo normal es dejarlo vacío.</strong> Un certificado acredita que esa
           persona completó la formación en una fecha, y ese hecho no caduca: si lo presenta seis meses después, debe

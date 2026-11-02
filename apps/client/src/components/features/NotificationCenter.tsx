@@ -180,7 +180,7 @@ export function NotificationCenter({ onUnreadChange }: { onUnreadChange: (unread
       <button
         type="button"
         onClick={togglePanel}
-        className="relative p-2.5 rounded-xl bg-card border border-border hover:bg-muted transition-all shadow-sm group"
+        className="relative tap-target inline-flex items-center justify-center p-2.5 rounded-xl bg-card border border-border hover:bg-muted transition-all shadow-sm group"
         aria-label={unread > 0 ? `Notificaciones (${unread} sin leer)` : 'Notificaciones'}
         aria-expanded={open}
       >
@@ -249,7 +249,7 @@ export function NotificationCenter({ onUnreadChange }: { onUnreadChange: (unread
                 <div className="p-10 text-center text-muted-foreground">
                   <Inbox className="h-10 w-10 mx-auto mb-3 opacity-20" />
                   <p className="text-sm font-medium">Sin notificaciones</p>
-                  <p className="text-xs mt-1 opacity-70">Aquí aparecerán tus alertas y mensajes.</p>
+                  <p className="text-xs mt-1 text-muted-foreground">Aquí aparecerán tus alertas y mensajes.</p>
                 </div>
               ) : (
                 notifications.map((notification) => (
@@ -300,7 +300,7 @@ function NotificationItem({
             <p className={`text-sm truncate ${isNew ? 'font-bold' : 'font-medium'}`}>{notification.title}</p>
           </div>
           <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2 leading-relaxed">{notification.message}</p>
-          <p className="text-[10px] text-muted-foreground/70 mt-1.5 font-medium">{timeAgo(notification.createdAt)}</p>
+          <p className="text-[11px] text-muted-foreground mt-1.5 font-medium">{timeAgo(notification.createdAt)}</p>
         </div>
         {notification.actionUrl && (
           <ChevronRight className="h-4 w-4 text-muted-foreground/30 group-hover/item:text-muted-foreground shrink-0 mt-1 transition-colors" />

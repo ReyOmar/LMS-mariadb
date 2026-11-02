@@ -62,7 +62,7 @@ export function CertificateCard({ certificate, downloading, onOpen, onDownload }
           <button
             type="button"
             onClick={onOpen}
-            className="flex-1 flex items-center justify-center gap-1.5 bg-primary/10 text-primary hover:bg-primary/20 font-bold text-xs py-2.5 rounded-xl transition-colors"
+            className="flex-1 flex items-center justify-center gap-1.5 bg-primary/10 text-primary hover:bg-primary/20 font-bold text-xs py-2.5 tap-target rounded-xl transition-colors"
           >
             <Eye className="h-3.5 w-3.5" /> Ver detalle
           </button>
@@ -70,7 +70,7 @@ export function CertificateCard({ certificate, downloading, onOpen, onDownload }
             type="button"
             onClick={onDownload}
             disabled={downloading}
-            className="flex-1 flex items-center justify-center gap-1.5 bg-primary text-primary-foreground hover:bg-primary/90 font-bold text-xs py-2.5 rounded-xl transition-colors shadow-sm disabled:opacity-60"
+            className="flex-1 flex items-center justify-center gap-1.5 bg-primary text-primary-foreground hover:bg-primary/90 font-bold text-xs py-2.5 tap-target rounded-xl transition-colors shadow-sm disabled:opacity-60"
           >
             {downloading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
             {downloading ? 'Descargando…' : 'Descargar PDF'}

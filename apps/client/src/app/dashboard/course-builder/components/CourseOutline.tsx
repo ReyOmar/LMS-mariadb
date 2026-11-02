@@ -50,22 +50,24 @@ export function CourseOutline({
       <button
         type="button"
         onClick={() => setVisible((current) => !current)}
-        className="lg:hidden fixed bottom-[calc(5rem+var(--storage-notice-space,0px))] right-6 z-30 h-14 w-14 bg-primary text-primary-foreground rounded-full shadow-xl flex items-center justify-center hover:bg-primary/90 transition-all active:scale-95"
+        className="lg:hidden fixed bottom-[calc(5rem+var(--storage-notice-space,0px))] right-4 z-30 h-12 w-12 bg-primary text-primary-foreground rounded-full shadow-xl flex items-center justify-center hover:bg-primary/90 transition-all active:scale-95"
         title="Temario del curso"
         aria-label="Temario del curso"
       >
         <Layers className="h-6 w-6" />
       </button>
 
+      {/* Abierto en el móvil, el cajón y su fondo quedan por encima de la barra superior (z-[110]):
+          si no, la barra taparía su título y el botón de cerrar. */}
       {visible && (
         <div
-          className="lg:hidden fixed inset-0 bg-black/50 backdrop-blur-sm z-40 animate-in fade-in duration-200"
+          className="lg:hidden fixed inset-0 bg-black/50 backdrop-blur-sm z-[115] animate-in fade-in duration-200"
           onClick={() => setVisible(false)}
         />
       )}
 
       <div
-        className={`w-[350px] max-w-[85vw] bg-card border-l border-border overflow-y-auto flex flex-col shadow-[-4px_0_15px_-3px_rgba(0,0,0,0.05)] z-50 fixed lg:relative right-0 top-0 h-full lg:h-auto transition-transform duration-300 ease-in-out ${visible ? 'translate-x-0' : 'translate-x-full lg:translate-x-0'}`}
+        className={`w-[350px] max-w-[85vw] bg-card border-l border-border overflow-y-auto flex flex-col shadow-[-4px_0_15px_-3px_rgba(0,0,0,0.05)] z-[116] lg:z-50 fixed lg:relative right-0 top-0 h-full lg:h-auto transition-transform duration-300 ease-in-out ${visible ? 'translate-x-0' : 'translate-x-full lg:translate-x-0'}`}
       >
         <div className="p-5 border-b border-border sticky top-0 bg-inherit z-10 flex items-center justify-between">
           <h2 className="font-bold text-lg tracking-tight flex items-center gap-2 uppercase text-muted-foreground">
@@ -74,7 +76,7 @@ export function CourseOutline({
           <button
             type="button"
             onClick={() => setVisible(false)}
-            className="lg:hidden p-1.5 rounded-lg hover:bg-muted text-muted-foreground transition-colors"
+            className="lg:hidden tap-target inline-flex items-center justify-center p-1.5 rounded-lg hover:bg-muted text-muted-foreground transition-colors"
             aria-label="Cerrar temario"
           >
             <X className="h-5 w-5" />

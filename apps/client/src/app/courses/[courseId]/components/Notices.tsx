@@ -22,7 +22,7 @@ function BackToMyCourses({ className = '' }: { className?: string }) {
   return (
     <Link
       href={MY_COURSES}
-      className={`inline-flex items-center gap-2 text-muted-foreground hover:text-foreground text-sm transition-colors ${className}`}
+      className={`tap-target inline-flex items-center gap-2 text-muted-foreground hover:text-foreground text-sm transition-colors ${className}`}
     >
       <ArrowLeft className="h-4 w-4" /> Volver a mis cursos
     </Link>
@@ -68,7 +68,7 @@ export function CourseAlreadyEnded({
   onViewCertificate: () => void;
 }) {
   return (
-    <Card border="border-emerald-500/30">
+    <Card border="border-success/30">
       <button
         type="button"
         onClick={onViewOnly}
@@ -79,14 +79,14 @@ export function CourseAlreadyEnded({
       </button>
 
       <Header
-        background="from-emerald-500/15 via-primary/10 to-emerald-500/5"
-        bar="from-emerald-400 via-primary to-emerald-500"
-        circle="from-emerald-500/20 to-primary/20"
-        icon={<Trophy className="h-12 w-12 text-emerald-500" />}
+        background="from-success/15 via-primary/10 to-success/5"
+        bar="from-success via-primary to-success"
+        circle="from-success/20 to-primary/20"
+        icon={<Trophy className="h-12 w-12 text-success" />}
         title="¡Curso finalizado!"
         description="Ya completaste exitosamente el curso"
         name={title}
-        nameClass="text-emerald-700 dark:text-emerald-400"
+        nameClass="text-success"
       />
 
       <div className="p-8 text-center">
@@ -144,7 +144,7 @@ function Header({
     <div className={`relative bg-gradient-to-br p-10 text-center overflow-hidden ${background}`}>
       <div className={`absolute top-0 left-0 w-full h-1.5 bg-gradient-to-r ${bar}`} />
       <div className="absolute -top-12 -right-12 w-36 h-36 bg-primary/5 rounded-full" />
-      <div className="absolute -bottom-8 -left-8 w-28 h-28 bg-emerald-500/5 rounded-full" />
+      <div className="absolute -bottom-8 -left-8 w-28 h-28 bg-success/5 rounded-full" />
 
       <div className="relative z-10">
         <div
@@ -231,9 +231,9 @@ export function Celebration({
         className="bg-card border border-border rounded-3xl shadow-2xl w-full max-w-md overflow-hidden animate-in zoom-in-95 duration-300 relative z-10 outline-none"
       >
         <Header
-          background="from-primary/20 via-primary/10 to-emerald-500/10"
-          bar="from-primary via-amber-500 to-emerald-500"
-          circle="from-primary/20 to-emerald-500/20"
+          background="from-primary/20 via-primary/10 to-success/10"
+          bar="from-primary via-amber-500 to-success"
+          circle="from-primary/20 to-success/20"
           icon={<Award className="h-12 w-12 text-primary" />}
           title="¡Felicidades!"
           description="Has completado exitosamente el curso"

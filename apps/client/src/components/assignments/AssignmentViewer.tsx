@@ -269,7 +269,8 @@ export default function AssignmentViewer({
                 </div>
                 <div className="flex-1 min-w-0 text-left">
                   <p
-                    className={`text-sm font-semibold truncate ${submission.filePurged ? 'text-muted-foreground' : 'text-foreground'}`}
+                    className={`text-sm font-semibold line-clamp-2 [overflow-wrap:anywhere] ${submission.filePurged ? 'text-muted-foreground' : 'text-foreground'}`}
+                    title={submission.fileName ?? undefined}
                   >
                     {submission.fileName}
                   </p>
@@ -303,8 +304,8 @@ export default function AssignmentViewer({
                   </button>
                   {limitText && <span className="text-xs text-muted-foreground">{limitText}</span>}
                   {uploadError && (
-                    <span className="text-xs font-medium text-red-700 dark:text-red-400 flex items-center gap-1.5">
-                      <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                    <span className="text-sm font-medium text-red-700 dark:text-red-400 flex items-start gap-1.5">
+                      <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
                       {uploadError}
                     </span>
                   )}

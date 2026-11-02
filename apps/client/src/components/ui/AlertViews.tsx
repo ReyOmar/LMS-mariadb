@@ -222,8 +222,8 @@ export function ToastStack({ toasts, onClose }: { toasts: Toast[]; onClose: (id:
   return (
     <div
       data-keep-active
-      className="fixed top-4 right-4 z-[9998] flex flex-col gap-3 pointer-events-none"
-      style={{ maxWidth: '420px', width: '100%' }}
+      // En el móvil, a lo ancho y por debajo de la barra superior, sin tapar el botón del menú.
+      className="fixed inset-x-4 top-[calc(4.25rem+env(safe-area-inset-top))] z-[9998] flex flex-col gap-3 pointer-events-none sm:left-auto sm:w-[420px] sm:max-w-[calc(100vw-2rem)] lg:top-4"
     >
       {toasts.map((toast) => {
         const toastStyle = ALERT_STYLES[toast.type];

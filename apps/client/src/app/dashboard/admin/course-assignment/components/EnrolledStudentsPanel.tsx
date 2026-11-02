@@ -49,9 +49,7 @@ export function EnrolledStudentsPanel({ enrolled, onUnenroll }: Props) {
               <PersonIdentity
                 person={student}
                 role="STUDENT"
-                details={
-                  <p className="text-[11px] text-muted-foreground/80">Matrícula: {shortDate(student.enrolledAt)}</p>
-                }
+                details={<p className="text-xs text-muted-foreground">Matrícula: {shortDate(student.enrolledAt)}</p>}
               />
               <button
                 type="button"

@@ -430,6 +430,11 @@ input[type='password']::-ms-clear {
   scrollbar-color: hsl(var(--border)) transparent;
 }
 
+/* Texto enriquecido: una palabra o una dirección larga se parte antes de salirse de su caja. */
+.prose {
+  overflow-wrap: anywhere;
+}
+
 /* ═══════════════════════════════════════════════════════════
    AJUSTES DEL EDITOR (React Quill)
    ═══════════════════════════════════════════════════════════ */
@@ -470,5 +475,24 @@ input[type='password']::-ms-clear {
   .sidebar-nav .sidebar-link {
     min-height: 44px;
     padding: 0.625rem 0.75rem;
+  }
+}
+
+/* Campos a 16 px como mínimo en el móvil: con menos, Safari en el iPhone acerca la página al
+   tocarlos. Fuera de las capas de Tailwind, así que manda sobre sus `text-sm` y `text-xs`; los
+   de letra más grande (el código de verificación, la nota) conservan la suya. */
+@media (max-width: 639.98px) {
+  input:not([type='checkbox'], [type='radio'], [type='range'], [type='file'], .text-lg, .text-xl, .text-2xl, .text-3xl),
+  select:not(.text-lg, .text-xl, .text-2xl, .text-3xl),
+  textarea:not(.text-lg, .text-xl, .text-2xl, .text-3xl) {
+    font-size: 16px;
+  }
+}
+
+/* Botones de icono y enlaces pequeños: en pantallas táctiles, al menos 44 px para el dedo. */
+@media (max-width: 1023px) {
+  .tap-target {
+    min-height: 44px;
+    min-width: 44px;
   }
 }

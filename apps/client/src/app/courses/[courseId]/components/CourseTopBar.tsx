@@ -17,7 +17,7 @@ export function CourseTopBar({
     <header className="sticky top-0 z-30 bg-background/80 backdrop-blur-md border-b border-border/50 h-14 flex items-center px-4 gap-3 shrink-0">
       <Link
         href={MY_COURSES}
-        className="p-2 hover:bg-muted rounded-xl transition-colors"
+        className="tap-target inline-flex items-center justify-center p-2 hover:bg-muted rounded-xl transition-colors"
         aria-label="Volver a mis cursos"
       >
         <ArrowLeft className="h-5 w-5" />

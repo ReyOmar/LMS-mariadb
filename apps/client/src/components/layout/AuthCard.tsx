@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import Link from 'next/link';
 import { ArrowLeft, CheckCircle, type LucideIcon } from 'lucide-react';
+import { ThemeToggle } from '@/components/ui/ThemeToggle';
 
 /** Tarjeta de las pantallas de recuperación de contraseña: cabecera de color y cuerpo. */
 export function AuthCard({
@@ -15,7 +16,10 @@ export function AuthCard({
   children: ReactNode;
 }) {
   return (
-    <div className="min-h-screen flex items-center justify-center bg-background p-4">
+    <div className="min-h-screen flex items-center justify-center bg-background p-4 relative">
+      <div className="absolute top-4 right-4">
+        <ThemeToggle />
+      </div>
       <div className="w-full max-w-md bg-card border border-border rounded-2xl shadow-xl overflow-hidden animate-in fade-in slide-in-from-bottom-4 duration-500">
         <div className="bg-gradient-to-r from-primary to-primary/80 p-8 text-center text-primary-foreground">
           <div className="w-16 h-16 bg-primary-foreground/10 rounded-2xl mx-auto flex items-center justify-center mb-4">

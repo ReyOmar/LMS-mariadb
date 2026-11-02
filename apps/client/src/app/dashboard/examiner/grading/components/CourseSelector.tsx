@@ -111,15 +111,20 @@ function CourseCard({ course, onOpen }: { course: CourseSummary; onOpen: () => v
               {formatNumber(course.graded, country)}
             </span>
           </div>
-          <div className="flex items-center gap-3 mt-2">
-            <div className="flex-1 bg-muted rounded-full h-1.5 overflow-hidden">
-              <div
-                className="bg-emerald-500 h-full rounded-full transition-all duration-500"
-                style={{ width: `${progress}%` }}
-              />
+          {/* Sin entregas no hay avance que medir: una barra llena se leería como «todo calificado». */}
+          {course.total === 0 ? (
+            <p className="text-xs font-medium text-muted-foreground mt-2">Aún sin entregas</p>
+          ) : (
+            <div className="flex items-center gap-3 mt-2">
+              <div className="flex-1 bg-muted rounded-full h-1.5 overflow-hidden">
+                <div
+                  className="bg-emerald-500 h-full rounded-full transition-all duration-500"
+                  style={{ width: `${progress}%` }}
+                />
+              </div>
+              <span className="text-xs font-bold text-muted-foreground w-10 text-right">{progress}%</span>
             </div>
-            <span className="text-xs font-bold text-muted-foreground w-10 text-right">{progress}%</span>
-          </div>
+          )}
         </div>
       </div>
     </DirectoryCard>

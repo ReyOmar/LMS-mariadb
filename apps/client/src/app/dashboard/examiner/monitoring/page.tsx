@@ -65,38 +65,50 @@ export default function StudentMonitoringPage() {
         description="Seguimiento del progreso de los estudiantes con cursos en curso. Quien ya obtuvo el certificado de un curso deja de aparecer en él."
       />
 
-      <MonitoringOverview stats={stats} chosenCourse={chosenCourse?.title} />
+      {/* Sin cursos asignados no hay nada que medir ni que buscar: un único aviso. */}
+      {stats.courses.length === 0 ? (
+        <EmptyState
+          className="bg-card border border-dashed border-border rounded-2xl"
+          icon={<Users className="h-10 w-10" />}
+          title="No hay cursos asignados"
+          description="Cuando un administrador te asigne cursos, aquí verás el avance de sus estudiantes."
+        />
+      ) : (
+        <>
+          <MonitoringOverview stats={stats} chosenCourse={chosenCourse?.title} />
 
-      <SearchAndFilter
-        search={search}
-        onSearch={setSearch}
-        searchLabel="Buscar por nombre, apellido o correo"
-        filter={course}
-        onFilter={setCourse}
-        filterLabel="Filtrar por curso"
-        options={courseOptions}
-      />
-
-      <PagedListArea
-        list={students}
-        loadingMessage="Cargando estudiantes..."
-        loadMoreLabel={`Ver más (${formatNumber(students.items.length, country)} de ${formatNumber(stats.students, country)})`}
-      >
-        {students.items.length === 0 ? (
-          <EmptyState
-            className="bg-card border border-dashed border-border rounded-2xl"
-            icon={<Users className="h-10 w-10" />}
-            title="Sin resultados"
-            description={
-              appliedSearch
-                ? 'No se encontraron estudiantes con ese criterio de búsqueda.'
-                : 'No hay estudiantes con cursos en curso.'
-            }
+          <SearchAndFilter
+            search={search}
+            onSearch={setSearch}
+            searchLabel="Buscar por nombre, apellido o correo"
+            filter={course}
+            onFilter={setCourse}
+            filterLabel="Filtrar por curso"
+            options={courseOptions}
           />
-        ) : (
-          <StudentList students={students.items} courseChosen={Boolean(chosenCourse)} />
-        )}
-      </PagedListArea>
+
+          <PagedListArea
+            list={students}
+            loadingMessage="Cargando estudiantes..."
+            loadMoreLabel={`Ver más (${formatNumber(students.items.length, country)} de ${formatNumber(stats.students, country)})`}
+          >
+            {students.items.length === 0 ? (
+              <EmptyState
+                className="bg-card border border-dashed border-border rounded-2xl"
+                icon={<Users className="h-10 w-10" />}
+                title="Sin resultados"
+                description={
+                  appliedSearch
+                    ? 'No se encontraron estudiantes con ese criterio de búsqueda.'
+                    : 'No hay estudiantes con cursos en curso.'
+                }
+              />
+            ) : (
+              <StudentList students={students.items} courseChosen={Boolean(chosenCourse)} />
+            )}
+          </PagedListArea>
+        </>
+      )}
     </div>
   );
 }

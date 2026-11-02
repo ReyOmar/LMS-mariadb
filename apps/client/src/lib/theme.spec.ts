@@ -72,12 +72,22 @@ describe('texto sobre un color', () => {
 });
 
 describe('primario en modo oscuro', () => {
-  it('conserva el tono y la saturación y sólo aclara', () => {
+  it('conserva el tono, aclara y da color a una marca apagada para que no se vea gris', () => {
     const brand = hexToHsl(MEXICO)!;
     const dark = darkModeVariant(brand);
+    expect(brand.s).toBeLessThan(45);
     expect(dark.h).toBe(brand.h);
-    expect(dark.s).toBe(brand.s);
+    expect(dark.s).toBe(45);
     expect(dark.l).toBeGreaterThanOrEqual(62);
+  });
+
+  it('conserva la saturación de una marca con color', () => {
+    const brand = hexToHsl(COLOMBIA)!;
+    expect(darkModeVariant(brand).s).toBe(brand.s);
+  });
+
+  it('respeta un gris como gris', () => {
+    expect(darkModeVariant({ h: 0, s: 0, l: 20 }).s).toBe(0);
   });
 
   it('no oscurece un color que ya es claro', () => {
@@ -130,7 +140,7 @@ describe('hoja de estilos del tema', () => {
   it('define el primario de cada modo, con la regla oscura después de la clara', () => {
     const css = themeCss({ primaryColor: MEXICO });
     expect(css).toContain(':root{--primary:215 28% 17%;--primary-foreground:0 0% 100%;--ring:215 28% 17%;');
-    expect(css).toMatch(/^:root\{.*\}\.dark\{--primary:215 28% \d+%;--primary-foreground:220 30% 8%;/);
+    expect(css).toMatch(/^:root\{.*\}\.dark\{--primary:215 45% \d+%;--primary-foreground:220 30% 8%;/);
   });
 
   it('sin primario válido deja los colores de serie', () => {

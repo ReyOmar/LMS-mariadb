@@ -60,7 +60,7 @@ export function CoursePanel({
               aria-selected={tab === id}
               aria-controls={`assignment-panel-${id}`}
               onClick={() => setTab(id)}
-              className={`px-6 py-2.5 rounded-lg text-sm font-bold flex items-center gap-2 transition-all ${
+              className={`tap-target px-6 py-2.5 rounded-lg text-sm font-bold flex items-center gap-2 transition-all ${
                 tab === id ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'
               }`}
             >

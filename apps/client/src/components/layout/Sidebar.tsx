@@ -99,17 +99,35 @@ export function Sidebar() {
 
   return (
     <>
-      <button
-        type="button"
-        onClick={() => setMobileOpen(true)}
-        className="lg:hidden fixed top-3 left-3 z-[110] p-2.5 rounded-xl bg-card border border-border/50 shadow-md text-foreground hover:bg-muted transition-colors"
-        aria-label={somethingNew ? 'Abrir menú (hay novedades)' : 'Abrir menú'}
-      >
-        <Menu className="h-5 w-5" />
-        {somethingNew && (
-          <span className="absolute -top-1 -right-1 h-3 w-3 rounded-full bg-red-600 ring-2 ring-background" />
-        )}
-      </button>
+      {/* En el móvil, una barra con fondo: el contenido pasa por debajo de ella al desplazarse,
+          en lugar de quedar tapado por un botón suelto. */}
+      <header className="lg:hidden fixed inset-x-0 top-0 z-[110] border-b border-border/50 bg-card/95 backdrop-blur-sm pt-[env(safe-area-inset-top)]">
+        <div className="h-14 flex items-center gap-2 px-2">
+          <button
+            type="button"
+            onClick={() => setMobileOpen(true)}
+            className="relative h-11 w-11 shrink-0 inline-flex items-center justify-center rounded-xl text-foreground hover:bg-muted transition-colors"
+            aria-label={somethingNew ? 'Abrir menú (hay novedades)' : 'Abrir menú'}
+          >
+            <Menu className="h-5 w-5" />
+            {somethingNew && (
+              <span className="absolute top-2 right-2 h-2.5 w-2.5 rounded-full bg-red-600 ring-2 ring-card" />
+            )}
+          </button>
+          <div className="flex items-center gap-2 min-w-0">
+            {logo ? (
+              <img src={logo} alt="" className="max-h-8 max-w-[32px] object-contain shrink-0" />
+            ) : (
+              <span className="h-8 w-8 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
+                <GraduationCap className="h-4 w-4 text-primary" />
+              </span>
+            )}
+            <span className="truncate text-sm font-semibold text-foreground">
+              {config?.platformName ?? 'PESV Education'}
+            </span>
+          </div>
+        </div>
+      </header>
 
       {mobileOpen && (
         <div
@@ -144,7 +162,7 @@ export function Sidebar() {
             <button
               type="button"
               onClick={() => setMobileOpen(false)}
-              className="lg:hidden p-2 rounded-lg hover:bg-muted text-muted-foreground transition-colors"
+              className="lg:hidden tap-target inline-flex items-center justify-center p-2 rounded-lg hover:bg-muted text-muted-foreground transition-colors"
               aria-label="Cerrar menú"
             >
               <X className="h-5 w-5" />

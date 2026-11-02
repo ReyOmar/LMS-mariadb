@@ -165,7 +165,7 @@ export function StudentDashboard() {
                 <button
                   type="button"
                   onClick={() => router.push(`/courses/${currentCourse.guid}`)}
-                  className="flex items-center gap-2 bg-white text-primary px-6 py-3 rounded-xl font-bold hover:scale-105 transition-transform shadow-md"
+                  className="flex items-center gap-2 bg-primary-foreground text-primary px-6 py-3 rounded-xl font-bold hover:scale-105 transition-transform shadow-md"
                 >
                   <Play className="h-4 w-4 fill-primary" /> {started ? 'Retomar curso' : 'Empezar curso'}
                 </button>
@@ -193,7 +193,7 @@ export function StudentDashboard() {
                 <button
                   type="button"
                   onClick={() => router.push('/dashboard/student/certificates')}
-                  className="flex items-center gap-2 bg-white text-primary px-6 py-3 rounded-xl font-bold hover:scale-105 transition-transform shadow-md"
+                  className="flex items-center gap-2 bg-primary-foreground text-primary px-6 py-3 rounded-xl font-bold hover:scale-105 transition-transform shadow-md"
                 >
                   <GraduationCap className="h-4 w-4" /> Ver mis certificados
                 </button>
@@ -238,7 +238,7 @@ export function StudentDashboard() {
               type="button"
               onClick={previousMonth}
               aria-label="Mes anterior"
-              className="p-1.5 hover:bg-muted rounded-lg transition-colors"
+              className="tap-target inline-flex items-center justify-center p-1.5 hover:bg-muted rounded-lg transition-colors"
             >
               <ChevronLeft className="h-4 w-4 text-muted-foreground" />
             </button>
@@ -249,7 +249,7 @@ export function StudentDashboard() {
               type="button"
               onClick={nextMonth}
               aria-label="Mes siguiente"
-              className="p-1.5 hover:bg-muted rounded-lg transition-colors"
+              className="tap-target inline-flex items-center justify-center p-1.5 hover:bg-muted rounded-lg transition-colors"
             >
               <ChevronRight className="h-4 w-4 text-muted-foreground" />
             </button>
@@ -295,7 +295,7 @@ export function StudentDashboard() {
       {/* Tarjetas de métricas */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <HighlightedStat
-          label="Horas en capacitación"
+          label="Tiempo de estudio"
           value={Math.round(Number(metrics?.totalHoursSpent ?? 0) * 10) / 10}
           suffix="h"
           icon={<Clock className="h-5 w-5" />}

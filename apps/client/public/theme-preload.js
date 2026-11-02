@@ -38,6 +38,8 @@
     var DARK_TEXT = [220, 30, 8];
     var DARK_SURFACE = [220, 18, 14];
     var DARK_MIN_LIGHTNESS = 62;
+    var DARK_MIN_SATURATION = 45;
+    var GREY_SATURATION = 10;
 
     function toHsl(hex) {
       if (!hex) return null;
@@ -84,8 +86,9 @@
     }
 
     function darkVariant(hsl) {
+      var s = hsl[1] >= GREY_SATURATION ? Math.max(hsl[1], DARK_MIN_SATURATION) : hsl[1];
       for (var l = Math.max(hsl[2], DARK_MIN_LIGHTNESS); l < 100; l++) {
-        var candidate = [hsl[0], hsl[1], l];
+        var candidate = [hsl[0], s, l];
         if (
           contrast(candidate, DARK_SURFACE) >= MIN_CONTRAST &&
           contrast(candidate, foreground(candidate)) >= MIN_CONTRAST
@@ -93,7 +96,7 @@
           return candidate;
         }
       }
-      return [hsl[0], hsl[1], 100];
+      return [hsl[0], s, 100];
     }
 
     function css(hsl) {

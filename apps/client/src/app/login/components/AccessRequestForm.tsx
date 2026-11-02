@@ -291,7 +291,10 @@ function StepProgress({ current }: { current: Step }) {
           )}
         </div>
       ))}
-      <span className="text-xs text-muted-foreground ml-auto">{STEPS[currentIndex].label}</span>
+      <span className="text-xs text-muted-foreground ml-1">
+        Paso {currentIndex + 1} de {STEPS.length}:{' '}
+        <span className="font-semibold text-foreground">{STEPS[currentIndex].label}</span>
+      </span>
     </div>
   );
 }
