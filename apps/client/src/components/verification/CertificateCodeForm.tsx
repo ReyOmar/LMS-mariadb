@@ -9,7 +9,14 @@ import type { CertificateVerification } from './useCertificateVerification';
 /** El código tal como lo emite el campus: diez cifras hexadecimales y la marca de tiempo. */
 const CODE_PLACEHOLDER = 'CERT-XXXXXXXXXX-XXXXXXXX';
 
-export function CertificateCodeForm({ verification }: { verification: CertificateVerification }) {
+export function CertificateCodeForm({
+  verification,
+  className = 'mb-10',
+}: {
+  verification: CertificateVerification;
+  /** Espacio que deja debajo: el de la página, de serie. */
+  className?: string;
+}) {
   const { code, setCode, form, verify } = verification;
 
   const verifyTyped = (event: FormEvent) => {
@@ -19,7 +26,7 @@ export function CertificateCodeForm({ verification }: { verification: Certificat
 
   return (
     <>
-      <form onSubmit={verifyTyped} className="flex flex-col sm:flex-row gap-3 mb-10">
+      <form onSubmit={verifyTyped} className={`flex flex-col sm:flex-row gap-3 ${className}`}>
         <div className="relative flex-1">
           <Search className="absolute left-4 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <input

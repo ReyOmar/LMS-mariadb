@@ -47,8 +47,11 @@ interface Props {
   destination: string;
   /** Por qué terminó la sesión anterior: se explica antes de volver a pedir las credenciales. */
   logoutReason?: LogoutReason | null;
-  /** Dentro de una ventana: el id de su título y cómo cerrarla. Sin ella, el panel es la página. */
-  dialog?: { titleId: string; onClose: () => void };
+  /**
+   * Dentro de una ventana: el id de su título, cómo cerrarla y qué hacer al cambiar de vista
+   * (volver arriba). Sin ella, el panel es la página.
+   */
+  dialog?: { titleId: string; onClose: () => void; onViewChange: () => void };
 }
 
 /**
@@ -78,6 +81,7 @@ export function AccessPanel({ destination, logoutReason = null, dialog }: Props)
   const show = (target: View) => {
     for (const form of [signIn, forgotPassword, firstPassword, accessRequest]) form.clearError();
     setView(target);
+    dialog?.onViewChange();
   };
 
   const backToSignIn = () => {

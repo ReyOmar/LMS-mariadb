@@ -24,7 +24,8 @@ import {
 
 type WrittenSection = { id: 'terms' | 'privacy' | 'data'; title: string; text: string };
 type FixedSection = { id: 'cookies' | 'certificates'; title: string };
-export type LegalSection = WrittenSection | FixedSection;
+type LegalSection = WrittenSection | FixedSection;
+export type LegalSectionId = LegalSection['id'];
 
 /** Nivel del título de cada sección: debajo del de la página (`h1`) o del de la ventana (`h2`). */
 type SectionLevel = 2 | 3;

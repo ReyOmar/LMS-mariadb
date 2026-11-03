@@ -9,16 +9,25 @@ import type { Verdict } from './useCertificateVerification';
  * Lo que dice la verificación: auténtico, con los datos del documento, o no encontrado. La región
  * existe desde el principio para que el lector de pantalla anuncie el resultado al llegar.
  */
-export function CertificateVerdict({ verdict }: { verdict: Verdict | null }) {
-  return <div role="status">{verdict && <VerdictCard verdict={verdict} />}</div>;
+export function CertificateVerdict({
+  verdict,
+  titleLevel = 2,
+}: {
+  verdict: Verdict | null;
+  /** Nivel de su título: bajo el de la página (`h1`) o el de la pantalla de la portada (`h2`). */
+  titleLevel?: 2 | 3;
+}) {
+  return <div role="status">{verdict && <VerdictCard verdict={verdict} titleLevel={titleLevel} />}</div>;
 }
 
-function VerdictCard({ verdict }: { verdict: Verdict }) {
+function VerdictCard({ verdict, titleLevel }: { verdict: Verdict; titleLevel: 2 | 3 }) {
+  const Title = titleLevel === 2 ? 'h2' : 'h3';
+
   if (verdict.status === 'invalid') {
     return (
       <div className="rounded-3xl border border-amber-500/30 bg-amber-500/5 p-8 text-center">
         <ShieldAlert className="h-12 w-12 text-amber-500 mx-auto mb-4" />
-        <h2 className="text-xl font-bold mb-2">Certificado no encontrado</h2>
+        <Title className="text-xl font-bold mb-2">Certificado no encontrado</Title>
         <p className="text-muted-foreground">{verdict.message}</p>
       </div>
     );
@@ -33,7 +42,7 @@ function VerdictCard({ verdict }: { verdict: Verdict }) {
           <ShieldCheck className="h-6 w-6 text-emerald-600 dark:text-emerald-400" />
         </span>
         <div>
-          <h2 className="text-xl font-bold">Certificado auténtico</h2>
+          <Title className="text-xl font-bold">Certificado auténtico</Title>
           <p className="text-sm text-muted-foreground">
             {issuedBy(certificate.issuer)}
             {!certificate.unexpired && ' Su periodo de vigencia ya terminó.'}

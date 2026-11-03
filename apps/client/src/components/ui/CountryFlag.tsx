@@ -8,12 +8,14 @@ import { Country, COUNTRY_INFO } from '@/lib/country';
  * no pesa nada y acompaña bien al nombre sin robarle protagonismo.
  */
 
-type Size = 'sm' | 'md' | 'lg';
+/** `em`: del tamaño de la letra que la rodea, para dibujos que se escalan con su texto. */
+type Size = 'sm' | 'md' | 'lg' | 'em';
 
 const SIZE_CLASSES: Record<Size, string> = {
   sm: 'h-4 w-4',
   md: 'h-6 w-6',
   lg: 'h-12 w-12',
+  em: 'h-[1em] w-[1em]',
 };
 
 export function CountryFlag({

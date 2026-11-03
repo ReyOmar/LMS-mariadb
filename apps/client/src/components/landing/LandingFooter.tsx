@@ -1,86 +1,87 @@
-import type { ReactNode } from 'react';
-import Link from 'next/link';
 import { Shield } from 'lucide-react';
 import { ThemeToggle } from '@/components/ui/ThemeToggle';
-import { COUNTRY_INFO, type Country } from '@/lib/country';
-import { CountryFlag } from '@/components/ui/CountryFlag';
+import { PRIVACY_TITLE } from '@/lib/legal';
+import type { Country } from '@/lib/country';
+import type { LegalSectionId } from '@/components/legal/LegalDocument';
 import { BrandMark } from './BrandMark';
+import { WindowLink } from './WindowLink';
 
-const FOOTER_LINK = 'block hover:text-primary transition-colors';
+const LEGAL_LINKS: { section: LegalSectionId; label: (country: Country) => string }[] = [
+  { section: 'terms', label: () => 'Términos de uso' },
+  { section: 'privacy', label: (country) => PRIVACY_TITLE[country] },
+  { section: 'data', label: () => 'Tus derechos' },
+  { section: 'cookies', label: () => 'Cookies y almacenamiento' },
+];
 
 export function LandingFooter({
   logoUrl,
   platformName,
   description,
   country,
+  onSignIn,
+  onLegal,
 }: {
   logoUrl: string | null;
   platformName: string;
   description: string;
   country: Country;
+  onSignIn: () => void;
+  /** Abre los textos legales en su sección. */
+  onLegal: (section: LegalSectionId) => void;
 }) {
   return (
-    <footer className="border-t border-border/40 bg-card/50 backdrop-blur-sm">
-      <div className="max-w-6xl mx-auto px-4 sm:px-6 py-12">
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-8 mb-10">
-          <div className="md:col-span-2">
-            <div className="flex items-center gap-3 min-w-0 font-bold text-xl text-primary mb-4">
-              <BrandMark logoUrl={logoUrl} />
-              <span className="truncate">{platformName}</span>
-            </div>
-            <p className="text-muted-foreground max-w-sm leading-relaxed">{description}</p>
-            <p className="mt-4 inline-flex items-center gap-2 text-sm text-muted-foreground">
-              <CountryFlag country={country} size="sm" /> Sede {COUNTRY_INFO[country].name}
-            </p>
-          </div>
+    <footer className="site-footer">
+      <div>
+        <p className="brand">
+          <BrandMark logoUrl={logoUrl} />
+          <span>{platformName}</span>
+        </p>
+        <p className="footer-text">{description}</p>
+      </div>
 
-          <FooterLinks title="Plataforma">
-            <a href="#services" className={FOOTER_LINK}>
-              Servicios
-            </a>
-            <a href="#features" className={FOOTER_LINK}>
-              Características
-            </a>
-            <Link href="/login" className={FOOTER_LINK}>
+      <nav className="footer-links" aria-labelledby="pie-plataforma">
+        <h2 id="pie-plataforma">Plataforma</h2>
+        <ul>
+          <li>
+            <a href="#servicios">Funciones</a>
+          </li>
+          <li>
+            <a href="#ruta">Cómo funciona</a>
+          </li>
+          <li>
+            <WindowLink href="/login" onOpen={onSignIn}>
               Iniciar sesión
-            </Link>
-          </FooterLinks>
+            </WindowLink>
+          </li>
+          <li>
+            <a href="#verificar">Verificar certificado</a>
+          </li>
+        </ul>
+      </nav>
 
-          <FooterLinks title="Legal">
-            <Link href="/legal#privacy" className={FOOTER_LINK}>
-              Política de privacidad
-            </Link>
-            <Link href="/legal#terms" className={FOOTER_LINK}>
-              Términos de uso
-            </Link>
-            <Link href="/legal#data" className={FOOTER_LINK}>
-              Protección de datos
-            </Link>
-            <Link href="/verify" className={FOOTER_LINK}>
-              Verificar certificado
-            </Link>
-          </FooterLinks>
-        </div>
+      <nav className="footer-links" aria-labelledby="pie-legal">
+        <h2 id="pie-legal">Legal</h2>
+        <ul>
+          {LEGAL_LINKS.map((link) => (
+            <li key={link.section}>
+              <WindowLink href={`/legal#${link.section}`} onOpen={() => onLegal(link.section)}>
+                {link.label(country)}
+              </WindowLink>
+            </li>
+          ))}
+        </ul>
+      </nav>
 
-        <div className="border-t border-border/40 pt-8 flex flex-col md:flex-row justify-between items-center text-center text-sm text-muted-foreground gap-3">
-          <p>
-            © {new Date().getFullYear()} {platformName}. Todos los derechos reservados.
-          </p>
-          <p className="flex items-center gap-1">
-            <Shield className="h-4 w-4 text-primary" /> Comprometidos con la seguridad vial
-          </p>
-          <ThemeToggle />
-        </div>
+      <div className="footer-bottom">
+        <span>
+          © {new Date().getFullYear()} {platformName}. Todos los derechos reservados.
+        </span>
+        <span className="commitment">
+          <Shield className="i" />
+          Comprometidos con la seguridad vial
+        </span>
+        <ThemeToggle />
       </div>
     </footer>
-  );
-}
-
-function FooterLinks({ title, children }: { title: string; children: ReactNode }) {
-  return (
-    <nav aria-label={title}>
-      <h2 className="text-base font-bold mb-4">{title}</h2>
-      <div className="space-y-3 text-sm text-muted-foreground">{children}</div>
-    </nav>
   );
 }

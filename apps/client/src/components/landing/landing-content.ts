@@ -27,10 +27,39 @@ export interface LandingText {
 }
 
 export const DEFAULT_LANDING_TEXT: LandingText = {
-  heroTitle: 'Transporte Seguro,',
-  heroHighlight: 'Personal Capacitado',
-  heroSubtitle: 'Plataforma integral para la gestión del Plan Estratégico de Seguridad Vial.',
+  heroTitle: 'Transporte seguro,',
+  heroHighlight: 'personal capacitado.',
+  heroSubtitle:
+    'Capacitación, evaluación y certificación de conductores para el Plan Estratégico de Seguridad Vial de cada empresa.',
   footer: 'Plataforma de capacitación y certificación en seguridad vial para empresas de transporte.',
+};
+
+/** Lo que la portada cuenta distinto en cada sede: su normativa y un ejemplo de su sistema PESV. */
+interface SiteStory {
+  /** La infracción que el sistema PESV de la empresa envía en el ejemplo. */
+  infraction: string;
+  /** La matrícula que provoca: de la infracción al curso. */
+  enrollment: string;
+  /** Ciudad del certificado de ejemplo. */
+  city: string;
+  /** La ley de datos de la sede, en una frase. */
+  dataLaw: string;
+}
+
+export const SITE_STORIES: Record<Country, SiteStory> = {
+  COLOMBIA: {
+    infraction: 'Infracción C29',
+    enrollment: 'Infracción C29, exceso de velocidad → Manejo defensivo',
+    city: 'Bogotá D.C.',
+    dataLaw:
+      'Autorización de datos según la Ley 1581 de 2012. Si cambian los textos legales, se pide aceptarlos de nuevo.',
+  },
+  MEXICO: {
+    infraction: 'Exceso de velocidad',
+    enrollment: 'Exceso de velocidad → Manejo defensivo',
+    city: 'Ciudad de México',
+    dataLaw: 'Aviso de privacidad según la LFPDPPP. Si cambian los textos legales, se pide aceptarlos de nuevo.',
+  },
 };
 
 function textOr(value: string | null | undefined, fallback: string): string {

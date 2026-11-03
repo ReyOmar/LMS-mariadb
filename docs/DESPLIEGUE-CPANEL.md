@@ -341,7 +341,8 @@ instalar dependencias. La variable `NEXT_PUBLIC_API_URL` puede quedarse o borrar
 ## Paso 10 · Comprobar el campus
 
 1. `https://lms.investigaciongipia.com` muestra la portada con la marca de siempre, en la sede
-   de Colombia. El selector de la cabecera cambia a México.
+   de Colombia. El selector de la cabecera cambia a México; «Ingresar» abre el acceso en una
+   ventana sobre la portada y «Verificar» comprueba un certificado sin salir de ella.
 2. Entra con el administrador de julio. Pide aceptar la política de datos.
 3. En _Usuarios_, _Cursos_ y _Tareas_ están los datos de siempre; las notas, sobre 100.
 4. Abre un curso como alumno: los recursos están en orden y las imágenes y los PDF se ven.

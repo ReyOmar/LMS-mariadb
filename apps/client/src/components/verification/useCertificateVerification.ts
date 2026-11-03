@@ -6,7 +6,7 @@ import { useRateLimitedForm } from '@/hooks/useRateLimitedForm';
 import type { CertificateIssuer } from './issuer';
 
 /** Lo justo para confirmar el documento que se tiene delante, sin datos de contacto ni historial de nadie. */
-export interface VerifiedCertificate {
+interface VerifiedCertificate {
   /** Nombre del titular tal como figura en el diploma. */
   studentName: string;
   course: string;

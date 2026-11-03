@@ -21,8 +21,9 @@ const NOTICE_SPACE = '--storage-notice-space';
  * rechazarlo: se informa, se enlaza el detalle y se recuerda que ya se leyó. Es la
  * advertencia visible que piden los Lineamientos del Aviso de Privacidad en México.
  *
- * En el móvil es una franja compacta pegada al borde inferior. Mientras se ve, publica su
- * alto en `--storage-notice-space` para no tapar los botones de abajo, como «Entrar».
+ * En el móvil, y en cualquier pantalla baja como un teléfono apaisado, es una franja compacta
+ * pegada al borde inferior: una tarjeta taparía media pantalla. Mientras se ve, publica su alto
+ * en `--storage-notice-space` para no tapar los botones de abajo, como «Entrar».
  */
 export function StorageNotice() {
   // Se decide tras montar: en el servidor no hay almacenamiento que consultar.
@@ -59,19 +60,19 @@ export function StorageNotice() {
       ref={noticeRef}
       role="region"
       aria-label="Aviso de almacenamiento en el navegador"
-      className="fixed inset-x-0 bottom-0 z-[9000] flex items-center gap-3 rounded-t-2xl border-t border-border bg-card shadow-xl px-4 pt-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] sm:block sm:inset-x-auto sm:bottom-4 sm:right-4 sm:max-w-md sm:rounded-2xl sm:border sm:p-4"
+      className="fixed inset-x-0 bottom-0 z-[9000] flex items-center gap-3 rounded-t-2xl border-t border-border bg-card shadow-xl px-4 pt-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] roomy:block roomy:inset-x-auto roomy:bottom-4 roomy:right-4 roomy:max-w-md roomy:rounded-2xl roomy:border roomy:p-4"
     >
-      <p className="flex-1 text-xs sm:text-sm text-muted-foreground leading-relaxed">
+      <p className="flex-1 text-xs roomy:text-sm text-muted-foreground leading-relaxed">
         {STORAGE_NOTICE}{' '}
         <Link href="/legal#cookies" className="font-semibold text-primary hover:underline">
           Más información
         </Link>
       </p>
-      <div className="shrink-0 sm:flex sm:justify-end sm:mt-3">
+      <div className="shrink-0 roomy:flex roomy:justify-end roomy:mt-3">
         <button
           type="button"
           onClick={dismiss}
-          className="rounded-xl bg-primary px-3 py-2 text-xs sm:px-4 sm:text-sm font-bold text-primary-foreground hover:bg-primary/90 transition-colors"
+          className="rounded-xl bg-primary px-3 py-2 text-xs roomy:px-4 roomy:text-sm font-bold text-primary-foreground hover:bg-primary/90 transition-colors"
         >
           Entendido
         </button>
