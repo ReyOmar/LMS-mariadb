@@ -1,6 +1,6 @@
 import axios, { AxiosError, AxiosInstance } from 'axios';
 import { apiUrl, absoluteUrl } from './env';
-import { readLocal, readLocalJson, removeLocal, writeLocal } from './local-storage';
+import { removeLocal, tabStorage } from './local-storage';
 import { fileSizeWarning, type UploadLimit } from './upload-limits';
 
 /**
@@ -67,22 +67,37 @@ api.interceptors.response.use(
   },
 );
 
+/*
+ * La sesión es de la pestaña (`sessionStorage`): sobrevive a recargarla y se borra al cerrarla, y
+ * cada pestaña tiene la suya. Como el servidor admite una sola sesión por cuenta, entrar en otra
+ * pestaña o en otro dispositivo cierra la anterior, que vuelve al acceso con el motivo.
+ */
+
 export function readToken(): string | null {
-  return readLocal(TOKEN_KEY);
+  return tabStorage.read(TOKEN_KEY);
 }
 
 export function saveSession(token: string, user: unknown): void {
-  writeLocal(TOKEN_KEY, token);
-  writeLocal(USER_KEY, JSON.stringify(user));
+  tabStorage.write(TOKEN_KEY, token);
+  tabStorage.write(USER_KEY, JSON.stringify(user));
 }
 
 export function clearSession(): void {
-  removeLocal(TOKEN_KEY);
-  removeLocal(USER_KEY);
+  tabStorage.remove(TOKEN_KEY);
+  tabStorage.remove(USER_KEY);
 }
 
 export function readStoredUser<T>(): T | null {
-  return readLocalJson<T>(USER_KEY);
+  return tabStorage.readJson<T>(USER_KEY);
+}
+
+/**
+ * Borra la sesión que las versiones anteriores guardaban en `localStorage`, común a todas las
+ * pestañas y que sobrevivía a cerrarlas: ya no se lee, y su token no debe quedarse en el equipo.
+ */
+export function discardPersistentSession(): void {
+  removeLocal(TOKEN_KEY);
+  removeLocal(USER_KEY);
 }
 
 /**
@@ -152,10 +167,10 @@ export function safeNextPath(value: string | null | undefined): string | null {
  *
  * axios no admite `keepalive`, así que se usa `fetch`. No se espera la respuesta ni se
  * informa de errores: sirve para avisos al servidor (cerrar sesión, soltar el aviso de
- * edición de un curso) que no pueden retener al usuario.
+ * edición de un curso) que no pueden retener al usuario. Va con la sesión de la pestaña, salvo
+ * que se indique otra.
  */
-export function sendKeepalive(method: 'POST' | 'DELETE', path: string): void {
-  const token = readToken();
+export function sendKeepalive(method: 'POST' | 'DELETE', path: string, token = readToken()): void {
   void fetch(`${apiUrl()}${path}`, {
     method,
     headers: token ? { Authorization: `Bearer ${token}` } : undefined,

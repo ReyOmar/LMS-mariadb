@@ -64,8 +64,6 @@ function place(views: ViewState[], progress: number) {
 interface Props {
   progress: ScrollProgress;
   active: ScreenId;
-  /** Desde 1100 px la vitrina acompaña al texto; por debajo sólo asoma su vista de inicio. */
-  wide: boolean;
   platformName: string;
   country: Country;
   /** Pasos cumplidos del recorrido, que el curso de ejemplo sigue. */
@@ -74,8 +72,11 @@ interface Props {
   focusedPiece: Piece | null;
 }
 
-/** La interfaz del campus en 3D, que pasa de una vista a otra al ritmo del desplazamiento. */
-export function Showcase({ progress, active, wide, platformName, country, reached, focusedPiece }: Props) {
+/**
+ * La interfaz del campus en 3D, que pasa de una vista a otra al ritmo del desplazamiento. Sólo
+ * existe desde 1100 px: por debajo no cabe junto al texto y cada pantalla lleva su propio celular.
+ */
+export function Showcase({ progress, active, platformName, country, reached, focusedPiece }: Props) {
   const stageRef = useRef<HTMLDivElement>(null);
   const reducedMotion = useMediaQuery(REDUCED_MOTION);
   const siteName = COUNTRY_INFO[country].name;
@@ -135,12 +136,12 @@ export function Showcase({ progress, active, wide, platformName, country, reache
       unsubscribe();
       cancelAnimationFrame(frame);
     };
-  }, [progress, reducedMotion, wide]);
+  }, [progress, reducedMotion]);
 
   // El ladeo sigue al puntero, a lo sumo una vez por imagen. Sólo con ratón y sin «reducir movimiento».
   useEffect(() => {
     const stage = stageRef.current;
-    if (!stage || !wide || reducedMotion || !window.matchMedia('(pointer: fine)').matches) return;
+    if (!stage || reducedMotion || !window.matchMedia('(pointer: fine)').matches) return;
     let pointer: PointerEvent | null = null;
     let frame = 0;
     const tilt = () => {
@@ -160,45 +161,34 @@ export function Showcase({ progress, active, wide, platformName, country, reache
       stage.style.removeProperty('--rx');
       stage.style.removeProperty('--ry');
     };
-  }, [wide, reducedMotion]);
+  }, [reducedMotion]);
 
   const reachedSteps = Array.from({ length: reached }, (_, index) => `reached-${index + 1}`).join(' ');
 
   return (
-    // Por debajo de 1100 px es un fondo decorativo: nada en ella se enfoca ni se anuncia.
-    <div className="stage-wrap" inert={!wide}>
+    <div className="stage-wrap">
       <div className="stage" ref={stageRef}>
         <div className="view" data-view="inicio" aria-hidden="true">
           <StudentView platformName={platformName} site={site} />
         </div>
-        {/* Las demás vistas sólo existen donde se ven: en el móvil no se montan ni se dibujan. */}
-        {wide && (
-          <>
-            <div className="view" data-view="servicios" aria-hidden="true">
-              <SiteAdminView
-                platformName={platformName}
-                site={site}
-                siteName={siteName}
-                infraction={story.infraction}
-              />
-            </div>
-            <div className={`view ${reachedSteps}`} data-view="ruta" aria-hidden="true">
-              <CourseView reached={reached} infraction={story.infraction} />
-            </div>
-            <div
-              className="view is-live"
-              data-view="plataforma"
-              data-focus={focusedPiece ?? undefined}
-              role="group"
-              aria-label="La plataforma por dentro"
-            >
-              <PlatformView siteName={siteName} quizRunning={active === 'plataforma'} />
-            </div>
-            <div className="view" data-view="verificar" aria-hidden="true">
-              <CertificateView platformName={platformName} siteName={siteName} city={story.city} />
-            </div>
-          </>
-        )}
+        <div className="view" data-view="servicios" aria-hidden="true">
+          <SiteAdminView platformName={platformName} site={site} siteName={siteName} infraction={story.infraction} />
+        </div>
+        <div className={`view ${reachedSteps}`} data-view="ruta" aria-hidden="true">
+          <CourseView reached={reached} infraction={story.infraction} />
+        </div>
+        <div
+          className="view is-live"
+          data-view="plataforma"
+          data-focus={focusedPiece ?? undefined}
+          role="group"
+          aria-label="La plataforma por dentro"
+        >
+          <PlatformView siteName={siteName} quizRunning={active === 'plataforma'} />
+        </div>
+        <div className="view" data-view="verificar" aria-hidden="true">
+          <CertificateView platformName={platformName} siteName={siteName} city={story.city} />
+        </div>
       </div>
       <p className="stage-note">Vista de ejemplo</p>
     </div>

@@ -1272,47 +1272,6 @@
   .landing .view[data-view='verificar'] {
     --pose: rotateY(-14deg) rotateX(6deg) rotateZ(-1.5deg);
   }
-  @media (max-width: 1099.98px) {
-    .landing .stage-wrap {
-      z-index: -1;
-      top: auto;
-      left: 0;
-      right: 0;
-      bottom: 0;
-      height: 36svh;
-      opacity: 0;
-      transition: opacity 0.6s ease;
-      -webkit-mask-image: linear-gradient(to bottom, transparent 0%, #000 55%);
-      mask-image: linear-gradient(to bottom, transparent 0%, #000 55%);
-    }
-    /* Fuera de la portada se apaga del todo tras el fundido: sin pintar ni componer nada invisible. */
-    .landing .stage-wrap {
-      visibility: hidden;
-      transition:
-        opacity 0.6s ease,
-        visibility 0s linear 0.6s;
-    }
-    .landing[data-screen='inicio'] .stage-wrap {
-      opacity: 0.75;
-      visibility: visible;
-      transition-delay: 0s;
-    }
-    .landing .stage {
-      --size: min(40rem, 118cqw);
-      transform: translateY(30%);
-    }
-    .landing .stage-note {
-      display: none;
-    }
-    .landing .view:not([data-view='inicio']) {
-      display: none;
-    }
-  }
-  @media (max-width: 1099.98px) and (min-aspect-ratio: 1/1) {
-    .landing .stage-wrap {
-      display: none;
-    }
-  }
   /* La ventana del campus */
   .landing .app {
     position: absolute;
@@ -1527,7 +1486,7 @@
     width: 1em;
     height: 1em;
   }
-  .landing .ring {
+  .landing .progress-ring {
     position: absolute;
     right: 1.6em;
     top: 50%;
@@ -1535,14 +1494,14 @@
     height: 6.2em;
     transform: translateY(-50%);
   }
-  .landing .ring circle {
+  .landing .progress-ring circle {
     fill: none;
     stroke-width: 8;
   }
-  .landing .ring .track {
+  .landing .progress-ring .track {
     stroke: hsl(var(--primary-foreground) / 0.22);
   }
-  .landing .ring .value {
+  .landing .progress-ring .value {
     stroke: hsl(var(--primary-foreground));
     stroke-linecap: round;
     stroke-dasharray: 100;
@@ -1551,10 +1510,10 @@
     transform-origin: 50% 50%;
     transition: stroke-dashoffset 1.3s cubic-bezier(0.2, 0.7, 0.2, 1) 0.5s;
   }
-  .landing .view[data-current] .ring .value {
+  .landing .view[data-current] .progress-ring .value {
     stroke-dashoffset: 25;
   }
-  .landing .ring text {
+  .landing .progress-ring text {
     fill: currentColor;
     font-size: 22px;
     font-weight: 800;
@@ -2877,7 +2836,7 @@
     height: 1.1em;
     color: hsl(var(--success));
   }
-  /* En el móvil, el celular del cuestionario va dentro de su pantalla */
+  /* En el móvil no hay vitrina: el celular del tablero y el del cuestionario van dentro de su pantalla */
   .landing .mobile-piece {
     display: none;
   }
@@ -2948,11 +2907,18 @@
       height: 2.25rem;
     }
   }
+  /* El celular de la portada sigue al texto sólo en vertical: apaisada, la primera pantalla ya es más
+     alta que la ventana. */
+  @media (max-width: 1099.98px) and (min-aspect-ratio: 1/1) {
+    .landing #inicio .mobile-piece {
+      display: none;
+    }
+  }
   @media (prefers-reduced-motion: reduce) {
     .landing .floaty {
       animation: none;
     }
-    .landing .ring .value,
+    .landing .progress-ring .value,
     .landing .chart .line,
     .landing .chart .area,
     .landing .mini-bar i,

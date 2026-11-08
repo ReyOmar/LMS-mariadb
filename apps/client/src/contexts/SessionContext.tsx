@@ -1,7 +1,15 @@
 'use client';
 
 import { ReactNode, createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
-import api, { clearSession, isNetworkFailure, saveSession, readStoredUser, readToken, sendKeepalive } from '@/lib/api';
+import api, {
+  clearSession,
+  discardPersistentSession,
+  isNetworkFailure,
+  saveSession,
+  readStoredUser,
+  readToken,
+  sendKeepalive,
+} from '@/lib/api';
 import { Country } from '@/lib/country';
 import type { UserRole } from '@/types/models';
 import { FullScreenLoader } from '@/components/ui/PageLoader';
@@ -77,6 +85,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
+    discardPersistentSession();
     const saved = readStoredUser<SessionUser>();
     if (!saved?.guid) {
       setReady(true);
@@ -99,6 +108,11 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   }, [refreshUser]);
 
   const login = useCallback((token: string, sessionUser: SessionUser) => {
+    // La pestaña tiene una sola sesión: si ya había otra, se cierra en el servidor. Si era de la
+    // misma cuenta ya la sustituyó la nueva y el aviso no cambia nada.
+    const previous = readToken();
+    if (previous && previous !== token) sendKeepalive('POST', '/auth/logout', previous);
+
     saveSession(token, sessionUser);
     setUser(sessionUser);
   }, []);

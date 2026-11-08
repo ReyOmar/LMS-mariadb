@@ -54,21 +54,22 @@ export function Landing() {
       <ScreenLane active={active} progress={progress} />
 
       <main id="main-content">
-        <Hero country={country} text={text} onSignIn={openAccess} />
+        <Hero country={country} text={text} wide={wide} onSignIn={openAccess} />
         <Roles />
         <HowItWorks reached={reached} enrollment={story.enrollment} />
         <PlatformSection wide={wide} quizRunning={active === 'plataforma'} pieceFocus={pieceFocus} />
         {/* Tras «Plataforma»: es fija, así que no cambia de sitio en pantalla, pero el foco llega al
             celular del cuestionario justo después de las funciones que lo explican. */}
-        <Showcase
-          progress={progress}
-          active={active}
-          wide={wide}
-          platformName={platformName}
-          country={country}
-          reached={reached}
-          focusedPiece={pieceFocus.focused}
-        />
+        {wide && (
+          <Showcase
+            progress={progress}
+            active={active}
+            platformName={platformName}
+            country={country}
+            reached={reached}
+            focusedPiece={pieceFocus.focused}
+          />
+        )}
         <VerifySection />
         <ContactSection
           contacts={publishedContacts(config, country)}

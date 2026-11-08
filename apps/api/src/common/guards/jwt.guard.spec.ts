@@ -98,9 +98,11 @@ describe('JwtGuard · por qué se corta una sesión', () => {
     expect(reason).not.toContain('revocada');
   });
 
-  it('iniciar sesión en otro dispositivo se explica como tal, no como una revocación', async () => {
+  it('iniciar sesión en otra pestaña o dispositivo se explica como tal, no como una revocación', async () => {
     const reason = await rejectionReason({ token: { jti: 'sesion-vieja' } });
 
+    // El cliente reconoce el motivo por «otro dispositivo».
+    expect(reason).toContain('otra pestaña');
     expect(reason).toContain('otro dispositivo');
     expect(reason).not.toContain('revocada');
   });

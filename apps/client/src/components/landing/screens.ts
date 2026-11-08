@@ -12,7 +12,7 @@ export const SCREENS = [
 
 export type ScreenId = (typeof SCREENS)[number]['id'];
 
-/** Desde este ancho la vitrina acompaña al texto; por debajo sólo asoma en la portada. */
+/** Desde este ancho la vitrina acompaña al texto; por debajo no hay vitrina. */
 export const WIDE_SCREEN = '(min-width: 1100px)';
 
 /**

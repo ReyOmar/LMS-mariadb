@@ -24,8 +24,8 @@ const NOTICES: Record<LogoutReason, { icon: LucideIcon; title: string; text: str
   },
   displaced: {
     icon: Monitor,
-    title: 'Se inició sesión en otro dispositivo',
-    text: 'Cada cuenta admite una sola sesión activa. Si no has sido tú, cambia tu contraseña en cuanto entres.',
+    title: 'Se inició sesión en otra pestaña o dispositivo',
+    text: 'Cada cuenta admite una sola sesión activa, así que la nueva cerró esta. Si no has sido tú, cambia tu contraseña en cuanto entres.',
     tone: 'text-amber-700 dark:text-amber-400 bg-amber-500/10 ring-amber-500/20',
   },
   revoked: {

@@ -292,7 +292,7 @@ export type RevocationReason =
   | 'password_reset'
   /** Un administrador cambió su rol: las pantallas que tenía abiertas eran las del anterior. */
   | 'role_changed'
-  /** Se inició sesión en otro dispositivo y el campus admite una sola a la vez. */
+  /** Se inició sesión en otra pestaña o dispositivo y el campus admite una sola a la vez. */
   | 'session_displaced';
 
 export interface CourseEditor {

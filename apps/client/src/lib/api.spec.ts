@@ -1,5 +1,17 @@
 import { AxiosError, AxiosHeaders } from 'axios';
-import { fileUrlFor, isLogoutReason, isNetworkFailure, loginUrl, retryAfterSeconds, safeNextPath } from './api';
+import {
+  clearSession,
+  discardPersistentSession,
+  fileUrlFor,
+  isLogoutReason,
+  isNetworkFailure,
+  loginUrl,
+  readStoredUser,
+  readToken,
+  retryAfterSeconds,
+  safeNextPath,
+  saveSession,
+} from './api';
 
 /**
  * Cómo se convierte lo que guarda la base en algo que el navegador pueda pedir.
@@ -135,5 +147,78 @@ describe('isLogoutReason', () => {
     expect(isLogoutReason('password_changed')).toBe(false);
     expect(isLogoutReason('')).toBe(false);
     expect(isLogoutReason(null)).toBe(false);
+  });
+});
+
+/** Un almacenamiento del navegador en memoria, para ver dónde queda cada dato. */
+function memoryStorage(): Storage {
+  const items = new Map<string, string>();
+  return {
+    get length() {
+      return items.size;
+    },
+    clear: () => items.clear(),
+    getItem: (key) => items.get(key) ?? null,
+    key: (index) => [...items.keys()][index] ?? null,
+    removeItem: (key) => {
+      items.delete(key);
+    },
+    setItem: (key, value) => {
+      items.set(key, String(value));
+    },
+  };
+}
+
+/**
+ * La sesión es de la pestaña: cerrarla la termina y otra pestaña no la comparte. Guardada en el
+ * almacenamiento común, entrar en una segunda pestaña la pisaba y la primera pasaba a hablar con
+ * el servidor en nombre de otra cuenta.
+ */
+describe('dónde se guarda la sesión', () => {
+  const browser = globalThis as { window?: unknown };
+  let shared: Storage;
+  let tab: Storage;
+
+  beforeEach(() => {
+    shared = memoryStorage();
+    tab = memoryStorage();
+    browser.window = { localStorage: shared, sessionStorage: tab };
+  });
+
+  afterEach(() => {
+    delete browser.window;
+  });
+
+  it('va en la pestaña y no en el almacenamiento que comparten todas', () => {
+    saveSession('token-de-esta-pestana', { guid: 'u1' });
+
+    expect(readToken()).toBe('token-de-esta-pestana');
+    expect(readStoredUser<{ guid: string }>()?.guid).toBe('u1');
+    expect(tab.length).toBe(2);
+    expect(shared.length).toBe(0);
+  });
+
+  it('al cerrarla se borra sólo la sesión, no las preferencias', () => {
+    shared.setItem('preferencia', 'oscuro');
+    saveSession('token', { guid: 'u1' });
+
+    clearSession();
+
+    expect(readToken()).toBeNull();
+    expect(readStoredUser()).toBeNull();
+    expect(shared.getItem('preferencia')).toBe('oscuro');
+  });
+
+  it('no usa la copia común de las versiones anteriores, y la borra', () => {
+    shared.setItem('lms_token', 'token-antiguo');
+    shared.setItem('lms_user', '{"guid":"u1"}');
+    shared.setItem('preferencia', 'oscuro');
+
+    expect(readToken()).toBeNull();
+    discardPersistentSession();
+
+    expect(shared.getItem('lms_token')).toBeNull();
+    expect(shared.getItem('lms_user')).toBeNull();
+    expect(shared.getItem('preferencia')).toBe('oscuro');
   });
 });

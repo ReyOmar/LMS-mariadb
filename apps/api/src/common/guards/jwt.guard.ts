@@ -125,11 +125,11 @@ export class JwtGuard implements CanActivate, OnModuleDestroy {
     // Una sola sesión válida por cuenta, y la dice la base —no una lista en memoria, que
     // cada proceso de la API tendría distinta—: el token tiene que ser exactamente
     // `currentSessionJti`. Cerrar sesión y cambiar o restablecer la contraseña la dejan a
-    // nulo; entrar desde otro dispositivo la sustituye.
+    // nulo; entrar desde otra pestaña o dispositivo la sustituye.
     if (payload.jti !== account.currentSessionJti) {
       throw new UnauthorizedException(
         account.currentSessionJti
-          ? 'Tu sesión se cerró porque iniciaste sesión en otro dispositivo.'
+          ? 'Tu sesión se cerró porque se inició sesión en otra pestaña o en otro dispositivo.'
           : 'Sesión revocada. Vuelve a iniciar sesión.',
       );
     }

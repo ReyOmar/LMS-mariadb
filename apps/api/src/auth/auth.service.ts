@@ -166,9 +166,9 @@ export class AuthService {
   /**
    * Emite el token y lo deja registrado como la sesión activa de la cuenta.
    *
-   * El campus admite **una sesión por cuenta**: al entrar desde un dispositivo nuevo, el
-   * anterior queda invalidado. La certificación acredita que una persona concreta hizo la
-   * formación, así que compartir credenciales la vaciaría de sentido.
+   * El campus admite **una sesión por cuenta**: al entrar desde otra pestaña u otro dispositivo,
+   * la sesión anterior queda invalidada. La certificación acredita que una persona concreta hizo
+   * la formación, así que compartir credenciales la vaciaría de sentido.
    *
    * Al sustituirse `currentSessionJti`, el token anterior deja de valer en la siguiente
    * petición: el guardián sólo acepta el que coincide.
@@ -180,7 +180,7 @@ export class AuthService {
 
     await this.prisma.user.update({ where: { guid: user.guid }, data: { currentSessionJti: jti } });
 
-    // Avisa al dispositivo anterior para que limpie su estado y explique lo ocurrido.
+    // Avisa a la sesión anterior para que limpie su estado y explique lo ocurrido.
     // Sólo si lo había: en el primer acceso no hay ninguna sesión a la que desplazar.
     if (user.currentSessionJti) this.realtime.revokeSession(user.guid, 'session_displaced');
 

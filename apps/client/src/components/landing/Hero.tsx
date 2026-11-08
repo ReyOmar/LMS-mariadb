@@ -3,13 +3,28 @@ import { COUNTRIES, COUNTRY_INFO, type Country } from '@/lib/country';
 import { CountryFlag } from '@/components/ui/CountryFlag';
 import type { LandingText } from './landing-content';
 import { enterDelay } from './screens';
+import { StudentPhone } from './showcase/StudentPhone';
 import { WindowLink } from './WindowLink';
 
 const SITES_IN_WORDS = new Intl.ListFormat('es', { type: 'conjunction' }).format(
   COUNTRIES.map((country) => COUNTRY_INFO[country].name),
 );
 
-export function Hero({ country, text, onSignIn }: { country: Country; text: LandingText; onSignIn: () => void }) {
+/**
+ * La primera pantalla. Desde 1100 px la vitrina muestra el campus a su lado; por debajo no hay
+ * vitrina y el celular de quien se capacita va dentro de la pantalla, después del texto.
+ */
+export function Hero({
+  country,
+  text,
+  wide,
+  onSignIn,
+}: {
+  country: Country;
+  text: LandingText;
+  wide: boolean;
+  onSignIn: () => void;
+}) {
   return (
     <section className="screen" id="inicio" aria-labelledby="t-inicio">
       <div className="wrap">
@@ -47,6 +62,11 @@ export function Hero({ country, text, onSignIn }: { country: Country; text: Land
               Sedes en {SITES_IN_WORDS}
             </li>
           </ul>
+          {!wide && (
+            <div className="mobile-piece" aria-hidden="true" data-enter style={enterDelay(5)}>
+              <StudentPhone />
+            </div>
+          )}
         </div>
       </div>
       <p className="scroll-hint" aria-hidden="true">

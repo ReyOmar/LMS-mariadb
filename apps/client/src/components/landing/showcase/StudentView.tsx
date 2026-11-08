@@ -1,7 +1,6 @@
-import type { CSSProperties, ReactNode } from 'react';
+import type { ReactNode } from 'react';
 import {
   Award,
-  Bell,
   BookOpen,
   ChevronLeft,
   ChevronRight,
@@ -9,11 +8,11 @@ import {
   Clock,
   Compass,
   GraduationCap,
-  ListChecks,
   MessageSquare,
   Play,
 } from 'lucide-react';
-import { AppSidebar, Phone, placed } from './parts';
+import { AppSidebar, placed } from './parts';
+import { StudentPhone } from './StudentPhone';
 
 const WEEKDAYS = ['DO', 'LU', 'MA', 'MI', 'JU', 'VI', 'SA'];
 /** Octubre de 2026 empieza en jueves; hoy es el 29 y hay actividades en los días marcados. */
@@ -85,7 +84,7 @@ export function StudentView({ platformName, site }: { platformName: string; site
                 <Play className="i" />
                 Continuar curso
               </span>
-              <svg className="ring" viewBox="0 0 80 80">
+              <svg className="progress-ring" viewBox="0 0 80 80">
                 <circle className="track" cx="40" cy="40" r="34" />
                 <circle className="value" cx="40" cy="40" r="34" pathLength={100} />
                 <text x="40" y="40">
@@ -129,44 +128,7 @@ export function StudentView({ platformName, site }: { platformName: string; site
         </p>
       </div>
 
-      <Phone className="floaty" style={placed({ x: '77%', y: '20%', z: '140px', float: '-3s' })}>
-        <div className="phone-body">
-          <div className="phone-top">
-            <p className="phone-hello">
-              <small>Hola,</small>
-              <b>Juana</b>
-            </p>
-            <span className="bell">
-              <Bell className="i" />
-            </span>
-          </div>
-          <div className="mini-course">
-            <span className="tag">Tu próximo curso</span>
-            <b>Manejo defensivo</b>
-            <span className="mini-bar">
-              <i style={{ '--w': 0.75 } as CSSProperties} />
-            </span>
-            <small>9 de 12 recursos · 75 %</small>
-          </div>
-          <p className="phone-label">Esta semana</p>
-          <ul className="mini-list">
-            <li>
-              <CircleCheck className="i ok" />
-              Distancia de seguimiento<small>Hecho</small>
-            </li>
-            <li>
-              <ListChecks className="i" />
-              Evaluación final<small>Vie 30</small>
-            </li>
-          </ul>
-        </div>
-        <nav className="phone-tabs">
-          <Compass className="i on" />
-          <BookOpen className="i" />
-          <Award className="i" />
-          <MessageSquare className="i" />
-        </nav>
-      </Phone>
+      <StudentPhone className="floaty" style={placed({ x: '77%', y: '20%', z: '140px', float: '-3s' })} />
     </>
   );
 }
