@@ -8,9 +8,18 @@ interface EmptyStateProps {
   description?: string;
   action?: ReactNode;
   className?: string;
+  /** Nivel del título: `h1` cuando el estado vacío es la página entera. */
+  titleAs?: 'h1' | 'h3';
 }
 
-export function EmptyState({ icon, title, description, action, className = '' }: EmptyStateProps) {
+export function EmptyState({
+  icon,
+  title,
+  description,
+  action,
+  className = '',
+  titleAs: Title = 'h3',
+}: EmptyStateProps) {
   return (
     <div
       className={`flex flex-col items-center justify-center py-16 px-6 text-center animate-fade-slide-in ${className}`}
@@ -20,7 +29,7 @@ export function EmptyState({ icon, title, description, action, className = '' }:
           <span className="text-muted-foreground/40">{icon}</span>
         </div>
       )}
-      <h3 className="text-lg font-bold text-foreground mb-2">{title}</h3>
+      <Title className="text-lg font-bold text-foreground mb-2">{title}</Title>
       {description && <p className="text-sm text-muted-foreground max-w-sm leading-relaxed mb-6">{description}</p>}
       {action && <div>{action}</div>}
     </div>

@@ -98,7 +98,7 @@ export function DataConsentGate({ children }: { children: ReactNode }) {
           .
         </p>
 
-        {error && <p className="text-sm text-destructive mb-4">{error}</p>}
+        {error && <p className="text-sm text-destructive dark:text-red-400 mb-4">{error}</p>}
 
         <div className="flex flex-col-reverse sm:flex-row gap-3">
           <button

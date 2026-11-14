@@ -29,7 +29,7 @@ export function RadiusPicker({ value, onChange }: { value: number; onChange: (ra
 
       <div className="flex flex-wrap items-center gap-4">
         <div
-          className="h-16 w-24 sm:w-32 bg-primary/20 border-2 border-primary/30 flex items-center justify-center text-xs font-bold text-primary"
+          className="h-16 w-24 sm:w-32 bg-primary/20 border-2 border-primary/30 flex items-center justify-center text-xs font-bold text-foreground"
           style={rounded}
         >
           Tarjeta

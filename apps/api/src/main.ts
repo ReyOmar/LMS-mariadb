@@ -11,6 +11,7 @@ import { AppModule } from './app.module';
 import { ExceptionsFilter } from './common/filters/exceptions.filter';
 import { createValidationPipe } from './common/validation/validation.pipe';
 import { serializeJson } from './common/http/json';
+import { pathOf } from './common/http/request-path';
 import { MIB, readUploadCeiling } from './storage/upload-limits';
 
 /** Tamaño máximo de un cuerpo JSON. Los archivos van por multipart, no por aquí. */
@@ -194,14 +195,14 @@ function configureRequestLogging(app: NestFastifyApplication): void {
   fastify.addHook('onResponse', (request, response, next) => {
     // Ni la comprobación de salud ni las consultas del tiempo real aportan nada al registro:
     // llegan constantemente, cada pocos segundos por pestaña abierta.
-    const url = request.url;
-    if (url === '/api/health' || url.startsWith('/api/realtime/events')) {
+    const path = pathOf(request.url);
+    if (path === '/api/health' || path === '/api/realtime/events') {
       next();
       return;
     }
 
     const ms = response.elapsedTime ?? 0;
-    const line = `${request.method} ${url} ${response.statusCode} ${ms.toFixed(0)}ms [${request.id}]`;
+    const line = `${request.method} ${path} ${response.statusCode} ${ms.toFixed(0)}ms [${request.id}]`;
 
     if (response.statusCode >= 500) logger.error(line);
     else if (ms > SLOW_REQUEST_THRESHOLD_MS) logger.warn(`LENTA ${line}`);

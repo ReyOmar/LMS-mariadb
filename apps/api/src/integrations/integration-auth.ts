@@ -9,18 +9,11 @@ import {
 } from '@nestjs/common';
 import type { FastifyRequest } from 'fastify';
 import { Public } from '../common/decorators/public.decorator';
-import { Country } from '../common/domain/country';
+import type { IntegrationCaller } from './integration-caller';
 import { IntegrationClientsService } from './integration-clients.service';
 
 /** Cabecera con la que otro sistema presenta su clave. Fastify entrega las cabeceras en minúsculas. */
 const API_KEY_HEADER = 'x-api-key';
-
-/** El sistema que hace la petición: su sede es la de todo lo que pida. */
-export interface IntegrationCaller {
-  id: number;
-  name: string;
-  country: Country;
-}
 
 type IntegrationRequest = FastifyRequest & { integrationCaller?: IntegrationCaller };
 

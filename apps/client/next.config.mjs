@@ -46,10 +46,32 @@ const LEGACY_QUERIES = [
   ['/dashboard/admin/asignacion-cursos', 'curso', '/dashboard/admin/course-assignment?course=:value'],
 ];
 
+/**
+ * Cabeceras de seguridad de todas las páginas del campus.
+ *
+ * Lo que más importa es que ninguna otra web pueda incrustarlo en un marco: sobre un campus
+ * incrustado se superponen botones falsos para que el usuario pulse los de verdad sin verlos.
+ * La política no limita todavía de dónde se cargan los scripts: Next los escribe en línea y
+ * restringirlos exige firmar cada respuesta, que dejaría de servirse como página estática.
+ */
+const SECURITY_HEADERS = [
+  {
+    key: 'Content-Security-Policy',
+    value: "frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'",
+  },
+  { key: 'X-Frame-Options', value: 'DENY' },
+  { key: 'X-Content-Type-Options', value: 'nosniff' },
+  // A otros sitios sólo se les dice el dominio: el enlace de recuperación lleva su clave en la dirección.
+  { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
+  { key: 'Permissions-Policy', value: 'camera=(), microphone=(), geolocation=(), payment=()' },
+  { key: 'Strict-Transport-Security', value: 'max-age=31536000' },
+];
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   output: 'standalone',
   outputFileTracingRoot: MONOREPO_ROOT,
+  poweredByHeader: false,
   compiler: {
     removeConsole: process.env.NODE_ENV === 'production',
   },
@@ -57,6 +79,9 @@ const nextConfig = {
   experimental: {
     // Sólo se empaquetan los iconos que se importan, no la librería entera.
     optimizePackageImports: ['lucide-react'],
+  },
+  async headers() {
+    return [{ source: '/:path*', headers: SECURITY_HEADERS }];
   },
   async redirects() {
     return [

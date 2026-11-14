@@ -5,6 +5,7 @@ import {
   fileUrlFor,
   isLogoutReason,
   isNetworkFailure,
+  isSessionRejected,
   loginUrl,
   readStoredUser,
   readToken,
@@ -53,20 +54,21 @@ describe('fileUrlFor', () => {
   });
 });
 
-/**
- * Al arrancar, la sesión guardada se contrasta con el servidor. Si éste no contesta —sin
- * red, servidor reiniciándose— no hay motivo para echar al usuario: sólo cuando el
- * servidor responde que la sesión no vale.
- */
+/** Un error de petición con la respuesta del servidor que se indique. */
+function responseError(status: number, headers: Record<string, string> = {}): AxiosError {
+  const config = { headers: new AxiosHeaders() };
+  const response = { status, statusText: '', data: {}, headers, config };
+  return new AxiosError('Request failed', 'ERR_BAD_RESPONSE', config, null, response);
+}
+
+/** Una subida que falla sin respuesta puede haberse guardado: no se descarta el archivo. */
 describe('isNetworkFailure', () => {
   it('reconoce una petición que no obtuvo respuesta', () => {
     expect(isNetworkFailure(new AxiosError('Network Error', 'ERR_NETWORK'))).toBe(true);
   });
 
   it('no confunde con eso una respuesta de error del servidor', () => {
-    const config = { headers: new AxiosHeaders() };
-    const response = { status: 401, statusText: 'Unauthorized', data: {}, headers: {}, config };
-    expect(isNetworkFailure(new AxiosError('Unauthorized', 'ERR_BAD_REQUEST', config, null, response))).toBe(false);
+    expect(isNetworkFailure(responseError(401))).toBe(false);
   });
 
   it('tampoco lo es un error que no viene de una petición', () => {
@@ -75,27 +77,41 @@ describe('isNetworkFailure', () => {
 });
 
 /**
+ * Al arrancar, la sesión guardada se contrasta con el servidor. Sin red, o con el servidor o su
+ * base de datos caídos, no hay motivo para echar al usuario: sólo cuando responde que la sesión
+ * no vale.
+ */
+describe('isSessionRejected', () => {
+  it('un 401 dice que la sesión ya no vale', () => {
+    expect(isSessionRejected(responseError(401))).toBe(true);
+  });
+
+  it.each([500, 502, 503, 429])('un %i no desmiente la sesión', (status) => {
+    expect(isSessionRejected(responseError(status))).toBe(false);
+  });
+
+  it('quedarse sin conexión tampoco', () => {
+    expect(isSessionRejected(new AxiosError('Network Error', 'ERR_NETWORK'))).toBe(false);
+    expect(isSessionRejected(new Error('otra cosa'))).toBe(false);
+  });
+});
+
+/**
  * Tras exceder el límite de intentos, el formulario queda bloqueado lo que diga el servidor:
  * ni más (el usuario esperaría sin motivo) ni menos (cada pulsación sería otro rechazo).
  */
 describe('retryAfterSeconds', () => {
-  const failure = (status: number, headers: Record<string, string> = {}) => {
-    const config = { headers: new AxiosHeaders() };
-    const response = { status, statusText: '', data: {}, headers, config };
-    return new AxiosError('', 'ERR_BAD_REQUEST', config, null, response);
-  };
-
   it('toma la espera de la cabecera Retry-After', () => {
-    expect(retryAfterSeconds(failure(429, { 'retry-after': '42' }))).toBe(42);
+    expect(retryAfterSeconds(responseError(429, { 'retry-after': '42' }))).toBe(42);
   });
 
   it('sin cabecera legible, espera lo que dura el límite', () => {
-    expect(retryAfterSeconds(failure(429))).toBe(60);
-    expect(retryAfterSeconds(failure(429, { 'retry-after': 'pronto' }))).toBe(60);
+    expect(retryAfterSeconds(responseError(429))).toBe(60);
+    expect(retryAfterSeconds(responseError(429, { 'retry-after': 'pronto' }))).toBe(60);
   });
 
   it('cualquier otro error no obliga a esperar', () => {
-    expect(retryAfterSeconds(failure(401, { 'retry-after': '42' }))).toBe(0);
+    expect(retryAfterSeconds(responseError(401, { 'retry-after': '42' }))).toBe(0);
     expect(retryAfterSeconds(new AxiosError('Network Error', 'ERR_NETWORK'))).toBe(0);
     expect(retryAfterSeconds(new Error('otra cosa'))).toBe(0);
   });

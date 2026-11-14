@@ -32,7 +32,7 @@ export function CourseTransfer({ transfer, onPickTarget, onCancel, onConfirm }: 
         {loading ? (
           <p className="text-sm text-muted-foreground">Buscando destinos disponibles…</p>
         ) : targets.length === 0 ? (
-          <p className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-700 dark:text-amber-400">
+          <p className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-800 dark:text-amber-400">
             No hay ninguna otra cuenta de examinador o administrador en esta sede a la que traspasar los cursos. Crea
             una antes de eliminar esta.
           </p>

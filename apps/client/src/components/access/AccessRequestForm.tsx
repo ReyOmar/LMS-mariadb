@@ -10,7 +10,7 @@ import { formatCountdown } from '@/lib/submission-gate';
 import type { UserRole } from '@/types/models';
 import { useCountdown } from '@/hooks/useCountdown';
 import type { RateLimitedForm } from '@/hooks/useRateLimitedForm';
-import { Field, IconInput, INPUT_CLASS, SecondaryButton } from '@/components/ui/FormFields';
+import { Field, IconInput, INPUT_CLASS, NameFields, SecondaryButton } from '@/components/ui/FormFields';
 import { FormError } from '@/components/ui/FormError';
 import { SubmitButton } from '@/components/ui/SubmitButton';
 import { PrivacyNoticeSummary } from '@/components/legal/PrivacyNoticeSummary';
@@ -180,28 +180,14 @@ export function AccessRequestForm({ form, country, onEmailVerified, onCancel, on
             </span>
           </p>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <Field label="Nombre" htmlFor="request-first-name">
-              <input
-                id="request-first-name"
-                value={firstName}
-                onChange={(event) => setFirstName(event.target.value)}
-                required
-                autoComplete="given-name"
-                className={INPUT_CLASS}
-              />
-            </Field>
-            <Field label="Apellido" htmlFor="request-last-name">
-              <input
-                id="request-last-name"
-                value={lastName}
-                onChange={(event) => setLastName(event.target.value)}
-                required
-                autoComplete="family-name"
-                className={INPUT_CLASS}
-              />
-            </Field>
-          </div>
+          <NameFields
+            idPrefix="request"
+            firstName={firstName}
+            lastName={lastName}
+            onFirstNameChange={setFirstName}
+            onLastNameChange={setLastName}
+            required
+          />
 
           <Field
             label="¿Con qué función participas?"

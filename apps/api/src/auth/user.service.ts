@@ -21,6 +21,7 @@ import { plural } from '../common/domain/text';
 import { UserRole } from '../common/interfaces/jwt-payload.interface';
 import { MailService } from '../mail/mail.service';
 import { NOTIFICATION_REF } from '../notifications/notification-ref';
+import { nameChanges, requireChanges } from './account-changes';
 import { ACCOUNT_VIEW } from './account-view';
 
 /** Roles que pueden ser responsables de un curso. */
@@ -280,9 +281,7 @@ export class UserService {
     });
     if (!user) throw new NotFoundException('Usuario no encontrado.');
 
-    const data: Prisma.UserUpdateInput = {};
-    if (dto.firstName !== undefined) data.firstName = dto.firstName;
-    if (dto.lastName !== undefined) data.lastName = dto.lastName;
+    const data = nameChanges(dto);
 
     const roleChanges = dto.role !== undefined && dto.role !== user.role;
     if (roleChanges) {
@@ -300,9 +299,7 @@ export class UserService {
       data.currentSessionJti = null;
     }
 
-    if (Object.keys(data).length === 0) {
-      throw new BadRequestException('No hay ningún cambio que guardar.');
-    }
+    requireChanges(data);
 
     const updated = await this.prisma.user.update({ where: { guid }, data, select: ACCOUNT_VIEW });
 
@@ -413,7 +410,7 @@ export class UserService {
   ): Promise<void> {
     if (!targetGuid) {
       throw new BadRequestException(
-        `Esta cuenta tiene ${count} ${plural(count, 'curso asignado', 'cursos asignados')}. Indica a qué profesor o administrador ${plural(count, 'debe', 'deben')} pasar antes de eliminarla.`,
+        `Esta cuenta tiene ${count} ${plural(count, 'curso asignado', 'cursos asignados')}. Indica a qué examinador o administrador ${plural(count, 'debe', 'deben')} pasar antes de eliminarla.`,
       );
     }
     if (targetGuid === guid) {
@@ -425,7 +422,9 @@ export class UserService {
       select: { guid: true },
     });
     if (!target) {
-      throw new BadRequestException('El destino de los cursos debe ser un profesor o administrador de la misma sede.');
+      throw new BadRequestException(
+        'El destino de los cursos debe ser un examinador o administrador de la misma sede.',
+      );
     }
   }
 

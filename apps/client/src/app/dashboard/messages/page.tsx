@@ -103,7 +103,7 @@ export default function MessagesPage() {
                   aria-expanded={sidePanel === 'requests'}
                   aria-label={`Solicitudes pendientes (${inbox.requests.length})`}
                   title="Solicitudes pendientes"
-                  className="relative bg-amber-500/10 text-amber-700 dark:text-amber-400 border border-amber-500/30 rounded-xl px-3 py-2.5 text-sm font-bold hover:bg-amber-500/20 transition-colors"
+                  className="relative bg-amber-500/10 text-amber-800 dark:text-amber-400 border border-amber-500/30 rounded-xl px-3 py-2.5 text-sm font-bold hover:bg-amber-500/20 transition-colors"
                 >
                   <Shield className="h-4 w-4" />
                   <span className="absolute -top-1.5 -right-1.5 h-5 min-w-[20px] px-1 bg-amber-500 text-amber-950 text-[10px] font-bold rounded-full flex items-center justify-center">

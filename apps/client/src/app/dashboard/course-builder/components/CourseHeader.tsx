@@ -50,7 +50,7 @@ export function CourseHeader({ course, canDelete, readOnly, onBack, onChangeStat
               className={`appearance-none pl-8 sm:pl-10 pr-8 sm:pr-10 py-2 sm:py-2.5 rounded-xl text-xs sm:text-sm font-black uppercase tracking-widest transition-all cursor-pointer border shadow-sm focus:outline-none focus:ring-4 ${
                 isPublished
                   ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-700 dark:text-emerald-400 focus:ring-emerald-500/20'
-                  : 'bg-amber-500/10 border-amber-500/30 text-amber-700 dark:text-amber-400 focus:ring-amber-500/20'
+                  : 'bg-amber-500/10 border-amber-500/30 text-amber-800 dark:text-amber-400 focus:ring-amber-500/20'
               }`}
             >
               {/* Los archivados vienen de la versión de julio: se ven como tales y se sacan de ahí eligiendo otro. */}
@@ -79,6 +79,7 @@ export function CourseHeader({ course, canDelete, readOnly, onBack, onChangeStat
               type="button"
               disabled={readOnly}
               onClick={onDelete}
+              aria-label="Eliminar curso"
               className={`font-bold px-3 sm:px-6 py-2 sm:py-2.5 rounded-xl shadow-md transition-transform flex items-center gap-2 ${
                 readOnly
                   ? 'bg-muted text-muted-foreground cursor-not-allowed'
@@ -95,7 +96,7 @@ export function CourseHeader({ course, canDelete, readOnly, onBack, onChangeStat
       {readOnly && (
         <div className="bg-amber-500/10 border-b border-amber-500/30 px-6 py-3 flex items-center gap-3">
           <Lock className="h-4 w-4 text-amber-500 flex-shrink-0" />
-          <p className="text-sm font-bold text-amber-700 dark:text-amber-400">
+          <p className="text-sm font-bold text-amber-800 dark:text-amber-400">
             Este curso está publicado. Cambia a estado Borrador para editar contenido.
           </p>
         </div>

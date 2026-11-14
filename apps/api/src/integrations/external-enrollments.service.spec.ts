@@ -7,7 +7,7 @@ import { InfractionsService } from './infractions.service';
 import { IntegrationCourses } from './integration-courses';
 import { IntegrationViews } from './integration-views';
 import { CourseFullException } from '../enrollments/course-capacity';
-import type { IntegrationCaller } from './integration-auth';
+import type { IntegrationCaller } from './integration-caller';
 import type { ExternalEnrollmentDto } from './dto/external-enrollment.dto';
 
 /**

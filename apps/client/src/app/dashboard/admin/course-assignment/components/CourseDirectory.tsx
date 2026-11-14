@@ -16,7 +16,7 @@ import {
 const FILTERS: { value: AssignmentFilter; label: string; activeTone: string }[] = [
   { value: 'all', label: 'Todos', activeTone: 'bg-muted text-foreground' },
   { value: 'assigned', label: 'Asignados', activeTone: ROLE_STYLE.TEACHER.tint },
-  { value: 'unassigned', label: 'Sin asignar', activeTone: 'bg-amber-500/10 text-amber-700 dark:text-amber-400' },
+  { value: 'unassigned', label: 'Sin asignar', activeTone: 'bg-amber-500/10 text-amber-800 dark:text-amber-400' },
 ];
 
 interface Props {

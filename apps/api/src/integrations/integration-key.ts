@@ -1,4 +1,5 @@
-import { createHash, randomBytes } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
+import { secretHash } from '../common/domain/secret-hash';
 
 /** Así empiezan las claves del campus: se reconocen a simple vista en un registro o un gestor de secretos. */
 const KEY_PREFIX = 'lms_';
@@ -19,12 +20,5 @@ export function issueKey(): IssuedKey {
   return { key, hash: hashKey(key), prefix: key.slice(0, VISIBLE_LENGTH) };
 }
 
-/**
- * Resumen con el que se guarda y se busca una clave.
- *
- * Basta SHA-256 —no hace falta bcrypt— porque la clave ya es aleatoria y larga: no hay
- * diccionario que probar contra el resumen, y buscarla por él evita compararla con todas.
- */
-export function hashKey(key: string): string {
-  return createHash('sha256').update(key).digest('hex');
-}
+/** Resumen con el que se guarda y se busca una clave. */
+export const hashKey = secretHash;

@@ -20,7 +20,7 @@ export class RequestAccessDto {
   @PersonName()
   lastName: string;
 
-  @IsIn(REQUESTABLE_ROLES, { message: 'Sólo puedes solicitar acceso como estudiante o profesor.' })
+  @IsIn(REQUESTABLE_ROLES, { message: 'Sólo puedes solicitar acceso como estudiante o examinador.' })
   requestedRole: UserRole;
 
   /** Sede a la que pertenecerá la cuenta. No se puede cambiar después. */

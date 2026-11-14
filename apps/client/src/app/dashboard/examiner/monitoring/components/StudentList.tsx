@@ -125,7 +125,7 @@ function ExpandButton({
         event.stopPropagation();
         onToggle(student.guid);
       }}
-      className="shrink-0"
+      className="tap-target shrink-0 grid place-items-center"
     >
       {open ? (
         <ChevronDown className="h-4 w-4 text-primary" />

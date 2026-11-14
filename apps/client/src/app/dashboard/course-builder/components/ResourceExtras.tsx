@@ -24,7 +24,7 @@ export function ResourceExtras({ resource }: { resource: Resource }) {
       />
 
       {uploadLimit && (
-        <div className="flex items-center gap-2 p-2 px-3 bg-amber-500/10 border border-amber-500/20 rounded-lg text-xs text-amber-700 dark:text-amber-500">
+        <div className="flex items-center gap-2 p-2 px-3 bg-amber-500/10 border border-amber-500/20 rounded-lg text-xs text-amber-800 dark:text-amber-500">
           <span className="font-bold">Límite de entrega:</span> {resource.maxUploadMb} MB por estudiante
         </div>
       )}

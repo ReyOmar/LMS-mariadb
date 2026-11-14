@@ -63,7 +63,7 @@ export function Infractions({ infractions, courses, isBusy, onAssign, onDiscard 
                   </span>
                 )}
                 {infraction.waiting.length > 0 && (
-                  <span className="text-sm font-bold text-amber-700 dark:text-amber-400">
+                  <span className="text-sm font-bold text-amber-800 dark:text-amber-400">
                     {infraction.waiting.length}{' '}
                     {plural(infraction.waiting.length, 'persona en espera', 'personas en espera')}
                   </span>
@@ -172,7 +172,7 @@ function WaitingList({
             onClick={() => onDiscard(request)}
             disabled={isBusy(request.guid)}
             aria-label={`Descartar la solicitud de ${request.firstName} ${request.lastName}`}
-            className="self-start sm:self-center inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-bold text-destructive hover:bg-destructive/10 transition-colors disabled:opacity-50"
+            className="self-start sm:self-center inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-bold text-destructive dark:text-red-400 hover:bg-destructive/10 transition-colors disabled:opacity-50"
           >
             <Trash2 className="h-3.5 w-3.5" /> Descartar
           </button>

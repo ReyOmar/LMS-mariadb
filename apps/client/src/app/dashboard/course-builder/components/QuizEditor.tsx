@@ -25,7 +25,7 @@ export function QuizEditor({ config, onChange }: Props) {
   return (
     <>
       <div className="border border-amber-500/30 rounded-xl p-5 bg-amber-500/5 space-y-5">
-        <h3 className="font-bold text-amber-700 dark:text-amber-400 flex items-center gap-2">
+        <h3 className="font-bold text-amber-800 dark:text-amber-400 flex items-center gap-2">
           <CheckCircle className="h-5 w-5" /> Configuración del cuestionario
         </h3>
         <div className="grid grid-cols-2 gap-4">

@@ -70,7 +70,7 @@ export function ResourceRow({
         <span className="sr-only">{label}:</span>
         <span className="truncate flex-1">{title}</span>
         {isUnconfigured(resource) && (
-          <span className="shrink-0 rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] font-bold text-amber-700 dark:text-amber-400">
+          <span className="shrink-0 rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] font-bold text-amber-800 dark:text-amber-400">
             Sin configurar
           </span>
         )}

@@ -66,6 +66,6 @@ export function scoreColor(score: unknown, threshold: number = DEFAULT_PASSING_S
   const num = toScore(score);
   if (num === null) return 'text-muted-foreground';
   if (num >= threshold) return 'text-emerald-700 dark:text-emerald-400';
-  if (num >= threshold * 0.75) return 'text-amber-700 dark:text-amber-400';
+  if (num >= threshold * 0.75) return 'text-amber-800 dark:text-amber-400';
   return 'text-red-700 dark:text-red-400';
 }

@@ -3,7 +3,7 @@ import { COLOR } from '@/components/ui/charts';
 /** Tramos de avance, en el orden en que la API cuenta los alumnos de cada uno (`summary.ranges`). */
 export const PROGRESS_BANDS = [
   { from: 0, name: '0–25%', fill: COLOR.failed, text: 'text-red-700 dark:text-red-400' },
-  { from: 26, name: '26–50%', fill: COLOR.pending, text: 'text-amber-700 dark:text-amber-400' },
+  { from: 26, name: '26–50%', fill: COLOR.pending, text: 'text-amber-800 dark:text-amber-400' },
   { from: 51, name: '51–75%', fill: COLOR.secondary, text: 'text-sky-700 dark:text-sky-400' },
   { from: 76, name: '76–100%', fill: COLOR.passed, text: 'text-emerald-700 dark:text-emerald-400' },
 ] as const;
@@ -24,6 +24,6 @@ export function progressTextColor(percent: number): string {
 /** Casilla del número de módulo: verde terminado, ámbar empezado, gris sin empezar. */
 export function moduleColor(percent: number): string {
   if (percent >= 100) return 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400';
-  if (percent > 0) return 'bg-amber-500/10 text-amber-700 dark:text-amber-400';
+  if (percent > 0) return 'bg-amber-500/10 text-amber-800 dark:text-amber-400';
   return 'bg-muted text-muted-foreground';
 }

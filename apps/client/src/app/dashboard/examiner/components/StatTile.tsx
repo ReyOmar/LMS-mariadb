@@ -16,7 +16,7 @@ const ICON_TONE: Record<Tone, string> = {
 const VALUE_TONE: Record<Tone, string> = {
   primary: 'text-primary',
   blue: 'text-blue-700 dark:text-blue-400',
-  amber: 'text-amber-700 dark:text-amber-400',
+  amber: 'text-amber-800 dark:text-amber-400',
   green: 'text-emerald-700 dark:text-emerald-400',
 };
 

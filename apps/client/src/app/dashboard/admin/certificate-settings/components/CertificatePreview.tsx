@@ -62,7 +62,7 @@ export function CertificatePreview({
         </div>
 
         <div className="flex flex-col items-center gap-2">
-          <p className="text-xs text-slate-400 italic">{CERTIFICATE_TEXT.grantedTo}</p>
+          <p className="text-xs text-slate-500 italic">{CERTIFICATE_TEXT.grantedTo}</p>
           <p className="text-xl font-bold italic" style={{ color: primary }}>
             {SAMPLE_CERTIFICATE.studentName}
           </p>
@@ -101,7 +101,7 @@ export function CertificatePreview({
           </div>
         )}
 
-        <p className="text-[9px] text-slate-400 pb-1">
+        <p className="text-[9px] text-slate-500 pb-1">
           {CERTIFICATE_TEXT.verification}: {SAMPLE_CERTIFICATE.verificationCode}
         </p>
       </div>

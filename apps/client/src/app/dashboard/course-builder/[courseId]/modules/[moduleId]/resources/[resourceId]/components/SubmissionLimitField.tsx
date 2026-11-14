@@ -21,7 +21,7 @@ export function SubmissionLimitField({ text, siteLimitMb, ceilingMb, onChange }:
 
   return (
     <div className="border border-amber-500/30 rounded-xl p-5 bg-amber-500/5 space-y-4">
-      <h3 className="font-bold text-sm text-amber-700 dark:text-amber-500 uppercase tracking-wider flex items-center gap-2">
+      <h3 className="font-bold text-sm text-amber-800 dark:text-amber-500 uppercase tracking-wider flex items-center gap-2">
         <Settings className="h-4 w-4" /> Configuración de entrega
       </h3>
       <div className="flex flex-wrap items-center gap-3">

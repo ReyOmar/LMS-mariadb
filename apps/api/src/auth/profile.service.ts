@@ -1,5 +1,4 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { StorageService } from '../storage/storage.service';
 import { FileOwnershipService } from '../storage/file-ownership.service';
@@ -8,6 +7,7 @@ import { SettingsService } from '../settings/settings.service';
 import { Country } from '../common/domain/country';
 import { hashPassword, passwordMatches, validateStrength } from '../common/domain/password';
 import { UpdateProfileDto } from './dto/update-profile.dto';
+import { nameChanges, requireChanges } from './account-changes';
 import { ACCOUNT_VIEW } from './account-view';
 
 /**
@@ -60,9 +60,7 @@ export class ProfileService {
     const user = await this.prisma.user.findUnique({ where: { guid }, select: { password: true } });
     if (!user) throw new NotFoundException('Usuario no encontrado.');
 
-    const data: Prisma.UserUpdateInput = {};
-    if (dto.firstName !== undefined) data.firstName = dto.firstName;
-    if (dto.lastName !== undefined) data.lastName = dto.lastName;
+    const data = nameChanges(dto);
 
     const { newPassword } = dto;
     if (newPassword) {
@@ -78,9 +76,7 @@ export class ProfileService {
       data.currentSessionJti = null;
     }
 
-    if (Object.keys(data).length === 0) {
-      throw new BadRequestException('No hay ningún cambio que guardar.');
-    }
+    requireChanges(data);
 
     const updated = await this.prisma.user.update({ where: { guid }, data, select: ACCOUNT_VIEW });
 

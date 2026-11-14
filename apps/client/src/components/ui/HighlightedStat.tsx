@@ -40,7 +40,7 @@ const COLOR_CLASSES: Record<StatColor, { bg: string; text: string; glow: string 
     text: 'text-warning',
     glow: 'group-hover:shadow-[var(--shadow-glow-accent)]',
   },
-  destructive: { bg: 'from-destructive/15 to-destructive/5', text: 'text-destructive', glow: '' },
+  destructive: { bg: 'from-destructive/15 to-destructive/5', text: 'text-destructive dark:text-red-400', glow: '' },
 };
 
 /** ¿El sistema pide reducir las animaciones? */
@@ -118,7 +118,7 @@ function useCountUp(target: number, duration = 600): number {
 const DETAIL_TONE = {
   neutral: 'text-muted-foreground',
   success: 'text-success',
-  warning: 'text-amber-700 dark:text-amber-400',
+  warning: 'text-amber-800 dark:text-amber-400',
 } as const;
 
 export function HighlightedStat({

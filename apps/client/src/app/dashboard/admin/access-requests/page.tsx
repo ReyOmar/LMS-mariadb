@@ -29,7 +29,7 @@ export default function AccessRequestsPage() {
           <ShieldAlert className="h-6 w-6 sm:h-8 sm:w-8 text-primary" />
           Solicitudes de acceso{' '}
           {!error && (
-            <span className="bg-amber-500/10 text-amber-700 dark:text-amber-400 px-2.5 sm:px-3 py-1 rounded-full text-xs sm:text-sm font-bold">
+            <span className="bg-amber-500/10 text-amber-800 dark:text-amber-400 px-2.5 sm:px-3 py-1 rounded-full text-xs sm:text-sm font-bold">
               {requests.length} {plural(requests.length, 'pendiente', 'pendientes')}
             </span>
           )}

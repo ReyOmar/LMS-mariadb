@@ -151,7 +151,7 @@ function AwaitingGrading({ courses }: { courses: CourseAwaitingGrading[] }) {
               {course.pendingAssignments.map((assignment, index) => (
                 <li
                   key={`${assignment.title}-${index}`}
-                  className="inline-flex items-center gap-1 bg-amber-500/10 text-amber-700 dark:text-amber-400 text-xs font-medium px-2.5 py-1 rounded-lg"
+                  className="inline-flex items-center gap-1 bg-amber-500/10 text-amber-800 dark:text-amber-400 text-xs font-medium px-2.5 py-1 rounded-lg"
                 >
                   <Clock className="h-3 w-3" /> {assignment.title}
                 </li>

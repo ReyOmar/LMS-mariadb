@@ -4,7 +4,7 @@ import { ReactNode, createContext, useCallback, useContext, useEffect, useMemo, 
 import api, {
   clearSession,
   discardPersistentSession,
-  isNetworkFailure,
+  isSessionRejected,
   saveSession,
   readStoredUser,
   readToken,
@@ -97,10 +97,10 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
     refreshUser()
       .catch((error: unknown) => {
-        // Sin respuesta del servidor no hay nada que confirmar ni que desmentir: se sigue
-        // con lo guardado. Si respondió que no, se descarta la copia local para no dejar la
-        // interfaz con datos de una sesión muerta (el interceptor ya lleva al login).
-        if (isNetworkFailure(error)) return;
+        // Sin conexión o con el servidor fallando no hay nada que confirmar ni que desmentir:
+        // se sigue con lo guardado. Si dijo que la sesión no vale, se descarta la copia local
+        // para no dejar la interfaz con datos de una sesión muerta (el interceptor ya lleva al login).
+        if (!isSessionRejected(error)) return;
         clearSession();
         setUser(null);
       })

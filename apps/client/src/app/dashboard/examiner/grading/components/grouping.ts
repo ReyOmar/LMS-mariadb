@@ -1,6 +1,7 @@
 import { MAX_SCORE, formatPoints } from '@/lib/grading';
 import { COLOR, type Slice } from '@/components/ui/charts';
 import { twoWayBreakdown, type ThresholdSummary } from '../../components/summary-charts';
+import { byModuleAndAssignment, type AssignmentGroup } from '../../module-groups';
 import type { ExaminerSubmission } from '../../types';
 
 // Las cifras del curso las cuenta el servidor sobre todas sus entregas; aquí sólo se agrupa la página cargada.
@@ -53,41 +54,29 @@ export function filteredTotal(course: Pick<CourseSummary, 'total' | 'pending' | 
 
 /** Ordena las entregas en módulo → tarea → alumnos, por identificador y no por título. */
 export function groupByModuleAndAssignment(submissions: ExaminerSubmission[]): ModuleWithAssignments[] {
-  const byModule = new Map<
-    string,
-    { title: string; assignments: Map<string, { title: string; list: ExaminerSubmission[] }> }
-  >();
-
-  for (const submission of submissions) {
-    const moduleKey = submission.moduleGuid || submission.moduleTitle || 'no-module';
-    const assignmentKey = submission.assignmentGuid || submission.assignmentTitle || 'no-assignment';
-
-    if (!byModule.has(moduleKey)) {
-      byModule.set(moduleKey, { title: submission.moduleTitle || 'Módulo principal', assignments: new Map() });
-    }
-    const assignments = byModule.get(moduleKey)!.assignments;
-    if (!assignments.has(assignmentKey)) {
-      assignments.set(assignmentKey, { title: submission.assignmentTitle || 'Sin título', list: [] });
-    }
-    assignments.get(assignmentKey)!.list.push(submission);
-  }
-
-  return Array.from(byModule.entries()).map(([moduleKey, { title: moduleTitle, assignments: assignmentsMap }]) => {
-    const assignments: AssignmentWithSubmissions[] = Array.from(assignmentsMap.entries()).map(
-      ([assignmentKey, { title: assignmentTitle, list }]) => {
-        const pending = list.filter((submission) => !isGraded(submission)).length;
-        return { key: assignmentKey, assignmentTitle, submissions: list, pending, graded: list.length - pending };
-      },
-    );
+  return byModuleAndAssignment(submissions).map(({ key, moduleTitle, assignments: groups }) => {
+    const assignments = groups.map(withCounts);
 
     return {
-      key: moduleKey,
+      key,
       moduleTitle,
       assignments,
       pending: assignments.reduce((sum, assignment) => sum + assignment.pending, 0),
       graded: assignments.reduce((sum, assignment) => sum + assignment.graded, 0),
     };
   });
+}
+
+function withCounts({ key, items }: AssignmentGroup<ExaminerSubmission>): AssignmentWithSubmissions {
+  const pending = items.filter((submission) => !isGraded(submission)).length;
+
+  return {
+    key,
+    assignmentTitle: items[0].assignmentTitle || 'Sin título',
+    submissions: items,
+    pending,
+    graded: items.length - pending,
+  };
 }
 
 /**

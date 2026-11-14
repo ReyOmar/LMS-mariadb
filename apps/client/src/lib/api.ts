@@ -181,10 +181,20 @@ export function sendKeepalive(method: 'POST' | 'DELETE', path: string, token = r
 /**
  * ¿Falló la petición sin que el servidor llegara a responder?
  *
- * Sirve para no confundir «sin conexión» con «el servidor rechazó la sesión».
+ * Sirve para no confundir «sin conexión» con «el servidor rechazó la petición».
  */
 export function isNetworkFailure(error: unknown): boolean {
   return axios.isAxiosError(error) && !error.response;
+}
+
+/**
+ * ¿Dijo el servidor que la sesión ya no vale?
+ *
+ * Sólo un 401 lo dice. Sin conexión, o con el servidor fallando (5xx), la sesión guardada sigue
+ * siendo buena: darla por muerta echaría a todo el mundo en cada caída breve.
+ */
+export function isSessionRejected(error: unknown): boolean {
+  return axios.isAxiosError(error) && error.response?.status === 401;
 }
 
 /** Lo que dura el límite de intentos del servidor cuando no dice cuánto queda. */

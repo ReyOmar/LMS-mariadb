@@ -211,7 +211,7 @@ export function AccountForm({ account, initialRole = 'STUDENT', isSelf = false, 
             </select>
             {roleRestriction && <p className="text-xs text-muted-foreground mt-1.5">{roleRestriction}</p>}
             {roleChanges && (
-              <p className="text-xs text-amber-700 dark:text-amber-400 mt-1.5">
+              <p className="text-xs text-amber-800 dark:text-amber-400 mt-1.5">
                 Cambiar el rol cierra su sesión: tendrá que volver a entrar.
               </p>
             )}
@@ -221,7 +221,7 @@ export function AccountForm({ account, initialRole = 'STUDENT', isSelf = false, 
             <div className="bg-amber-500/5 border border-amber-500/20 rounded-xl p-3 flex items-start gap-2.5">
               <Key className="h-4 w-4 text-amber-500 shrink-0 mt-0.5" />
               <div>
-                <p className="text-xs font-bold text-amber-700 dark:text-amber-400">Contraseña temporal</p>
+                <p className="text-xs font-bold text-amber-800 dark:text-amber-400">Contraseña temporal</p>
                 <p className="text-[10px] text-muted-foreground mt-0.5">
                   La genera el sistema y le llega por correo a la persona, que deberá cambiarla la primera vez que
                   entre.
@@ -256,7 +256,7 @@ export function AccountForm({ account, initialRole = 'STUDENT', isSelf = false, 
 /** Aviso bajo un campo obligatorio que se dejó vacío. */
 function RequiredNote({ id }: { id: string }) {
   return (
-    <p id={id} className="mt-1 text-xs font-medium text-destructive">
+    <p id={id} className="mt-1 text-xs font-medium text-destructive dark:text-red-400">
       Obligatorio.
     </p>
   );

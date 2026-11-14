@@ -108,16 +108,22 @@ describe('CourseAccessService', () => {
       await expect(createService().managedCourse('curso-co', admin)).resolves.toMatchObject({ guid: 'curso-co' });
     });
 
-    it('el profesor gestiona sólo los cursos asignados a él', async () => {
+    it('el examinador gestiona sólo los cursos asignados a él', async () => {
       const own = sessionFor('TEACHER', 'COLOMBIA', 'profesor-co');
 
       await expect(createService().managedCourse('curso-co', own)).resolves.toMatchObject({ guid: 'curso-co' });
     });
 
-    it('el profesor no gestiona el curso de otro examinador', async () => {
+    it('el examinador no gestiona el curso de otro examinador', async () => {
       const outsider = sessionFor('TEACHER', 'COLOMBIA', 'otro-profesor');
 
       await expect(createService().managedCourse('curso-co', outsider)).rejects.toThrow(ForbiddenException);
+    });
+
+    it('un estudiante no gestiona ningún curso, aunque una ruta olvidara exigir el rol', async () => {
+      const student = sessionFor('STUDENT', 'COLOMBIA');
+
+      await expect(createService().managedCourse('curso-co', student)).rejects.toThrow(ForbiddenException);
     });
 
     it('el administrador de la otra sede no gestiona nada de esta', async () => {

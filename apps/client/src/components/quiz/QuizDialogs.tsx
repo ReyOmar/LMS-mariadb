@@ -40,7 +40,7 @@ export function SubmitDialog({
       <div className="bg-muted/50 rounded-[1.5rem] p-6 space-y-3 text-base border border-border/50">
         <Row label="Total de preguntas" value={total} />
         <Row label="Respondidas" value={answered} tone="text-emerald-700 dark:text-emerald-400" />
-        <Row label="Sin responder" value={total - answered} tone="text-amber-700 dark:text-amber-400" />
+        <Row label="Sin responder" value={total - answered} tone="text-amber-800 dark:text-amber-400" />
       </div>
     </ConfirmDialog>
   );
@@ -104,7 +104,7 @@ export function ResultDialog({
         </p>
 
         {result.outOfTime && (
-          <p className="mb-6 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-xs font-medium text-amber-700 dark:text-amber-400">
+          <p className="mb-6 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-xs font-medium text-amber-800 dark:text-amber-400">
             Se agotó el tiempo disponible, por eso el intento se calificó con 0.
           </p>
         )}

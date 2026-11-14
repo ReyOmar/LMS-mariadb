@@ -1,4 +1,5 @@
-import DOMPurify from 'dompurify';
+import DOMPurify, { type DOMPurify as Purifier, type UponSanitizeAttributeHookEvent } from 'dompurify';
+import { safeClasses, safeStyle } from './content-style';
 
 /**
  * Limpieza del HTML que escriben examinadores y administradores: el contenido de los
@@ -8,6 +9,7 @@ import DOMPurify from 'dompurify';
  * propósito: se permite lo que producen los editores y nada más. Quedan fuera los
  * formularios, los `script`, los `iframe`, las etiquetas `style` y cualquier atributo de
  * evento, que son las formas habituales de colar código ajeno en la sesión de otro usuario.
+ * De `style` y `class` sólo pasa lo que da formato (`content-style.ts`).
  */
 // La lista se lee mejor agrupada por familias que con una etiqueta por línea.
 // prettier-ignore
@@ -62,19 +64,36 @@ export function sanitizeHTML(
     return { __html: input.replace(/<[^>]*>/g, '') };
   }
 
-  if (linksInNewTab) {
-    DOMPurify.addHook('afterSanitizeAttributes', (node) => {
-      if (node.tagName === 'A') {
-        node.setAttribute('target', '_blank');
-        node.setAttribute('rel', 'noopener noreferrer');
-      }
-    });
+  return { __html: purifierFor(linksInNewTab).sanitize(input, SANITIZE_CONFIG) };
+}
+
+const RESTRICTED_ATTRIBUTES: Record<string, (value: string) => string> = { style: safeStyle, class: safeClasses };
+
+/** Deja de `style` y `class` sólo lo admitido; si no queda nada, el atributo no se conserva. */
+function restrictPresentation(_node: Element, attribute: UponSanitizeAttributeHookEvent): void {
+  const restrict = RESTRICTED_ATTRIBUTES[attribute.attrName];
+  if (!restrict) return;
+
+  attribute.attrValue = restrict(attribute.attrValue);
+  attribute.keepAttr = attribute.attrValue !== '';
+}
+
+function openInNewTab(node: Element): void {
+  if (node.tagName !== 'A') return;
+  node.setAttribute('target', '_blank');
+  node.setAttribute('rel', 'noopener noreferrer');
+}
+
+const purifiers = new Map<boolean, Purifier>();
+
+/** Un limpiador por modo, con sus reglas ya puestas: no se añaden ni se quitan en cada llamada. */
+function purifierFor(linksInNewTab: boolean): Purifier {
+  let purifier = purifiers.get(linksInNewTab);
+  if (!purifier) {
+    purifier = DOMPurify(window);
+    purifier.addHook('uponSanitizeAttribute', restrictPresentation);
+    if (linksInNewTab) purifier.addHook('afterSanitizeAttributes', openInNewTab);
+    purifiers.set(linksInNewTab, purifier);
   }
-
-  const cleaned = DOMPurify.sanitize(input, SANITIZE_CONFIG);
-
-  // Se retira el enganche para que no se acumule en la siguiente llamada.
-  if (linksInNewTab) DOMPurify.removeHook('afterSanitizeAttributes');
-
-  return { __html: cleaned };
+  return purifier;
 }

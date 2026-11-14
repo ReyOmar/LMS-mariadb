@@ -43,7 +43,7 @@ export function UploadLimitField({
           error ? 'border-destructive' : 'border-border'
         }`}
       />
-      {error && <p className="text-xs font-medium text-destructive mt-1.5">{error}</p>}
+      {error && <p className="text-xs font-medium text-destructive dark:text-red-400 mt-1.5">{error}</p>}
     </Field>
   );
 }

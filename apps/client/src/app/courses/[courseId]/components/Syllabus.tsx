@@ -78,7 +78,7 @@ function ModuleItem({
     <li className="rounded-xl border border-border/50 overflow-hidden">
       <p
         className={`flex items-center gap-2 p-3 text-sm font-bold ${
-          !item.open ? 'opacity-50' : item.finished ? 'text-success' : ''
+          !item.open ? 'text-muted-foreground' : item.finished ? 'text-success' : ''
         }`}
       >
         <ModuleIcon className={`h-4 w-4 shrink-0 ${iconColor}`} />

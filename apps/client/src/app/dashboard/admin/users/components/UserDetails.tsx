@@ -101,7 +101,7 @@ export function UserDetails({
 
           <Field title="Seguridad">
             <p
-              className={`text-sm font-bold ${user.usesDefaultPassword ? 'text-amber-700 dark:text-amber-400' : 'text-emerald-700 dark:text-emerald-400'}`}
+              className={`text-sm font-bold ${user.usesDefaultPassword ? 'text-amber-800 dark:text-amber-400' : 'text-emerald-700 dark:text-emerald-400'}`}
             >
               {user.usesDefaultPassword ? 'Clave temporal' : '✓ Clave propia'}
             </p>

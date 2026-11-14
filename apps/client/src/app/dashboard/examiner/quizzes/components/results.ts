@@ -1,8 +1,10 @@
 import { averageScore, toScore } from '@/lib/grading';
+import { groupBy } from '@/lib/group-by';
 import { displayTitle } from '@/lib/resources';
 import { COLOR, type Slice } from '@/components/ui/charts';
 import { twoWayBreakdown, type ThresholdSummary } from '../../components/summary-charts';
 import { closeRoundOf, type ClosedRound } from '../../closed-round';
+import { byModuleAndAssignment, type AssignmentGroup } from '../../module-groups';
 import type { ExaminerSubmission, QuizAttempt } from '../../types';
 
 // Cuenta la mejor nota de cada alumno, no cada intento: contar intentos infla el total y hunde el promedio.
@@ -98,84 +100,47 @@ interface ModuleWithQuizzes {
   average: number;
 }
 
-/** Media de las notas, o 0 si todavía no hay ninguna. */
-function averageOf(scores: number[]): number {
-  return averageScore(scores) ?? 0;
+/** Media de la mejor nota de cada alumno, o 0 si todavía no hay ninguna. */
+function averageOfBest(students: StudentWithAttempts[]): number {
+  return averageScore(students.map((student) => student.bestScore)) ?? 0;
 }
 
 /** Ordena los intentos en módulo → cuestionario → alumno, por identificador y no por título. */
-export function groupByModuleAndQuiz(submissions: QuizAttempt[]): ModuleWithQuizzes[] {
-  const byModule = new Map<
-    string,
-    {
-      title: string;
-      assignments: Map<
-        string,
-        { guid: string | null; title: string; allowedAttempts: number | null; students: Map<string, QuizAttempt[]> }
-      >;
-    }
-  >();
+export function groupByModuleAndQuiz(attempts: QuizAttempt[]): ModuleWithQuizzes[] {
+  return byModuleAndAssignment(attempts).map(({ key, moduleTitle, assignments: groups }) => {
+    const assignments = groups.map(withStudents);
+    const students = assignments.flatMap((quiz) => quiz.students);
 
-  for (const submission of submissions) {
-    const moduleKey = submission.moduleGuid || submission.moduleTitle || 'no-module';
-    const assignmentKey = submission.assignmentGuid || submission.assignmentTitle;
-    const student = submission.student?.guid || 'unknown';
-
-    if (!byModule.has(moduleKey)) {
-      byModule.set(moduleKey, { title: submission.moduleTitle || 'Módulo principal', assignments: new Map() });
-    }
-    const assignments = byModule.get(moduleKey)!.assignments;
-    if (!assignments.has(assignmentKey)) {
-      assignments.set(assignmentKey, {
-        guid: submission.assignmentGuid,
-        title: stripQuizMarker(submission.assignmentTitle),
-        allowedAttempts: submission.allowedAttempts,
-        students: new Map(),
-      });
-    }
-    const students = assignments.get(assignmentKey)!.students;
-    if (!students.has(student)) students.set(student, []);
-    students.get(student)!.push(submission);
-  }
-
-  return Array.from(byModule.entries()).map(([moduleKey, { title: moduleTitle, assignments: assignmentsMap }]) => {
-    const moduleScores: number[] = [];
-
-    const assignments = Array.from(assignmentsMap.entries()).map(
-      ([assignmentKey, { guid: assignmentGuid, title: assignmentTitle, allowedAttempts, students: studentsMap }]) => {
-        const assignmentScores: number[] = [];
-
-        const students: StudentWithAttempts[] = Array.from(studentsMap.values()).map((attempts) => {
-          const sorted = [...attempts].sort(
-            (a, b) => new Date(b.submittedAt ?? 0).getTime() - new Date(a.submittedAt ?? 0).getTime(),
-          );
-          const best = bestScore(sorted);
-          if (best !== null) assignmentScores.push(best);
-
-          return {
-            student: sorted[0].student,
-            attempts: sorted,
-            bestScore: best,
-            attemptCount: sorted.length,
-          };
-        });
-
-        students.sort((a, b) => (b.bestScore ?? 0) - (a.bestScore ?? 0));
-        moduleScores.push(...assignmentScores);
-
-        return {
-          key: assignmentKey,
-          assignmentGuid,
-          assignmentTitle,
-          allowedAttempts,
-          students,
-          average: averageOf(assignmentScores),
-        };
-      },
-    );
-
-    return { key: moduleKey, moduleTitle, assignments, average: averageOf(moduleScores) };
+    return { key, moduleTitle, assignments, average: averageOfBest(students) };
   });
+}
+
+function withStudents({ key, items }: AssignmentGroup<QuizAttempt>): QuizWithStudents {
+  const [first] = items;
+  const students = Array.from(groupBy(items, studentKeyOf).values(), withHistory);
+  // Primero quien mejor lo hizo: el trabajo del examinador está al final.
+  students.sort((a, b) => (b.bestScore ?? 0) - (a.bestScore ?? 0));
+
+  return {
+    key,
+    assignmentGuid: first.assignmentGuid,
+    assignmentTitle: stripQuizMarker(first.assignmentTitle),
+    allowedAttempts: first.allowedAttempts,
+    students,
+    average: averageOfBest(students),
+  };
+}
+
+function withHistory(attempts: QuizAttempt[]): StudentWithAttempts {
+  const sorted = [...attempts].sort(
+    (a, b) => new Date(b.submittedAt ?? 0).getTime() - new Date(a.submittedAt ?? 0).getTime(),
+  );
+
+  return { student: sorted[0].student, attempts: sorted, bestScore: bestScore(sorted), attemptCount: sorted.length };
+}
+
+function studentKeyOf(attempt: QuizAttempt): string {
+  return attempt.student?.guid || 'unknown';
 }
 
 /** Intentos de un alumno: la página avanza por alumno y de cada uno llegan todos los suyos. */
@@ -186,13 +151,7 @@ export interface StudentAttempts {
 }
 
 export function attemptsByStudent(attempts: QuizAttempt[]): StudentAttempts[] {
-  const byStudent = new Map<string, QuizAttempt[]>();
-  for (const attempt of attempts) {
-    const student = attempt.student?.guid ?? attempt.guid;
-    const loaded = byStudent.get(student);
-    if (loaded) loaded.push(attempt);
-    else byStudent.set(student, [attempt]);
-  }
+  const byStudent = groupBy(attempts, (attempt) => attempt.student?.guid ?? attempt.guid);
   return Array.from(byStudent, ([guid, list]) => ({ guid, attempts: list }));
 }
 

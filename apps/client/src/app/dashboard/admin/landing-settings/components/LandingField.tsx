@@ -25,7 +25,7 @@ export function LandingField({
         {definition.limit && (
           <span
             className={`text-xs tabular-nums ${
-              value.length > definition.limit ? 'text-destructive font-bold' : 'text-muted-foreground'
+              value.length > definition.limit ? 'text-destructive dark:text-red-400 font-bold' : 'text-muted-foreground'
             }`}
           >
             {value.length} / {definition.limit}

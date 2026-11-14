@@ -32,7 +32,7 @@ export function QuizIntro({
   return (
     <div>
       <div className="p-6 md:p-10 border-b border-border bg-amber-500/10">
-        <h3 className="font-bold text-xs text-amber-700 dark:text-amber-500 uppercase tracking-widest mb-4">
+        <h3 className="font-bold text-xs text-amber-800 dark:text-amber-500 uppercase tracking-widest mb-4">
           Instrucciones
         </h3>
         <div className="space-y-8">
@@ -81,7 +81,7 @@ export function QuizIntro({
           </div>
 
           {status.blockedReason ? (
-            <p className="mx-auto max-w-md rounded-2xl border border-amber-500/30 bg-amber-500/10 px-6 py-4 text-sm font-medium text-amber-700 dark:text-amber-400">
+            <p className="mx-auto max-w-md rounded-2xl border border-amber-500/30 bg-amber-500/10 px-6 py-4 text-sm font-medium text-amber-800 dark:text-amber-400">
               {status.blockedReason}
             </p>
           ) : (

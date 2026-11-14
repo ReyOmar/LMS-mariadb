@@ -5,6 +5,7 @@ import { IsUploadLimitMb } from '../../storage/upload-limit.validator';
 import { MAX_FILE_NAME_LENGTH, shortenFileName } from '../../storage/file-name';
 import { MAX_TITLE_LENGTH } from './courses.dto';
 import { Omittable } from '../../common/validation/omittable';
+import { Trim } from '../../common/validation/transforms';
 
 /** Los que la aplicación crea y sabe mostrar; VIDEO y PDF sólo existen en la base (ver schema.prisma). */
 export const RESOURCE_TYPES = ['TEXT', 'LINK', 'ASSIGNMENT'] as const;
@@ -60,7 +61,7 @@ export class CreateResourceDto extends ResourceContentDto {
   @Omittable()
   @IsString()
   @MaxLength(MAX_TITLE_LENGTH)
-  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @Trim()
   title?: string;
 }
 
@@ -69,6 +70,6 @@ export class UpdateResourceDto extends ResourceContentDto {
   @IsString()
   @IsNotEmpty({ message: 'El título no puede quedar vacío.' })
   @MaxLength(MAX_TITLE_LENGTH)
-  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @Trim()
   title?: string;
 }

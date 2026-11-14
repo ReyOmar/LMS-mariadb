@@ -14,16 +14,16 @@ export const ROLE_STYLE: Record<UserRole, RoleStyle> = {
   ADMIN: {
     text: 'text-red-700 dark:text-red-400',
     tint: 'bg-red-500/10 text-red-700 dark:text-red-400',
-    solid: 'bg-red-500',
+    solid: 'bg-red-600',
   },
   TEACHER: {
     text: 'text-blue-700 dark:text-blue-400',
     tint: 'bg-blue-500/10 text-blue-700 dark:text-blue-400',
-    solid: 'bg-blue-500',
+    solid: 'bg-blue-600',
   },
   STUDENT: {
     text: 'text-emerald-700 dark:text-emerald-400',
     tint: 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400',
-    solid: 'bg-emerald-500',
+    solid: 'bg-emerald-700',
   },
 };

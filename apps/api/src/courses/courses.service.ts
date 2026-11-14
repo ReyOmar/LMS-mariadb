@@ -392,7 +392,7 @@ export class CoursesService {
       select: { guid: true },
     });
     if (!teacher) {
-      throw new BadRequestException('El responsable del curso debe ser un profesor o administrador de tu sede.');
+      throw new BadRequestException('El responsable del curso debe ser un examinador o administrador de tu sede.');
     }
   }
 

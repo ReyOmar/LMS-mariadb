@@ -32,6 +32,51 @@ export function Field({
   );
 }
 
+/**
+ * Nombre y apellido, uno junto al otro cuando la pantalla da para ello.
+ * @param idPrefix Distingue sus campos de los de otro formulario de la misma página.
+ */
+export function NameFields({
+  idPrefix,
+  firstName,
+  lastName,
+  onFirstNameChange,
+  onLastNameChange,
+  required = false,
+}: {
+  idPrefix: string;
+  firstName: string;
+  lastName: string;
+  onFirstNameChange: (value: string) => void;
+  onLastNameChange: (value: string) => void;
+  required?: boolean;
+}) {
+  return (
+    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+      <Field label="Nombre" htmlFor={`${idPrefix}-first-name`}>
+        <input
+          id={`${idPrefix}-first-name`}
+          value={firstName}
+          onChange={(event) => onFirstNameChange(event.target.value)}
+          required={required}
+          autoComplete="given-name"
+          className={INPUT_CLASS}
+        />
+      </Field>
+      <Field label="Apellido" htmlFor={`${idPrefix}-last-name`}>
+        <input
+          id={`${idPrefix}-last-name`}
+          value={lastName}
+          onChange={(event) => onLastNameChange(event.target.value)}
+          required={required}
+          autoComplete="family-name"
+          className={INPUT_CLASS}
+        />
+      </Field>
+    </div>
+  );
+}
+
 /** Campo con un icono delante que dice qué se escribe en él. */
 export function IconInput({ icon: Icon, ...input }: InputProps & { icon: LucideIcon }) {
   return (
@@ -69,7 +114,7 @@ export function PasswordInput(input: Omit<InputProps, 'type'>) {
         onClick={() => setVisible((shown) => !shown)}
         aria-label={visible ? 'Ocultar contraseña' : 'Mostrar contraseña'}
         aria-pressed={visible}
-        className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+        className="absolute inset-y-0 right-0 flex w-11 items-center justify-center rounded-r-xl text-muted-foreground hover:text-foreground transition-colors"
       >
         <Toggle className="h-4.5 w-4.5" />
       </button>

@@ -1,7 +1,10 @@
 'use client';
 
+import { usePathname } from 'next/navigation';
 import { fileUrlFor } from '@/lib/api';
 import { useConfig } from '@/contexts/ConfigContext';
+import { useSession } from '@/contexts/SessionContext';
+import { pageNameOf } from './navigation';
 
 const DEFAULT_TITLE = 'Campus Virtual PESV';
 
@@ -11,7 +14,9 @@ const DEFAULT_ICON =
   "<text x='50' y='68' font-family='Arial' font-size='42' font-weight='bold' fill='white' text-anchor='middle'>P</text></svg>";
 
 /**
- * Título de la pestaña e icono de la sede activa.
+ * Título de la pestaña e icono de la sede activa. El título empieza por la pantalla en la que se
+ * está («Usuarios · PESV Education»): con varias pestañas abiertas, o en el historial, se
+ * distinguen unas de otras.
  *
  * Dependen de la sede que elija el visitante, que sólo se conoce en el navegador, así que no
  * pueden ir en los metadatos del servidor: Next.js los vuelve a escribir en cada navegación
@@ -20,10 +25,13 @@ const DEFAULT_ICON =
  */
 export function BrandHead() {
   const { config } = useConfig();
+  const { role } = useSession();
+  const page = pageNameOf(usePathname() ?? '/', role);
+  const platform = config?.platformName || DEFAULT_TITLE;
 
   return (
     <>
-      <title>{config?.platformName || DEFAULT_TITLE}</title>
+      <title>{page ? `${page} · ${platform}` : platform}</title>
       <link rel="icon" href={fileUrlFor(config?.faviconUrl) ?? DEFAULT_ICON} />
     </>
   );

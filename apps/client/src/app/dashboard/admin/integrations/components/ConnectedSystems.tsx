@@ -90,7 +90,7 @@ export function ConnectedSystems({
                       onClick={() => onRevokeKey(client)}
                       disabled={busy}
                       aria-label={`Desconectar ${client.name}`}
-                      className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-bold text-destructive hover:bg-destructive/10 transition-colors disabled:opacity-50"
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-bold text-destructive dark:text-red-400 hover:bg-destructive/10 transition-colors disabled:opacity-50"
                     >
                       <Unplug className="h-3.5 w-3.5" /> Desconectar
                     </button>
@@ -100,7 +100,7 @@ export function ConnectedSystems({
                       onClick={() => onRemove(client)}
                       disabled={busy}
                       aria-label={`Eliminar ${client.name}`}
-                      className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-bold text-destructive hover:bg-destructive/10 transition-colors disabled:opacity-50"
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-bold text-destructive dark:text-red-400 hover:bg-destructive/10 transition-colors disabled:opacity-50"
                     >
                       <Trash2 className="h-3.5 w-3.5" /> Eliminar
                     </button>

@@ -22,6 +22,9 @@ const LAST_ACCESS_INTERVAL_MS = 5 * 60 * 1000;
 /** Cada cuánto se purgan las marcas de escritura ya caducadas. */
 const CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
 
+/** Lo que trae un token ya verificado: lo firmado más su emisión y su caducidad. */
+type SignedClaims = JwtClaims & Pick<JwtPayload, 'iat' | 'exp'>;
+
 /** Quién llama y qué versión de la política de datos aceptó. */
 interface Identity {
   user: JwtPayload;
@@ -79,7 +82,7 @@ export class JwtGuard implements CanActivate, OnModuleDestroy {
       // En rutas públicas un token inválido no impide el acceso: simplemente se
       // atiende la petición como anónima.
       if (isPublic) return true;
-      throw error instanceof UnauthorizedException ? error : new UnauthorizedException('Token inválido o expirado.');
+      throw error;
     }
     request.user = identity.user;
 
@@ -101,15 +104,16 @@ export class JwtGuard implements CanActivate, OnModuleDestroy {
 
   /**
    * Verifica el token y lo contrasta con el estado actual de la cuenta.
+   *
+   * Sólo un token o una cuenta que no valen responden 401. Si lo que falla es la consulta a la
+   * base, el error sale tal cual: disfrazado de 401, el navegador daría la sesión por muerta y
+   * una caída breve de la base expulsaría a todos los conectados.
+   *
    * @throws UnauthorizedException con un mensaje que el cliente distingue para decidir
    *         si muestra «sesión expirada» o «sesión revocada».
    */
   private async resolveIdentity(token: string): Promise<Identity> {
-    const payload = await this.jwtService.verifyAsync<JwtClaims & Pick<JwtPayload, 'iat' | 'exp'>>(token);
-
-    if (!payload?.sub) {
-      throw new UnauthorizedException('Token inválido o expirado.');
-    }
+    const payload = await this.verifiedClaims(token);
 
     const account = await this.prisma.user.findUnique({
       where: { guid: payload.sub },
@@ -147,6 +151,13 @@ export class JwtGuard implements CanActivate, OnModuleDestroy {
       exp: payload.exp,
     };
     return { user, consentVersion: account.dataConsentVersion };
+  }
+
+  /** Lo que firma el token, si la firma es la de este campus y no ha caducado. */
+  private async verifiedClaims(token: string): Promise<SignedClaims> {
+    const payload = await this.jwtService.verifyAsync<SignedClaims>(token).catch(() => null);
+    if (!payload?.sub) throw new UnauthorizedException('Token inválido o expirado.');
+    return payload;
   }
 
   /**

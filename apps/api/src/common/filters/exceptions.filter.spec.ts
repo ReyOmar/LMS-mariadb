@@ -167,6 +167,33 @@ describe('ExceptionsFilter', () => {
       expect(body.message).toMatch(/no está disponible/);
     });
 
+    it('también cuando Prisma lo entrega como uno de sus errores conocidos', () => {
+      // Así llega de verdad con la base detenida: P2039 en las consultas y P2010 en las crudas.
+      const poolWithoutServer = {
+        driverAdapterError: {
+          name: 'DriverAdapterError',
+          message: 'pool failed to retrieve a connection from pool (pool connections: active=0 idle=0 limit=10)',
+          cause: { kind: 'mysql', code: 45028, cause: 'connect ECONNREFUSED 127.0.0.1:3306' },
+        },
+      };
+
+      for (const code of ['P2039', 'P2010']) {
+        const { status, body } = capture(prismaError(code, poolWithoutServer));
+
+        expect(status).toBe(HttpStatus.SERVICE_UNAVAILABLE);
+        expect(body.message).toMatch(/no está disponible/);
+      }
+    });
+
+    it('un error conocido que no es de conexión sigue siendo lo que era', () => {
+      const duplicate = {
+        target: ['email'],
+        driverAdapterError: { message: 'Duplicate entry', cause: { code: 1062 } },
+      };
+
+      expect(capture(prismaError('P2002', duplicate)).status).toBe(HttpStatus.CONFLICT);
+    });
+
     it('reconoce el fallo de red aunque venga anidado', () => {
       const failure = Object.assign(new Error('consulta fallida'), {
         cause: { cause: 'connect ECONNREFUSED 127.0.0.1:3306' },

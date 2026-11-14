@@ -51,10 +51,12 @@ export function AccountList({ accounts, tab, search, onTabChange, onSearch, onOp
                 aria-label={`${label} (${formatNumber(counts[role], country)})`}
                 title={label}
                 onClick={() => onTabChange(role)}
-                className={`tap-target flex flex-1 sm:flex-none items-center justify-center gap-1.5 px-3 sm:px-4 py-2 rounded-lg text-xs sm:text-sm font-bold transition-all whitespace-nowrap ${tab === role ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
+                // En el móvil las tres no caben en una línea: el icono y el recuento van arriba y el nombre debajo.
+                className={`tap-target grid grid-cols-[auto_auto] place-content-center items-center gap-x-1.5 gap-y-0.5 flex-1 min-w-0 px-2 py-2 sm:flex sm:flex-none sm:px-4 rounded-lg text-xs sm:text-sm font-bold transition-all whitespace-nowrap ${tab === role ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
               >
-                <Icon className={`h-4 w-4 ${ROLE_STYLE[role].text} shrink-0`} />
-                <span>{label}</span> ({formatNumber(counts[role], country)})
+                <Icon className={`h-4 w-4 ${ROLE_STYLE[role].text} shrink-0 justify-self-end`} />
+                <span className="col-span-2 row-start-2 text-center sm:col-auto sm:row-auto">{label}</span>
+                <span>({formatNumber(counts[role], country)})</span>
               </button>
             ))}
           </div>
@@ -246,7 +248,7 @@ function AccountCards({ users, onOpenDetails }: RowsProps) {
 function TemporaryPassword({ compact = false }: { compact?: boolean }) {
   return (
     <span
-      className={`flex items-center gap-1 text-amber-700 dark:text-amber-400 ${compact ? 'text-[10px]' : 'text-xs'} font-bold`}
+      className={`flex items-center gap-1 text-amber-800 dark:text-amber-400 ${compact ? 'text-[10px]' : 'text-xs'} font-bold`}
       title="Aún no ha sustituido la contraseña temporal por una propia"
     >
       <Key className={compact ? 'h-2.5 w-2.5' : 'h-3 w-3'} /> Clave temporal

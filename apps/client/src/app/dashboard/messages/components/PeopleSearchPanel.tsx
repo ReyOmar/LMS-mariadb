@@ -116,7 +116,7 @@ function CandidateAction({
   }
   if (candidate.contactStatus === 'PENDING') {
     return (
-      <span className="text-[10px] text-amber-700 dark:text-amber-400 font-bold px-2 py-1 bg-amber-500/10 rounded-full shrink-0">
+      <span className="text-[10px] text-amber-800 dark:text-amber-400 font-bold px-2 py-1 bg-amber-500/10 rounded-full shrink-0">
         Pendiente
       </span>
     );

@@ -48,7 +48,11 @@ export function ImageDropZone({ label, hint, imageUrl, accept, onPick, onRemove,
       <input ref={input} type="file" accept={accept} className="hidden" onChange={onChange} />
 
       {imageUrl && (
-        <button type="button" onClick={onRemove} className="mt-2 text-xs font-bold text-destructive hover:underline">
+        <button
+          type="button"
+          onClick={onRemove}
+          className="mt-2 text-xs font-bold text-destructive dark:text-red-400 hover:underline"
+        >
           Quitar imagen
         </button>
       )}

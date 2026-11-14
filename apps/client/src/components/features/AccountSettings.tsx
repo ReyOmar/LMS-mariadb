@@ -9,7 +9,7 @@ import { COUNTRY_INFO } from '@/lib/country';
 import { PASSWORD_HINT, passwordProblem } from '@/lib/password';
 import { uploadLimit } from '@/lib/upload-limits';
 import { CountryFlag } from '@/components/ui/CountryFlag';
-import { Field, INPUT_CLASS, PasswordInput } from '@/components/ui/FormFields';
+import { Field, NameFields, PasswordInput } from '@/components/ui/FormFields';
 import { PhotoOrInitials } from '@/components/ui/UserAvatar';
 import { useDialog } from '@/hooks/useDialog';
 
@@ -169,7 +169,7 @@ function AccountSettingsDialog({ user, onClose }: { user: SessionUser; onClose: 
               className={`flex items-start gap-2 rounded-xl border px-4 py-3 text-sm font-medium ${
                 feedback.type === 'success'
                   ? 'border-emerald-500/20 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400'
-                  : 'border-destructive/20 bg-destructive/10 text-destructive'
+                  : 'border-destructive/20 bg-destructive/10 text-destructive dark:text-red-400'
               }`}
             >
               {feedback.type === 'success' ? (
@@ -217,7 +217,7 @@ function AccountSettingsDialog({ user, onClose }: { user: SessionUser; onClose: 
                     type="button"
                     onClick={deletePhoto}
                     disabled={uploadingPhoto}
-                    className="inline-flex items-center gap-1.5 rounded-lg border border-destructive/30 px-3 py-1.5 text-xs font-bold text-destructive hover:bg-destructive/5 transition-colors disabled:opacity-60"
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-destructive/30 px-3 py-1.5 text-xs font-bold text-destructive dark:text-red-400 hover:bg-destructive/5 transition-colors disabled:opacity-60"
                   >
                     <Trash2 className="h-3.5 w-3.5" /> Quitar
                   </button>
@@ -241,26 +241,13 @@ function AccountSettingsDialog({ user, onClose }: { user: SessionUser; onClose: 
               <User className="h-4 w-4 text-muted-foreground" /> Datos personales
             </h3>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <Field label="Nombre" htmlFor="settings-first-name">
-                <input
-                  id="settings-first-name"
-                  value={firstName}
-                  onChange={(event) => setFirstName(event.target.value)}
-                  autoComplete="given-name"
-                  className={INPUT_CLASS}
-                />
-              </Field>
-              <Field label="Apellido" htmlFor="settings-last-name">
-                <input
-                  id="settings-last-name"
-                  value={lastName}
-                  onChange={(event) => setLastName(event.target.value)}
-                  autoComplete="family-name"
-                  className={INPUT_CLASS}
-                />
-              </Field>
-            </div>
+            <NameFields
+              idPrefix="settings"
+              firstName={firstName}
+              lastName={lastName}
+              onFirstNameChange={setFirstName}
+              onLastNameChange={setLastName}
+            />
 
             <p className="text-xs text-muted-foreground">
               El correo no se puede modificar porque identifica tu cuenta en la recuperación de contraseña. Si necesitas
@@ -300,7 +287,7 @@ function AccountSettingsDialog({ user, onClose }: { user: SessionUser; onClose: 
             </Field>
 
             {changesPassword && (
-              <p className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-xs text-amber-700 dark:text-amber-400">
+              <p className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-xs text-amber-800 dark:text-amber-400">
                 Al cambiar la contraseña se cerrará tu sesión y tendrás que entrar de nuevo.
               </p>
             )}

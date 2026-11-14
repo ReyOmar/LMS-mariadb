@@ -17,7 +17,7 @@ export function RequestsPanel({ requests, isResponding, onRespond, onClose }: Pr
       className="p-3 border-b border-border bg-amber-500/5 max-h-64 overflow-y-auto"
     >
       <div className="flex items-center justify-between mb-2">
-        <h2 className="text-xs font-bold text-amber-700 dark:text-amber-400 uppercase tracking-widest">
+        <h2 className="text-xs font-bold text-amber-800 dark:text-amber-400 uppercase tracking-widest">
           Solicitudes pendientes
         </h2>
         <button

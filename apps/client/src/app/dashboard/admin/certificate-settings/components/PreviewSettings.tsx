@@ -16,7 +16,7 @@ export function PreviewSettings({ settings, brand }: { settings: CertificateSett
           <Info className="h-5 w-5 text-blue-700 dark:text-blue-400 shrink-0 mt-0.5" />
           <div>
             <p className="text-sm font-bold text-blue-700 dark:text-blue-400">Datos del examinador</p>
-            <p className="text-xs text-blue-700/80 dark:text-blue-400/80 mt-0.5">
+            <p className="text-xs text-blue-700 dark:text-blue-400/80 mt-0.5">
               La firma, nombre y cargo del firmante se obtienen automáticamente de la configuración del examinador
               asignado a cada curso. Selecciona un curso para previsualizar cómo quedaría el certificado con sus datos.
             </p>

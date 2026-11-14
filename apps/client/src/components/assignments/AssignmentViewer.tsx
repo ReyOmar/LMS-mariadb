@@ -202,8 +202,8 @@ export default function AssignmentViewer({
                 <Award className="h-6 w-6" />
               </div>
               <div>
-                <h3 className="font-bold text-amber-700 dark:text-amber-400 text-lg">Tarea calificada</h3>
-                <p className="text-sm text-amber-700 dark:text-amber-400 mb-2">
+                <h3 className="font-bold text-amber-800 dark:text-amber-400 text-lg">Tarea calificada</h3>
+                <p className="text-sm text-amber-800 dark:text-amber-400 mb-2">
                   Tu examinador ha revisado y calificado tu entrega.
                 </p>
                 {feedback && (
@@ -212,17 +212,17 @@ export default function AssignmentViewer({
                   </div>
                 )}
                 {!isPassed && passingScore !== undefined && (
-                  <p className="mt-2 text-sm font-medium text-amber-700 dark:text-amber-400">
+                  <p className="mt-2 text-sm font-medium text-amber-800 dark:text-amber-400">
                     Necesitas {points(passingScore)} puntos para aprobar. Puedes subir una versión corregida.
                   </p>
                 )}
               </div>
             </div>
             <div className="text-right shrink-0 bg-background/50 p-4 rounded-xl border border-amber-500/20">
-              <div className="text-xs font-bold text-amber-700 dark:text-amber-400 uppercase tracking-wider mb-1">
+              <div className="text-xs font-bold text-amber-800 dark:text-amber-400 uppercase tracking-wider mb-1">
                 Calificación obtenida
               </div>
-              <div className="text-4xl font-black text-amber-700 dark:text-amber-400">
+              <div className="text-4xl font-black text-amber-800 dark:text-amber-400">
                 {points(score)} <span className="text-base text-muted-foreground">/ {MAX_SCORE}</span>
               </div>
             </div>
@@ -275,7 +275,7 @@ export default function AssignmentViewer({
                     {submission.fileName}
                   </p>
                   {submission.filePurged ? (
-                    <p className="text-xs font-medium text-amber-700 dark:text-amber-400 mt-0.5">
+                    <p className="text-xs font-medium text-amber-800 dark:text-amber-400 mt-0.5">
                       El archivo de esta entrega ya no está disponible.
                     </p>
                   ) : (
@@ -352,7 +352,7 @@ export default function AssignmentViewer({
                   Arrastra tu documento aquí o haz clic para buscarlo en tu dispositivo.
                 </p>
                 {limitText && (
-                  <div className="flex items-center justify-center gap-2 text-amber-700 dark:text-amber-400 bg-amber-500/10 px-3 py-1.5 rounded-lg w-fit mx-auto mb-2">
+                  <div className="flex items-center justify-center gap-2 text-amber-800 dark:text-amber-400 bg-amber-500/10 px-3 py-1.5 rounded-lg w-fit mx-auto mb-2">
                     <AlertTriangle className="h-4 w-4" />
                     <span className="text-xs font-bold uppercase tracking-wider">{limitText}</span>
                   </div>

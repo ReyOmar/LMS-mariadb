@@ -17,7 +17,7 @@ export function SignerDetails({ teacher }: { teacher: CourseSigner['teacher'] })
 
   return (
     <div className="bg-amber-500/5 border border-amber-500/20 rounded-xl p-4">
-      <p className="text-xs font-bold text-amber-700 dark:text-amber-400 uppercase tracking-wider mb-2">
+      <p className="text-xs font-bold text-amber-800 dark:text-amber-400 uppercase tracking-wider mb-2">
         Datos del examinador del curso
       </p>
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -34,7 +34,7 @@ export function SignerDetails({ teacher }: { teacher: CourseSigner['teacher'] })
         </div>
       )}
       {!signature && !teacher.signatureName && (
-        <p className="text-xs text-amber-700 dark:text-amber-400 mt-2 font-medium">
+        <p className="text-xs text-amber-800 dark:text-amber-400 mt-2 font-medium">
           ⚠ Este examinador aún no ha configurado su firma. Se usará su nombre por defecto.
         </p>
       )}

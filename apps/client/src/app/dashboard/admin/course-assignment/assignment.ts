@@ -1,4 +1,5 @@
 import type { CourseStatus, UserRole } from '@/types/models';
+import { groupBy } from '@/lib/group-by';
 import { matchesSearch, plural } from '@/lib/text';
 
 export interface Person {
@@ -94,9 +95,11 @@ export function batchSummary(
         ? 'No se pudo matricular a ningún estudiante'
         : `Se matriculó a ${added} de ${attempted} estudiantes`;
 
-  const byReason = new Map<string, string[]>();
-  for (const { name, reason } of failures) byReason.set(reason, [...(byReason.get(reason) ?? []), name]);
-  const message = [...byReason].map(([reason, names]) => `${nameList(names)}: ${reason}`).join(' ');
+  const byReason = groupBy(failures, (failure) => failure.reason);
+  const message = Array.from(
+    byReason,
+    ([reason, failed]) => `${nameList(failed.map(({ name }) => name))}: ${reason}`,
+  ).join(' ');
 
   return { title, message };
 }

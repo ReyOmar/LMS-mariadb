@@ -101,7 +101,7 @@ function CourseCard({ course, onOpen }: { course: CourseSummary; onOpen: () => v
         <div className="flex-1 space-y-2">
           <div className="flex justify-between text-sm">
             <span className="text-muted-foreground">Pendientes</span>
-            <span className="font-bold text-amber-700 dark:text-amber-400">
+            <span className="font-bold text-amber-800 dark:text-amber-400">
               {formatNumber(course.pending, country)}
             </span>
           </div>

@@ -1,4 +1,5 @@
 import { AuthService } from './auth.service';
+import { secretHash } from '../common/domain/secret-hash';
 
 const USER = {
   guid: 'usuario-1',
@@ -106,6 +107,35 @@ describe('AuthService · pedir un enlace de recuperación', () => {
 
     expect(mail.sendPasswordReset).toHaveBeenCalledWith(USER.email, expect.any(String), USER.firstName, USER.country);
     expect(created).toEqual([expect.objectContaining({ email: USER.email })]);
+  });
+
+  it('en la base queda el resumen de la clave del enlace, no la clave: una copia de la base no abre ninguna cuenta', async () => {
+    const stored: string[] = [];
+    const lookedUp: string[] = [];
+    const prisma = {
+      user: { findUnique: async () => USER },
+      passwordReset: {
+        updateMany: async () => ({ count: 0 }),
+        create: async ({ data }: { data: { token: string } }) => stored.push(data.token),
+        findUnique: async ({ where }: { where: { token: string } }) => {
+          lookedUp.push(where.token);
+          return { id: 7, email: USER.email, used: false, expiresAt: new Date(Date.now() + 60_000) };
+        },
+      },
+      $transaction: async (operations: Promise<unknown>[]) => Promise.all(operations),
+    };
+    const mail = { sendPasswordReset: jest.fn(async (_email: string, _token: string) => true) };
+    const service = new AuthService(prisma as never, {} as never, mail as never, {} as never, {} as never);
+
+    await service.requestPasswordReset(USER.email);
+    const sent = mail.sendPasswordReset.mock.calls[0][1];
+
+    expect(stored).toEqual([secretHash(sent)]);
+    expect(stored[0]).not.toBe(sent);
+
+    // Y el enlace que recibió la persona encuentra su fila por ese mismo resumen.
+    await service.checkResetToken(sent);
+    expect(lookedUp).toEqual(stored);
   });
 });
 

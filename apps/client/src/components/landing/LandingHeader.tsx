@@ -40,7 +40,7 @@ export function LandingHeader({
   return (
     <header className={`site-header ${solid ? 'is-solid' : ''}`}>
       <div className="wrap header-row">
-        <a className="brand" href="#inicio">
+        <a className="brand" href="#inicio" aria-label={platformName}>
           <BrandMark logoUrl={logoUrl} />
           <span className="brand-name">{platformName}</span>
         </a>

@@ -1,6 +1,7 @@
 import { ArgumentsHost, Catch, ExceptionFilter, HttpException, HttpStatus, Logger } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import type { FastifyReply, FastifyRequest } from 'fastify';
+import { pathOf } from '../http/request-path';
 
 /**
  * Mensajes que el marco de trabajo escribe en inglés y que llegan tal cual a la pantalla.
@@ -16,6 +17,24 @@ const TRANSLATIONS: [RegExp, string][] = [
   // `@fastify/multipart` al recibir más archivos o campos de los que admite la subida.
   [/reach (files|parts|fields) limit/i, 'Envía un solo archivo por subida.'],
 ];
+
+/** Cómo dicen el sistema, el pool de conexiones y Prisma que la base no está al alcance. */
+const CONNECTION_FAILURE =
+  /ECONNREFUSED|ECONNRESET|ETIMEDOUT|ENOTFOUND|EHOSTUNREACH|pool timeout|pool failed to retrieve a connection|Can't reach database|Connection lost|socket has unexpectedly been closed/i;
+
+/** Un fallo de la base tal como llega: suelto, o envuelto por Prisma en `meta.driverAdapterError`. */
+interface DatabaseFailure {
+  name?: string;
+  message?: string;
+  cause?: { cause?: unknown };
+  meta?: { driverAdapterError?: { message?: string; cause?: { message?: string; cause?: unknown } } };
+}
+
+/** Los sitios donde puede venir escrito el motivo, según quién lance el fallo. */
+function reasonsOf(failure: DatabaseFailure): unknown[] {
+  const wrapped = failure.meta?.driverAdapterError;
+  return [failure.message, failure.cause?.cause, wrapped?.message, wrapped?.cause?.message, wrapped?.cause?.cause];
+}
 
 /** Une varias frases en una, poniendo el punto que falte entre ellas. */
 function joinSentences(sentences: string[]): string {
@@ -52,7 +71,7 @@ export class ExceptionsFilter implements ExceptionFilter {
 
     if (shouldLog) {
       this.logger.error(
-        `[${status}] ${request?.method} ${request?.url} — ${message}${requestId ? ` [${requestId}]` : ''}`,
+        `[${status}] ${request?.method} ${pathOf(request?.url)} — ${message}${requestId ? ` [${requestId}]` : ''}`,
         exception instanceof Error ? exception.stack : undefined,
       );
     }
@@ -88,14 +107,7 @@ export class ExceptionsFilter implements ExceptionFilter {
     const own = this.withOwnStatus(exception);
     if (own) return { ...own, shouldLog: false };
 
-    if (exception instanceof Prisma.PrismaClientKnownRequestError) {
-      const translated = this.fromDatabaseError(exception);
-      // Los conflictos previsibles no son fallos del servidor, pero conviene verlos en el
-      // registro: si se repiten, falta una comprobación antes de la escritura.
-      this.logger.warn(`Prisma ${exception.code} en ${request?.method} ${request?.url}: ${translated.message}`);
-      return { ...translated, shouldLog: false };
-    }
-
+    // Antes que los errores conocidos de Prisma: una base caída también llega como uno de ellos.
     if (this.isConnectionFailure(exception)) {
       return {
         status: HttpStatus.SERVICE_UNAVAILABLE,
@@ -103,6 +115,14 @@ export class ExceptionsFilter implements ExceptionFilter {
         message: 'La base de datos no está disponible en este momento. Inténtalo de nuevo en unos minutos.',
         shouldLog: true,
       };
+    }
+
+    if (exception instanceof Prisma.PrismaClientKnownRequestError) {
+      const translated = this.fromDatabaseError(exception);
+      // Los conflictos previsibles no son fallos del servidor, pero conviene verlos en el
+      // registro: si se repiten, falta una comprobación antes de la escritura.
+      this.logger.warn(`Prisma ${exception.code} en ${request?.method} ${pathOf(request?.url)}: ${translated.message}`);
+      return { ...translated, shouldLog: false };
     }
 
     // Cualquier otra cosa —una consulta mal construida incluida— es un fallo de
@@ -157,20 +177,18 @@ export class ExceptionsFilter implements ExceptionFilter {
   /**
    * Distingue «la base de datos no responde» de un fallo de programación.
    *
-   * El adaptador de MariaDB no lanza los errores tipados de Prisma cuando ni siquiera
-   * consigue una conexión: llega un `DriverAdapterError` con el fallo de red dentro. Se
-   * responde 503, que sugiere reintentar, en lugar de un «error interno».
+   * Sin conexión, el adaptador de MariaDB lanza un `DriverAdapterError` con el fallo de red
+   * dentro, y Prisma lo entrega suelto o envuelto en uno de sus errores conocidos
+   * (`meta.driverAdapterError`). Se responde 503, que sugiere reintentar, en lugar de un
+   * «error interno».
    */
   private isConnectionFailure(exception: unknown): boolean {
     if (exception instanceof Prisma.PrismaClientInitializationError) return true;
+    if (typeof exception !== 'object' || exception === null) return false;
 
-    const error = exception as { name?: string; message?: string; cause?: { cause?: unknown } };
-    if (error?.name === 'DriverAdapterError') return true;
-
-    const text = `${error?.message ?? ''} ${String(error?.cause?.cause ?? '')}`;
-    return /ECONNREFUSED|ETIMEDOUT|ENOTFOUND|EHOSTUNREACH|pool timeout|Can't reach database|Connection lost/i.test(
-      text,
-    );
+    const failure = exception as DatabaseFailure;
+    if (failure.name === 'DriverAdapterError') return true;
+    return reasonsOf(failure).some((reason) => typeof reason === 'string' && CONNECTION_FAILURE.test(reason));
   }
 
   /**

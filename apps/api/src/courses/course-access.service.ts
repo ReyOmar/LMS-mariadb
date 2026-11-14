@@ -223,6 +223,10 @@ export class CourseAccessService {
   }
 
   private checkManages(course: CourseAccessInfo, user: JwtPayload): CourseAccessInfo {
+    // Aunque la ruta olvidara exigir el rol, un estudiante no gestiona ningún curso.
+    if (user.role === 'STUDENT') {
+      throw new ForbiddenException('No tienes permisos para gestionar este curso.');
+    }
     if (user.role === 'TEACHER' && course.teacherGuid !== user.sub) {
       throw new ForbiddenException('Sólo puedes trabajar sobre los cursos asignados a ti.');
     }

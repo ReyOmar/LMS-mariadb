@@ -51,7 +51,7 @@ export function ResourceEditor({ course, moduleGuid, target }: Props) {
         {readOnly && (
           <div className="bg-amber-500/10 border-b border-amber-500/30 px-6 py-3 flex items-center gap-3">
             <Lock className="h-4 w-4 text-amber-500 flex-shrink-0" />
-            <p className="text-sm font-bold text-amber-700 dark:text-amber-400">
+            <p className="text-sm font-bold text-amber-800 dark:text-amber-400">
               Este curso está {COURSE_STATUS_LABEL[course.status].toLowerCase()}. Cambia a estado Borrador desde el
               constructor para editar.
             </p>

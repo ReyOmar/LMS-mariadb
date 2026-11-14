@@ -119,7 +119,7 @@ function CandidateRow({ candidate, selected, busy, onToggle, onEnroll }: RowProp
           role="STUDENT"
           details={
             candidate.certified && (
-              <p className="text-[10px] font-bold uppercase tracking-wider text-amber-700 dark:text-amber-400">
+              <p className="text-[10px] font-bold uppercase tracking-wider text-amber-800 dark:text-amber-400">
                 Ya certificado · volvería a empezar
               </p>
             )

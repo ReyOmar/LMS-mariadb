@@ -18,7 +18,7 @@ import {
 import { MAX_TITLE_LENGTH, saveNameOnBlur } from './names';
 
 const INPUT =
-  'bg-muted border border-border rounded-xl px-4 py-3 font-medium focus:outline-none focus:ring-2 focus:ring-primary/50 text-lg transition-colors text-foreground read-only:opacity-60 read-only:cursor-not-allowed';
+  'bg-muted border border-border rounded-xl px-4 py-3 font-medium focus:outline-none focus:ring-2 focus:ring-primary/50 text-lg transition-colors text-foreground read-only:opacity-70 read-only:cursor-not-allowed';
 
 interface Props {
   course: Course;

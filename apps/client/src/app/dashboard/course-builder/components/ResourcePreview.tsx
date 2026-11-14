@@ -61,7 +61,7 @@ export function ResourcePreview({ resource, readOnly, onEdit, onDelete }: Props)
       </div>
 
       {isUnconfigured(resource) && (
-        <p className="flex items-center gap-2 px-4 py-3 bg-amber-500/10 border-b border-amber-500/30 text-sm font-bold text-amber-700 dark:text-amber-400">
+        <p className="flex items-center gap-2 px-4 py-3 bg-amber-500/10 border-b border-amber-500/30 text-sm font-bold text-amber-800 dark:text-amber-400">
           <AlertTriangle className="h-4 w-4 shrink-0" />
           {kind === 'QUIZ'
             ? 'Sin configurar: añade las preguntas antes de publicar el curso.'
@@ -107,7 +107,7 @@ export function ResourcePreview({ resource, readOnly, onEdit, onDelete }: Props)
           <Simulation
             instructionsTitle="Instrucciones del cuestionario"
             accent="bg-amber-500/10"
-            instructionsTitleClass="text-amber-700 dark:text-amber-500"
+            instructionsTitleClass="text-amber-800 dark:text-amber-500"
             resource={resource}
             icon={<CheckCircle className="h-10 w-10 text-amber-500" />}
             circleClass="bg-amber-500/20"

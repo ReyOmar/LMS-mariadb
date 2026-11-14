@@ -8,6 +8,7 @@ import { SettingsService } from '../settings/settings.service';
 import { Country } from '../common/domain/country';
 import { plural } from '../common/domain/text';
 import { hashPassword, passwordMatches, simulatePasswordCheck, validateStrength } from '../common/domain/password';
+import { secretHash } from '../common/domain/secret-hash';
 import { JwtClaims, UserRole } from '../common/interfaces/jwt-payload.interface';
 
 /** Vigencia del enlace de recuperación de contraseña. */
@@ -216,6 +217,9 @@ export class AuthService {
    * El enlace va siempre al correo guardado en la cuenta, nunca al escrito en el formulario:
    * la base los compara sin distinguir tildes, y enviarlo al escrito pondría en manos de quien
    * controle `juan@empresá.com` la cuenta de `juan@empresa.com`.
+   *
+   * De la clave del enlace sólo se guarda su resumen: con una copia de la base no se entra en
+   * ninguna cuenta.
    */
   async requestPasswordReset(typedEmail: string) {
     const user = await this.prisma.user.findUnique({ where: { email: typedEmail } });
@@ -227,7 +231,7 @@ export class AuthService {
     await this.prisma.$transaction([
       this.prisma.passwordReset.updateMany({ where: { email, used: false }, data: { used: true } }),
       this.prisma.passwordReset.create({
-        data: { email, token, expiresAt: new Date(Date.now() + RESET_VALIDITY_MS) },
+        data: { email, token: secretHash(token), expiresAt: new Date(Date.now() + RESET_VALIDITY_MS) },
       }),
     ]);
 
@@ -273,7 +277,7 @@ export class AuthService {
 
   /** El enlace y su cuenta, si el enlace existe, no se usó, no caducó y la cuenta sigue ahí. */
   private async usableReset(token: string) {
-    const record = await this.prisma.passwordReset.findUnique({ where: { token } });
+    const record = await this.prisma.passwordReset.findUnique({ where: { token: secretHash(token) } });
     if (!record || record.used) {
       throw new BadRequestException('Este enlace no es válido o ya fue utilizado. Solicita uno nuevo.');
     }

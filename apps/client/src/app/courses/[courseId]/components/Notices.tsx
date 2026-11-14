@@ -316,7 +316,7 @@ export function UngradedAssignments({
 
         <div className="p-6">
           <div className="bg-amber-500/5 border border-amber-500/20 rounded-xl p-4 mb-5">
-            <p className="text-sm font-bold text-amber-700 dark:text-amber-400 mb-2">
+            <p className="text-sm font-bold text-amber-800 dark:text-amber-400 mb-2">
               ⏳ {assignments.length} {plural(assignments.length, 'tarea', 'tareas')} esperando calificación:
             </p>
             <ul className="space-y-1.5">

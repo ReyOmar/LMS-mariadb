@@ -12,8 +12,7 @@ import {
   MaxLength,
   Min,
 } from 'class-validator';
-import { Transform } from 'class-transformer';
-import { StrictBoolean } from '../../common/validation/transforms';
+import { StrictBoolean, Trim } from '../../common/validation/transforms';
 import { MAX_SCORE, MIN_SCORE } from '../../common/domain/grading';
 import { IsStorageKey } from '../../storage/storage-key.validator';
 import { Omittable } from '../../common/validation/omittable';
@@ -38,7 +37,7 @@ export class CreateCourseDto {
   @IsString()
   @IsNotEmpty({ message: 'El título del curso es obligatorio.' })
   @MaxLength(MAX_TITLE_LENGTH)
-  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @Trim()
   title: string;
 
   /** Responsable del curso. Si se omite, queda a nombre de quien lo crea. */
@@ -49,7 +48,7 @@ export class CreateCourseDto {
 
 export class AssignCourseDto {
   @IsString()
-  @IsNotEmpty({ message: 'Indica el profesor responsable.' })
+  @IsNotEmpty({ message: 'Indica el examinador responsable.' })
   teacherGuid: string;
 }
 
@@ -58,7 +57,7 @@ export class UpdateCourseDto {
   @IsString()
   @IsNotEmpty({ message: 'El título no puede quedar vacío.' })
   @MaxLength(MAX_TITLE_LENGTH)
-  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @Trim()
   title?: string;
 
   @IsOptional() @IsString() @MaxLength(5000) description?: string | null;
@@ -109,7 +108,7 @@ export class CreateModuleDto {
   @IsString()
   @IsNotEmpty({ message: 'El título del módulo es obligatorio.' })
   @MaxLength(MAX_TITLE_LENGTH)
-  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @Trim()
   title: string;
 }
 
@@ -118,7 +117,7 @@ export class UpdateModuleDto {
   @IsString()
   @IsNotEmpty({ message: 'El título no puede quedar vacío.' })
   @MaxLength(MAX_TITLE_LENGTH)
-  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @Trim()
   title?: string;
 
   @IsOptional() @IsString() @MaxLength(191) description?: string | null;

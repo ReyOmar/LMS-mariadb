@@ -1,5 +1,6 @@
 import { UnauthorizedException } from '@nestjs/common';
-import { IntegrationKeyGuard, IntegrationCaller } from './integration-auth';
+import { IntegrationKeyGuard } from './integration-auth';
+import type { IntegrationCaller } from './integration-caller';
 
 describe('IntegrationKeyGuard', () => {
   const PESV: IntegrationCaller = { id: 1, name: 'Software PESV', country: 'COLOMBIA' };

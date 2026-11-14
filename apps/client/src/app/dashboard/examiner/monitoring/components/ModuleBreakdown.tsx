@@ -37,7 +37,7 @@ export function ModuleBreakdown({ courseGuid, studentGuid }: { courseGuid: strin
       <div className="grid grid-cols-3 gap-2 sm:gap-3 mb-4">
         <Stat value={modules.length} label="Módulos" color="text-primary" />
         <Stat value={completed} label="Recursos completados" color="text-emerald-700 dark:text-emerald-400" />
-        <Stat value={resources - completed} label="Recursos pendientes" color="text-amber-700 dark:text-amber-400" />
+        <Stat value={resources - completed} label="Recursos pendientes" color="text-amber-800 dark:text-amber-400" />
       </div>
 
       <div className="space-y-1.5">

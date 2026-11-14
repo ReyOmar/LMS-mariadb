@@ -88,7 +88,7 @@ function CourseCard({ course }: { course: Course }) {
           </div>
         </div>
         <CardBody course={course}>
-          <span className={`${BADGE} bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-500/20`}>
+          <span className={`${BADGE} bg-amber-500/10 text-amber-800 dark:text-amber-400 border-amber-500/20`}>
             <AlertTriangle className="h-3 w-3" /> Mantenimiento
           </span>
         </CardBody>

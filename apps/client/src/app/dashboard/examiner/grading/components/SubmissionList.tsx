@@ -93,7 +93,7 @@ function Badge({ pending, graded, large = false }: { pending: number; graded: nu
   if (pending > 0) {
     return (
       <span
-        className={`bg-amber-500/10 text-amber-700 dark:text-amber-400 font-bold rounded-full flex items-center gap-1 ${size}`}
+        className={`bg-amber-500/10 text-amber-800 dark:text-amber-400 font-bold rounded-full flex items-center gap-1 ${size}`}
       >
         {large && <Star className="h-3 w-3" />} {formatNumber(pending, country)}{' '}
         {plural(pending, 'pendiente', 'pendientes')}
@@ -233,7 +233,7 @@ function useReturnFocusOnClose(open: boolean) {
 function StudentIdentity({ submission, graded }: { submission: ExaminerSubmission; graded: boolean }) {
   const tone = graded
     ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400'
-    : 'bg-amber-500/10 text-amber-700 dark:text-amber-400';
+    : 'bg-amber-500/10 text-amber-800 dark:text-amber-400';
 
   return (
     <div className="flex-1 min-w-0 flex items-center gap-4">

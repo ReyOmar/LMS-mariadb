@@ -45,7 +45,7 @@ export function CertificateCard({ certificate, downloading, onOpen, onDownload }
           {certificate.validUntil && (
             <Detail
               icon={<ShieldCheck className="h-3.5 w-3.5" />}
-              className={certificate.unexpired ? '' : 'text-amber-700 dark:text-amber-400 font-bold'}
+              className={certificate.unexpired ? '' : 'text-amber-800 dark:text-amber-400 font-bold'}
             >
               {certificate.unexpired ? 'Válido hasta' : 'Venció el'} {longDate(certificate.validUntil)}
             </Detail>

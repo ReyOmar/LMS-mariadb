@@ -3,7 +3,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { isUniqueViolation } from '../prisma/prisma-errors';
 import { Country, countryName } from '../common/domain/country';
 import { ExternalEnrollmentDto } from './dto/external-enrollment.dto';
-import type { IntegrationCaller } from './integration-auth';
+import type { IntegrationCaller } from './integration-caller';
 import { ExternalRequest, REQUEST_FIELDS } from './external-request';
 import { ExternalEnrollmentView, IntegrationViews } from './integration-views';
 import { InfractionsService } from './infractions.service';

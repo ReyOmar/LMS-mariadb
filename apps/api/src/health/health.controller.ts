@@ -4,11 +4,19 @@ import { PrismaService } from '../prisma/prisma.service';
 import { StorageService } from '../storage/storage.service';
 
 /**
+ * Cuánto vale una comprobación. Cada una consulta la base y escribe en el disco, y la ruta es
+ * pública: quien la pida sin parar recibe la misma respuesta, no una comprobación por petición.
+ */
+const CHECK_VALIDITY_MS = 10_000;
+
+/**
  * Estado del servicio para la supervisión del alojamiento. Es pública, así que sólo dice si la
  * base responde y si se puede guardar archivos: nada que sirva para conocer el servidor.
  */
 @Controller('health')
 export class HealthController {
+  private recent: { at: number; report: ReturnType<HealthController['probe']> } | null = null;
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly storage: StorageService,
@@ -16,7 +24,14 @@ export class HealthController {
 
   @Public()
   @Get()
-  async check() {
+  check() {
+    if (!this.recent || Date.now() - this.recent.at >= CHECK_VALIDITY_MS) {
+      this.recent = { at: Date.now(), report: this.probe() };
+    }
+    return this.recent.report;
+  }
+
+  private async probe() {
     const [database, storageWritable] = await Promise.all([this.checkDatabase(), this.storage.isWritable()]);
 
     return {

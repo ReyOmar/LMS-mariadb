@@ -9,6 +9,7 @@ export default function NotFound() {
       <EmptyState
         icon={<Compass className="h-10 w-10" />}
         title="Esta página no existe"
+        titleAs="h1"
         description="Puede que el enlace esté mal copiado o que la página ya no esté disponible."
         action={
           <Link

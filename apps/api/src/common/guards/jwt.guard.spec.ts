@@ -35,18 +35,28 @@ const ACCOUNT: {
 
 const TOKEN = { sub: 'ana', jti: 'sesion-actual', iat: 1_700_000_000 };
 
+/** Lo que lanza Prisma cuando no consigue una conexión con la base. */
+const DATABASE_DOWN = new Error('pool failed to retrieve a connection from pool');
+
 interface Scenario {
   account?: Partial<typeof ACCOUNT> | null;
   token?: Partial<typeof TOKEN>;
   /** Cómo está marcada la ruta: `@Public()` o `@BeforeConsent()`. */
   route?: Record<string, boolean>;
+  /** La firma del token no es la del campus, o ya caducó. */
+  forgedToken?: boolean;
+  /** La base no responde al buscar la cuenta. */
+  databaseDown?: boolean;
 }
 
-function createGuard({ account = {}, token = {}, route = {} }: Scenario) {
+function createGuard({ account = {}, token = {}, route = {}, forgedToken = false, databaseDown = false }: Scenario) {
   const payload = { ...TOKEN, ...token };
   const prisma = {
     user: {
-      findUnique: async () => (account === null ? null : { ...ACCOUNT, ...account }),
+      findUnique: async () => {
+        if (databaseDown) throw DATABASE_DOWN;
+        return account === null ? null : { ...ACCOUNT, ...account };
+      },
       // El guard anota `lastAccessAt` de quien pasa; aquí sólo hace falta que exista.
       update: async () => ({}),
     },
@@ -55,12 +65,12 @@ function createGuard({ account = {}, token = {}, route = {} }: Scenario) {
   const reflector = { getAllAndOverride: (key: string) => route[key] };
   const settings = { legalVersion: async () => 'politica-vigente' };
 
-  return new JwtGuard(
-    { verifyAsync: async () => payload } as never,
-    reflector as never,
-    prisma as never,
-    settings as never,
-  );
+  const verifyAsync = async () => {
+    if (forgedToken) throw new Error('invalid signature');
+    return payload;
+  };
+
+  return new JwtGuard({ verifyAsync } as never, reflector as never, prisma as never, settings as never);
 }
 
 /** Una petición con token a una ruta marcada como indique el escenario. */
@@ -123,6 +133,30 @@ describe('JwtGuard · por qué se corta una sesión', () => {
 
   it('la cuenta borrada manda sobre cualquier otro motivo', async () => {
     expect(await rejectionReason({ account: null, token: { jti: 'sesion-vieja' } })).toContain('ya no existe');
+  });
+});
+
+/**
+ * Un 401 le dice al navegador que la sesión murió, y la borra. Sólo puede salir cuando de verdad
+ * murió: si lo que falla es la base, la sesión sigue siendo buena y el fallo se dice como tal.
+ */
+describe('JwtGuard · un fallo de la base no es una sesión caducada', () => {
+  it('un token con la firma mal o caducado sí responde 401', async () => {
+    await expect(admits({ forgedToken: true })).rejects.toThrow(
+      new UnauthorizedException('Token inválido o expirado.'),
+    );
+  });
+
+  it('con la base caída el error sale tal cual, no como un 401', async () => {
+    const rejection = await admits({ databaseDown: true }).catch((error: unknown) => error);
+
+    expect(rejection).toBe(DATABASE_DOWN);
+    expect(rejection).not.toBeInstanceOf(UnauthorizedException);
+  });
+
+  it('una ruta pública se atiende como anónima en los dos casos', async () => {
+    await expect(admits({ forgedToken: true, route: { [IS_PUBLIC]: true } })).resolves.toBe(true);
+    await expect(admits({ databaseDown: true, route: { [IS_PUBLIC]: true } })).resolves.toBe(true);
   });
 });
 

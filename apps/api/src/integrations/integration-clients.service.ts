@@ -4,7 +4,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { Country } from '../common/domain/country';
 import { hashKey, issueKey } from './integration-key';
-import type { IntegrationCaller } from './integration-auth';
+import type { IntegrationCaller } from './integration-caller';
 import { refreshIntegrationPanels } from './external-request';
 import { IntegrationWebhooks } from './integration-webhooks';
 

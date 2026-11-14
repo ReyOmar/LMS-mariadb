@@ -159,14 +159,14 @@ function CourseCard({
             className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-black uppercase tracking-wider shadow-sm ${
               isPublished
                 ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border border-emerald-500/20'
-                : 'bg-amber-500/10 text-amber-700 dark:text-amber-400 border border-amber-500/20'
+                : 'bg-amber-500/10 text-amber-800 dark:text-amber-400 border border-amber-500/20'
             }`}
           >
             {isPublished ? <Eye className="h-3 w-3" /> : <EyeOff className="h-3 w-3" />}
             {COURSE_STATUS_LABEL[course.status]}
           </div>
           {lockedBy ? (
-            <span className="text-xs font-bold text-amber-700 dark:text-amber-400 flex items-center gap-1">
+            <span className="text-xs font-bold text-amber-800 dark:text-amber-400 flex items-center gap-1">
               <Lock className="h-3 w-3" /> Bloqueado
             </span>
           ) : (

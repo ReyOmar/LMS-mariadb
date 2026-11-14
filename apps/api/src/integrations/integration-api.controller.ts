@@ -1,6 +1,7 @@
 import { Body, Controller, Delete, Get, HttpStatus, Param, Post, Res } from '@nestjs/common';
 import type { FastifyReply } from 'fastify';
-import { Caller, IntegrationAuth, type IntegrationCaller } from './integration-auth';
+import { Caller, IntegrationAuth } from './integration-auth';
+import type { IntegrationCaller } from './integration-caller';
 import { ExternalEnrollmentsService } from './external-enrollments.service';
 import { ExternalEnrollmentDto } from './dto/external-enrollment.dto';
 

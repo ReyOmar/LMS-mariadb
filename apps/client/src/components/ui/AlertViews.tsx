@@ -248,7 +248,7 @@ export function ToastStack({ toasts, onClose }: { toasts: Toast[]; onClose: (id:
                 type="button"
                 onClick={() => onClose(toast.id)}
                 aria-label="Cerrar aviso"
-                className="shrink-0 p-1 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+                className="tap-target shrink-0 grid place-items-center p-1 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
               >
                 <X className="h-3.5 w-3.5" />
               </button>

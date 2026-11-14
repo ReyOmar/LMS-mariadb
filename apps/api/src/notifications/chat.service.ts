@@ -204,10 +204,7 @@ export class ChatService {
   /** Marca como leídos los mensajes recibidos de un contacto y sus avisos en la campana. */
   async markConversationRead(contactGuid: string, user: JwtPayload) {
     const [messages, notifications] = await this.prisma.$transaction([
-      this.prisma.message.updateMany({
-        where: { senderGuid: contactGuid, recipientGuid: user.sub, read: false },
-        data: { read: true },
-      }),
+      this.markMessagesRead(contactGuid, user),
       this.markMessageNotificationsRead(contactGuid, user),
     ]);
     this.announceRead(contactGuid, user, messages.count + notifications.count);
@@ -244,10 +241,7 @@ export class ChatService {
       }),
       // Quien vacía la conversación ya la ha visto: dejar los mensajes como no leídos
       // mantendría un contador señalando a algo que ya no está en pantalla.
-      this.prisma.message.updateMany({
-        where: { senderGuid: contactGuid, recipientGuid: user.sub, read: false },
-        data: { read: true },
-      }),
+      this.markMessagesRead(contactGuid, user),
       this.markMessageNotificationsRead(contactGuid, user),
     ]);
     this.announceRead(contactGuid, user, messages.count + notifications.count);
@@ -265,6 +259,13 @@ export class ChatService {
     });
 
     return new Map(cutoffs.map((cutoff) => [cutoff.contactGuid, cutoff.hiddenUntil]));
+  }
+
+  private markMessagesRead(contactGuid: string, user: JwtPayload) {
+    return this.prisma.message.updateMany({
+      where: { senderGuid: contactGuid, recipientGuid: user.sub, read: false },
+      data: { read: true },
+    });
   }
 
   private markMessageNotificationsRead(contactGuid: string, user: JwtPayload) {
