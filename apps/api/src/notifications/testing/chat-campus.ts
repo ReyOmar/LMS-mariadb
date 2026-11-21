@@ -1,6 +1,6 @@
-import { ChatAccess } from '../../notifications/chat-access';
-import { ChatContactsService } from '../../notifications/chat-contacts.service';
-import { ChatService } from '../../notifications/chat.service';
+import { ChatAccess } from '../chat-access';
+import { ChatContactsService } from '../chat-contacts.service';
+import { ChatService } from '../chat.service';
 
 /**
  * Campus en memoria que interpreta las consultas de la mensajería: si los servicios dejaran

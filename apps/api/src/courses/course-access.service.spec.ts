@@ -357,6 +357,28 @@ describe('CourseAccessService', () => {
       return new CourseAccessService(prisma as never);
     }
 
+    it('dice qué recursos tiene abiertos el alumno, para no entregarle el contenido del resto', async () => {
+      const open = await serviceWithPath({ completed: ['recurso-co-a'] }).unlockedResources('curso-co', 'alumno-co');
+
+      expect([...(open ?? [])]).toEqual(['recurso-co-a', 'recurso-co-b']);
+    });
+
+    it('una tarea que espera nota demasiado tiempo abre lo siguiente también para leerlo', async () => {
+      const pending = [{ assignmentGuid: 'recurso-co-b', submittedAt: hoursAgo(49) }];
+      const open = await serviceWithPath({ completed: ['recurso-co-a'], pending }).unlockedResources(
+        'curso-co',
+        'alumno-co',
+      );
+
+      expect(open?.has('tarea-co')).toBe(true);
+    });
+
+    it('sin orden estricto no hay nada que reservar', async () => {
+      await expect(
+        serviceWithPath({ strictOrder: false }).unlockedResources('curso-co', 'alumno-co'),
+      ).resolves.toBeNull();
+    });
+
     it('sólo un estudiante presenta un cuestionario o entrega una tarea', async () => {
       const teacher = sessionFor('TEACHER', 'COLOMBIA', 'profesor-co');
       const admin = sessionFor('ADMIN', 'COLOMBIA');

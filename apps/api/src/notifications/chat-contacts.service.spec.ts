@@ -1,7 +1,7 @@
 import { ChatContactsService } from './chat-contacts.service';
 import { ChatAccess } from './chat-access';
 import { sessionFor } from '../common/testing/test-campus';
-import { chatCampus } from '../common/testing/chat-campus';
+import { chatCampus } from './testing/chat-campus';
 
 const ANA = sessionFor('STUDENT', 'COLOMBIA', 'ana');
 const session = (role: 'ADMIN' | 'TEACHER' | 'STUDENT', guid: string) => sessionFor(role, 'COLOMBIA', guid);

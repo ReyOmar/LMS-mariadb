@@ -1,6 +1,7 @@
 import {
   buildSyllabus,
   findEntry,
+  hasContentToLoad,
   isOnlyAwaitingGrades,
   isPathCompleted,
   moduleStart,
@@ -119,6 +120,27 @@ describe('findEntry y moduleStart', () => {
   it('el principio del módulo es su primer recurso', () => {
     expect(moduleStart(syllabus, 'r4')?.guid).toBe('r3');
     expect(moduleStart(syllabus, 'otro')).toBeNull();
+  });
+});
+
+describe('hasContentToLoad', () => {
+  // La API entrega sin contenido lo que no tocaba cuando se pidió el curso: aquí, todo menos r1.
+  const asDelivered = [
+    { guid: 'm1', resources: [{ guid: 'r1' }, { guid: 'r2', locked: true }] },
+    { guid: 'm2', resources: [{ guid: 'r3', locked: true }] },
+  ];
+  const pending = (done: string[]) => hasContentToLoad(buildSyllabus(asDelivered, progress(done), true));
+
+  it('recién cargado no falta nada: lo cerrado sigue cerrado', () => {
+    expect(pending([])).toBe(false);
+  });
+
+  it('al completar un recurso se abre el siguiente, que llegó vacío', () => {
+    expect(pending(['r1'])).toBe(true);
+  });
+
+  it('sin orden estricto la API lo entrega todo y no hay nada que pedir', () => {
+    expect(hasContentToLoad(buildSyllabus(COURSE, progress([]), false))).toBe(false);
   });
 });
 

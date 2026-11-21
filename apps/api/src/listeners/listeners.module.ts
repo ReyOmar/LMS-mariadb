@@ -1,7 +1,7 @@
 import { Module } from '@nestjs/common';
 import { EventsListener } from './events.listener';
-import { CertificatesModule } from '../../certificates/certificates.module';
-import { IntegrationsModule } from '../../integrations/integrations.module';
+import { CertificatesModule } from '../certificates/certificates.module';
+import { IntegrationsModule } from '../integrations/integrations.module';
 
 /**
  * Manejadores de los eventos de dominio.

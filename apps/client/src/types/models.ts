@@ -139,6 +139,11 @@ export interface Resource {
    * el intento y las respuestas correctas no salen del servidor.
    */
   quiz?: { allowedAttempts: number; timeLimitMinutes: number; questionCount: number } | null;
+  /**
+   * Sólo en la vista del alumno, con orden estricto: todavía no le toca y la API lo entrega sin
+   * contenido. Cuando su avance lo abre, el visor vuelve a pedir el curso.
+   */
+  locked?: boolean;
 }
 
 // ── Evaluación ─────────────────────────────────────────────────────────────

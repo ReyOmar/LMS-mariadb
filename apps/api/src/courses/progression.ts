@@ -44,3 +44,11 @@ export function isResourceUnlocked(
   const position = path.findIndex((resource) => resource.guid === resourceGuid);
   return position >= 0 && path.slice(0, position).every((resource) => completed.has(resource.guid));
 }
+
+/** Todos los recursos abiertos del temario: los que van hasta el primero sin completar, él incluido. */
+export function unlockedResources(modules: PathModule[], completed: ReadonlySet<string>): Set<string> {
+  const path = modules.flatMap((module) => module.resources);
+  const firstPending = path.findIndex((resource) => !completed.has(resource.guid));
+  const open = firstPending === -1 ? path : path.slice(0, firstPending + 1);
+  return new Set(open.map((resource) => resource.guid));
+}

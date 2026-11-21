@@ -1,7 +1,7 @@
 import { ForbiddenException, NotFoundException } from '@nestjs/common';
 import { BASE_LEGAL_VERSION, SettingsService } from './settings.service';
 import { uploadCeilingMb } from '../storage/upload-limits';
-import { fileOwnershipDouble } from '../common/testing/file-ownership-double';
+import { fileOwnershipDouble } from '../storage/testing/file-ownership-double';
 
 /**
  * Qué sale de la sede sin haber iniciado sesión.

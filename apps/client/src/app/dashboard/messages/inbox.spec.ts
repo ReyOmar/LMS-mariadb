@@ -2,6 +2,7 @@ import type { Contact, Message } from '@/types/models';
 import {
   appendMessage,
   contactFromCandidate,
+  emptyContactsHint,
   mergeConversation,
   receivedMessage,
   sentMessage,
@@ -122,5 +123,16 @@ describe('contactFromCandidate', () => {
       unreadCount: 0,
       canWrite: true,
     });
+  });
+});
+
+describe('emptyContactsHint', () => {
+  it('con una búsqueda escrita, dice que nada coincide', () => {
+    expect(emptyContactsHint(true, true)).toMatch(/coincide/);
+  });
+
+  it('sin búsqueda, la administración busca en su sede y el resto en sus cursos', () => {
+    expect(emptyContactsHint(false, true)).toMatch(/tu sede/);
+    expect(emptyContactsHint(false, false)).toMatch(/tu curso/);
   });
 });

@@ -1,6 +1,6 @@
 import { BadRequestException } from '@nestjs/common';
 import { sessionFor } from '../common/testing/test-campus';
-import { fileOwnershipDouble } from '../common/testing/file-ownership-double';
+import { fileOwnershipDouble } from '../storage/testing/file-ownership-double';
 import { MIB, UploadLimit } from '../storage/upload-limits';
 import { SubmissionsService } from './submissions.service';
 

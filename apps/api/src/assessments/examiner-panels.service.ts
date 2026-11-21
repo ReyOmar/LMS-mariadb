@@ -444,6 +444,11 @@ export class ExaminerPanelsService {
    * `roundClosed` dice que la vuelta del alumno ya está certificada y su nota no se toca.
    */
   private forExaminer(submission: DashboardSubmission, certified: Set<string>) {
+    // La tarea puede haberse eliminado después de la entrega: con ella se van su módulo y su curso.
+    const { assignment } = submission;
+    const courseModule = assignment?.module;
+    const course = courseModule?.course;
+
     return {
       guid: submission.guid,
       status: submission.status,
@@ -451,19 +456,19 @@ export class ExaminerPanelsService {
       attemptNumber: submission.attemptNumber,
       score: toScore(submission.score),
       feedback: submission.feedback,
-      passingScore: passingThreshold(submission.assignment?.module.course.passingScore),
+      passingScore: passingThreshold(course?.passingScore),
       fileName: submission.attachmentName,
       fileUrl: deliveredFileUrl(this.storage, submission),
       filePurged: submission.filePurged,
       roundClosed: certified.has(submission.user.guid),
       student: submission.user,
-      assignmentGuid: submission.assignment?.guid ?? null,
-      assignmentTitle: submission.assignment?.title ?? 'Tarea eliminada',
-      moduleGuid: submission.assignment?.module.guid ?? null,
-      moduleTitle: submission.assignment?.module.title ?? null,
-      courseGuid: submission.assignment?.module.course.guid ?? null,
-      courseTitle: submission.assignment?.module.course.title ?? null,
-      courseImage: submission.assignment?.module.course.coverImage ?? null,
+      assignmentGuid: assignment?.guid ?? null,
+      assignmentTitle: assignment?.title ?? 'Tarea eliminada',
+      moduleGuid: courseModule?.guid ?? null,
+      moduleTitle: courseModule?.title ?? null,
+      courseGuid: course?.guid ?? null,
+      courseTitle: course?.title ?? null,
+      courseImage: course?.coverImage ?? null,
     };
   }
 }

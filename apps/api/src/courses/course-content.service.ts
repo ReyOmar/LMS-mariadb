@@ -10,6 +10,7 @@ import { serializeQuizConfig, validateQuizConfig } from './quiz-config';
 import { toClientResource } from './resource-view';
 import { nextPosition } from './syllabus-order';
 import { JwtPayload } from '../common/interfaces/jwt-payload.interface';
+import { definedFields } from '../common/domain/defined-fields';
 import { CreateResourceDto, UpdateResourceDto } from './dto/resources.dto';
 import { CreateModuleDto, UpdateModuleDto } from './dto/courses.dto';
 
@@ -42,13 +43,8 @@ type ResourceFields = Partial<
 function resourceFields(dto: CreateResourceDto | UpdateResourceDto): ResourceFields {
   const quizConfig = dto.quizConfig ? serializeQuizConfig(validateQuizConfig(dto.quizConfig)) : null;
   return {
-    ...(dto.title !== undefined && { title: dto.title }),
-    ...(dto.contentHtml !== undefined && { contentHtml: dto.contentHtml }),
-    ...(dto.referenceUrl !== undefined && { referenceUrl: dto.referenceUrl }),
-    ...(dto.attachmentKey !== undefined && { attachmentKey: dto.attachmentKey }),
-    ...(dto.attachmentName !== undefined && { attachmentName: dto.attachmentName }),
+    ...definedFields(dto, ['title', 'contentHtml', 'referenceUrl', 'attachmentKey', 'attachmentName', 'maxUploadMb']),
     ...(dto.quizConfig !== undefined && { quizConfig }),
-    ...(dto.maxUploadMb !== undefined && { maxUploadMb: dto.maxUploadMb }),
   };
 }
 
@@ -86,10 +82,7 @@ export class CourseContentService {
 
     return this.prisma.courseModule.update({
       where: { guid: moduleGuid },
-      data: {
-        ...(dto.title !== undefined && { title: dto.title }),
-        ...(dto.description !== undefined && { description: dto.description }),
-      },
+      data: definedFields(dto, ['title', 'description']),
     });
   }
 

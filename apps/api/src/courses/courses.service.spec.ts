@@ -2,7 +2,7 @@ import { BadRequestException, ForbiddenException } from '@nestjs/common';
 import { CoursesService } from './courses.service';
 import { CourseStatusChanges } from './course-status-changes';
 import { sessionFor } from '../common/testing/test-campus';
-import { fileOwnershipDouble } from '../common/testing/file-ownership-double';
+import { fileOwnershipDouble } from '../storage/testing/file-ownership-double';
 
 const ADMIN = sessionFor('ADMIN', 'COLOMBIA', 'admin');
 const DRAFT = { guid: 'curso-1', country: 'COLOMBIA', title: 'Curso', status: 'DRAFT', teacherGuid: 'admin' };
@@ -12,7 +12,12 @@ const PUBLISHED = { ...DRAFT, status: 'PUBLISHED', teacherGuid: 'profe' };
  * Servicio con dobles de sus dependencias. Por defecto el curso no tiene matriculados; las
  * consultas que una prueba necesite se pasan en `prisma` y sustituyen a las de serie.
  */
-function serviceWith(prisma: Record<string, unknown>, course: Record<string, unknown> = DRAFT) {
+function serviceWith(
+  prisma: Record<string, unknown>,
+  course: Record<string, unknown> = DRAFT,
+  /** Recursos que el alumno tiene abiertos; `null` si el curso no impone orden. */
+  unlocked: ReadonlySet<string> | null = null,
+) {
   const ownership = fileOwnershipDouble();
   const access = {
     managedCourse: async () => course,
@@ -22,6 +27,7 @@ function serviceWith(prisma: Record<string, unknown>, course: Record<string, unk
     },
     courseInCountry: async () => course,
     ensureEnrollment: async () => undefined,
+    unlockedResources: async () => unlocked,
   };
   // A quién llega cada evento: la sede entera, el personal del curso o usuarios concretos.
   const emitted: { event: string; to: string }[] = [];
@@ -245,6 +251,47 @@ describe('CoursesService · ficha del alumno', () => {
     expect(quiz.quizConfig).toBeNull();
     expect(JSON.stringify(course)).not.toContain('Velocidad');
     expect(JSON.stringify(course)).not.toContain('es_correcta');
+  });
+
+  const reading = (guid: string, secret: string) => ({
+    guid,
+    type: 'TEXT',
+    title: `Lectura ${guid}`,
+    contentHtml: `<p>${secret}</p>`,
+    referenceUrl: `https://ejemplo.test/${secret}`,
+    attachmentKey: `recursos/${secret}.pdf`,
+    attachmentName: `${secret}.pdf`,
+    fileUrl: null,
+    quizConfig: null,
+  });
+  const twoReadings = {
+    course: {
+      findUnique: async () => ({
+        guid: 'curso-1',
+        modules: [{ guid: 'm1', resources: [reading('r1', 'abierto'), reading('r2', 'reservado')] }],
+      }),
+    },
+  };
+
+  it('con orden estricto, lo que aún no le toca viaja sin su contenido', async () => {
+    const { service } = serviceWith(twoReadings, PUBLISHED, new Set(['r1']));
+
+    const course = await service.getCourseForStudent('curso-1', sessionFor('STUDENT', 'COLOMBIA', 'alumna'));
+    const [open, locked] = course.modules[0].resources;
+
+    expect(open).toMatchObject({ contentHtml: '<p>abierto</p>', attachmentUrl: '/descargas/recursos/abierto.pdf' });
+    // Sigue en el temario, con su título y su tipo, para que el alumno vea qué viene después.
+    expect(locked).toMatchObject({ guid: 'r2', title: 'Lectura r2', type: 'TEXT', locked: true, contentHtml: null });
+    expect(JSON.stringify(course)).not.toContain('reservado');
+  });
+
+  it('sin orden estricto se entrega el curso entero', async () => {
+    const { service } = serviceWith(twoReadings, PUBLISHED);
+
+    const course = await service.getCourseForStudent('curso-1', sessionFor('STUDENT', 'COLOMBIA', 'alumna'));
+
+    expect(JSON.stringify(course)).toContain('reservado');
+    expect(course.modules[0].resources.some((resource) => 'locked' in resource)).toBe(false);
   });
 });
 

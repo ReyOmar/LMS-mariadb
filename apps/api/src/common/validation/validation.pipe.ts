@@ -146,20 +146,24 @@ const FIELD_LABELS: Record<string, string> = {
 /** Los mensajes por defecto están en inglés; los propios del proyecto, en español. */
 const isDefaultMessage = (message: string) => /\b(must|should)\b/.test(message);
 
+/**
+ * Un campo sin valor —que no llegó, o que llegó vacío (`null`)— incumple todas sus reglas («debe
+ * ser texto», «es demasiado largo»…); lo único útil es decir que le falta el valor.
+ */
+function missingValueMessage(error: ValidationError, field: string): string {
+  if (error.value === null) {
+    const own = Object.values(error.constraints ?? {}).find((message) => !isDefaultMessage(message));
+    return own ?? DEFAULT_MESSAGES.isNull.replace('{field}', field);
+  }
+  const required = error.constraints?.isNotEmpty ?? error.constraints?.isDefined;
+  return required && !isDefaultMessage(required) ? required : DEFAULT_MESSAGES.isNotEmpty.replace('{field}', field);
+}
+
 function messagesOf(error: ValidationError, parent?: string): string[] {
   const label = FIELD_LABELS[error.property] ?? error.property;
   const field = parent ? `${parent}.${label}` : label;
 
-  // Un campo sin valor —que no llegó, o que llegó vacío (`null`)— incumple todas sus reglas
-  // («debe ser texto», «es demasiado largo»…); lo único útil es decir que le falta el valor.
-  if (error.value === null) {
-    const own = Object.values(error.constraints ?? {}).find((message) => !isDefaultMessage(message));
-    return [own ?? DEFAULT_MESSAGES.isNull.replace('{field}', field)];
-  }
-  if (error.value === undefined) {
-    const required = error.constraints?.isNotEmpty ?? error.constraints?.isDefined;
-    return [required && !isDefaultMessage(required) ? required : DEFAULT_MESSAGES.isNotEmpty.replace('{field}', field)];
-  }
+  if (error.value === null || error.value === undefined) return [missingValueMessage(error, field)];
 
   const own = Object.entries(error.constraints ?? {}).map(([constraint, message]) => {
     if (!isDefaultMessage(message)) return message;

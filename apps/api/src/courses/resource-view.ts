@@ -36,6 +36,26 @@ export function toClientResource<T extends StoredResource>(
   };
 }
 
+/**
+ * Un recurso que al alumno todavía no le toca. Va en el temario —título, tipo y sitio— pero sin
+ * nada de su contenido: el visor lo vuelve a pedir cuando el avance lo abre.
+ */
+export function toLockedResource<T extends StoredResource>(resource: T) {
+  return {
+    ...resource,
+    locked: true as const,
+    contentHtml: null,
+    referenceUrl: null,
+    fileUrl: null,
+    fileDownloadUrl: null,
+    attachmentKey: null,
+    attachmentName: null,
+    attachmentUrl: null,
+    quizConfig: null,
+    quiz: null,
+  };
+}
+
 function isResourceFile(key: string | null): key is string {
   return isStorageKey(key, ['recursos']);
 }

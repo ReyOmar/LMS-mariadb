@@ -1,7 +1,7 @@
 import { ForbiddenException } from '@nestjs/common';
 import { CourseContentService } from './course-content.service';
 import { sessionFor } from '../common/testing/test-campus';
-import { fileOwnershipDouble } from '../common/testing/file-ownership-double';
+import { fileOwnershipDouble } from '../storage/testing/file-ownership-double';
 
 /**
  * Contenido de un curso: lo que se guarda al editar un recurso y lo que se borra del

@@ -1,14 +1,12 @@
-import { Module, forwardRef } from '@nestjs/common';
+import { Module } from '@nestjs/common';
 import { StorageService } from './storage.service';
-import { StorageController } from './storage.controller';
 import { FileOwnershipService } from './file-ownership.service';
-import { SettingsModule } from '../settings/settings.module';
 
-// El almacenamiento necesita el límite de subida de la sede y la configuración retira los
-// archivos que sustituye: la referencia diferida rompe ese ciclo.
+/**
+ * Guardar, firmar y retirar archivos. No depende de ningún otro módulo de la aplicación: lo usan
+ * los que guardan algo (cursos, entregas, certificados, la configuración de la sede…).
+ */
 @Module({
-  imports: [forwardRef(() => SettingsModule)],
-  controllers: [StorageController],
   providers: [StorageService, FileOwnershipService],
   exports: [StorageService, FileOwnershipService],
 })

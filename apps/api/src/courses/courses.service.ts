@@ -1,16 +1,17 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
-import { Prisma } from '@prisma/client';
+import { CourseStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { StorageService } from '../storage/storage.service';
 import { FileOwnershipService } from '../storage/file-ownership.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { EventName } from '../realtime/events';
-import { CourseAccessService } from './course-access.service';
+import { CourseAccessService, type CourseAccessInfo } from './course-access.service';
 import { CourseStatusChanges } from './course-status-changes';
 import { ContentRemovalService } from './content-removal.service';
 import { QuizOverview, parseQuizConfig, quizOverview } from './quiz-config';
-import { toClientResource } from './resource-view';
+import { toClientResource, toLockedResource } from './resource-view';
+import { definedFields } from '../common/domain/defined-fields';
 import { Country } from '../common/domain/country';
 import { emitEvent } from '../common/domain/domain-events';
 import { percent } from '../common/domain/progress';
@@ -49,21 +50,19 @@ function changesDraftOnlyFields(dto: UpdateCourseDto): boolean {
   return Object.entries(dto).some(([field, value]) => value !== undefined && !LIVE_FIELDS.has(field));
 }
 
-/** Lo que el DTO cambia de la ficha de un curso. */
-function courseChanges(dto: UpdateCourseDto): Prisma.CourseUpdateInput {
-  return {
-    ...(dto.title !== undefined && { title: dto.title }),
-    ...(dto.description !== undefined && { description: dto.description }),
-    ...(dto.shortDescription !== undefined && { shortDescription: dto.shortDescription }),
-    ...(dto.coverImage !== undefined && { coverImage: dto.coverImage }),
-    ...(dto.level !== undefined && { level: dto.level }),
-    ...(dto.status !== undefined && { status: dto.status }),
-    ...(dto.durationHours !== undefined && { durationHours: dto.durationHours }),
-    ...(dto.passingScore !== undefined && { passingScore: dto.passingScore }),
-    ...(dto.strictOrder !== undefined && { strictOrder: dto.strictOrder }),
-    ...(dto.maxStudents !== undefined && { maxStudents: dto.maxStudents }),
-  };
-}
+/** Los campos de la ficha de un curso que una edición puede cambiar. */
+const COURSE_FIELDS = [
+  'title',
+  'description',
+  'shortDescription',
+  'coverImage',
+  'level',
+  'status',
+  'durationHours',
+  'passingScore',
+  'strictOrder',
+  'maxStudents',
+] as const satisfies readonly (keyof UpdateCourseDto)[];
 
 /**
  * Gestión de cursos: listados, ficha y ciclo de vida (borrador ↔ publicado), cuyas reglas y
@@ -194,15 +193,25 @@ export class CoursesService {
       return { guid: course.guid, title: course.title, status: course.status, modules: [] };
     }
 
-    const fullCourse = await this.loadCourseWithContent(courseGuid);
+    const [fullCourse, unlocked] = await Promise.all([
+      this.loadCourseWithContent(courseGuid),
+      this.access.unlockedResources(courseGuid, user.sub),
+    ]);
+    // Con orden estricto, lo que aún no le toca viaja sin contenido: saltarse el temario no puede
+    // depender de que el navegador no lo enseñe.
+    const isLocked = (resource: { guid: string }) => unlocked !== null && !unlocked.has(resource.guid);
     return {
       ...fullCourse,
       modules: fullCourse.modules.map((module) => ({
         ...module,
-        resources: module.resources.map((resource) => ({
-          ...toClientResource(resource, this.storage, () => null),
-          quiz: this.quizOverviewForStudent(resource.quizConfig, resource.guid),
-        })),
+        resources: module.resources.map((resource) =>
+          isLocked(resource)
+            ? toLockedResource(resource)
+            : {
+                ...toClientResource(resource, this.storage, () => null),
+                quiz: this.quizOverviewForStudent(resource.quizConfig, resource.guid),
+              },
+        ),
       })),
     };
   }
@@ -268,40 +277,20 @@ export class CoursesService {
       await this.ensureNothingGraded(courseGuid);
     }
 
-    // Guardar el estado que ya tenía no es un cambio: no se valida ni se avisa a nadie.
-    const newStatus = dto.status !== undefined && dto.status !== course.status ? dto.status : null;
-    if (newStatus) await this.statusChanges.ensureAllowed(course, newStatus);
-    const change = newStatus && (await this.statusChanges.classify(courseGuid, newStatus));
-
-    const previous =
-      dto.coverImage !== undefined
-        ? await this.prisma.course.findUnique({ where: { guid: courseGuid }, select: { coverImage: true } })
-        : null;
-    const cover = { folder: 'portadas' as const, current: previous?.coverImage, next: dto.coverImage };
-
+    const { newStatus, change } = await this.statusTransition(course, dto.status);
+    const cover = await this.coverChange(courseGuid, dto);
     const updated = await this.files.replace([cover], { uploader: user.sub }, () =>
       this.prisma.$transaction(async (tx) => {
         if (dto.maxStudents) await this.ensureSeatsFit(tx, courseGuid, dto.maxStudents);
         return tx.course.update({
           where: { guid: courseGuid },
-          data: { ...courseChanges(dto), ...(change && { firstPublishedAt: change.firstPublishedAt }) },
+          data: { ...definedFields(dto, COURSE_FIELDS), ...(change && { firstPublishedAt: change.firstPublishedAt }) },
           select: COURSE_SUMMARY,
         });
       }),
     );
 
-    const students = await this.enrolledStudents(courseGuid);
-    if (newStatus === 'DRAFT') {
-      this.realtime.emitToUsers('course:maintenance', { courseGuid }, user.country, students);
-    }
-    this.emitToCourseAudience(
-      'course:updated',
-      { guid: courseGuid, status: updated.status },
-      user.country,
-      updated.teacherGuid,
-      students,
-    );
-
+    await this.announceUpdate(updated, user, newStatus);
     if (change) await this.statusChanges.announce(updated.guid, updated.title, change.kind, user.country);
     // Lo que puede dejar pasar a quien esperaba este curso desde otro sistema.
     const retitled = dto.title !== undefined && dto.title !== course.title;
@@ -309,6 +298,45 @@ export class CoursesService {
       emitEvent(this.events, 'course.opened', { courseGuid, userGuid: user.sub, country: user.country });
     }
     return updated;
+  }
+
+  /**
+   * El cambio de estado que pide una edición, ya permitido y clasificado. Guardar el estado que
+   * ya tenía no es un cambio: no se valida ni se avisa a nadie.
+   */
+  private async statusTransition(course: CourseAccessInfo, requested: UpdateCourseDto['status']) {
+    if (requested === undefined || requested === course.status) return { newStatus: null, change: null };
+
+    await this.statusChanges.ensureAllowed(course, requested);
+    return { newStatus: requested, change: await this.statusChanges.classify(course.guid, requested) };
+  }
+
+  /** La portada que deja de usarse y la que entra: la sustituida se retira del almacenamiento. */
+  private async coverChange(courseGuid: string, dto: UpdateCourseDto) {
+    const previous =
+      dto.coverImage !== undefined
+        ? await this.prisma.course.findUnique({ where: { guid: courseGuid }, select: { coverImage: true } })
+        : null;
+    return { folder: 'portadas' as const, current: previous?.coverImage, next: dto.coverImage };
+  }
+
+  /** Avisa del cambio a quien tiene el curso abierto; si pasó a Borrador, a sus alumnos se les cierra. */
+  private async announceUpdate(
+    updated: { guid: string; status: CourseStatus; teacherGuid: string },
+    user: JwtPayload,
+    newStatus: CourseStatus | null,
+  ): Promise<void> {
+    const students = await this.enrolledStudents(updated.guid);
+    if (newStatus === 'DRAFT') {
+      this.realtime.emitToUsers('course:maintenance', { courseGuid: updated.guid }, user.country, students);
+    }
+    this.emitToCourseAudience(
+      'course:updated',
+      { guid: updated.guid, status: updated.status },
+      user.country,
+      updated.teacherGuid,
+      students,
+    );
   }
 
   /**

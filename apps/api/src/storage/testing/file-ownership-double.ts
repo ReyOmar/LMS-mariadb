@@ -1,4 +1,4 @@
-import { FileOwnershipService } from '../../storage/file-ownership.service';
+import { FileOwnershipService } from '../file-ownership.service';
 
 /**
  * `FileOwnershipService` con sus reglas de sustitución reales y sin base de datos: admite

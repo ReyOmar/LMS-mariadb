@@ -10,9 +10,9 @@ import {
 import { JwtService } from '@nestjs/jwt';
 import { Reflector } from '@nestjs/core';
 import type { FastifyRequest } from 'fastify';
-import { IS_PUBLIC } from '../decorators/public.decorator';
-import { BEFORE_CONSENT } from '../decorators/before-consent.decorator';
-import { JwtClaims, JwtPayload } from '../interfaces/jwt-payload.interface';
+import { IS_PUBLIC } from '../../common/decorators/public.decorator';
+import { BEFORE_CONSENT } from '../../common/decorators/before-consent.decorator';
+import { JwtClaims, JwtPayload } from '../../common/interfaces/jwt-payload.interface';
 import { PrismaService } from '../../prisma/prisma.service';
 import { SettingsService } from '../../settings/settings.service';
 

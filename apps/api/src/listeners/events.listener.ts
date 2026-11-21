@@ -1,12 +1,12 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
-import { PrismaService } from '../../prisma/prisma.service';
-import { NotificationsService } from '../../notifications/notifications.service';
-import { MailService } from '../../mail/mail.service';
-import { CertificatesService } from '../../certificates/certificates.service';
-import { RealtimeService } from '../../realtime/realtime.service';
-import { WaitingRequestsService } from '../../integrations/waiting-requests.service';
-import { formatScore, formatPoints } from '../domain/grading';
+import { PrismaService } from '../prisma/prisma.service';
+import { NotificationsService } from '../notifications/notifications.service';
+import { MailService } from '../mail/mail.service';
+import { CertificatesService } from '../certificates/certificates.service';
+import { RealtimeService } from '../realtime/realtime.service';
+import { WaitingRequestsService } from '../integrations/waiting-requests.service';
+import { formatScore, formatPoints } from '../common/domain/grading';
 import {
   SubmissionGraded,
   SubmissionReceived,
@@ -17,8 +17,8 @@ import {
   ProgressUpdated,
   QuizPassed,
   QuizFailed,
-} from '../domain/domain-events';
-import { NOTIFICATION_REF } from '../../notifications/notification-ref';
+} from '../common/domain/domain-events';
+import { NOTIFICATION_REF } from '../notifications/notification-ref';
 
 /**
  * Efectos colaterales de los eventos de dominio: avisos en la aplicación, correos y

@@ -3,7 +3,7 @@ import { CourseStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { Country } from '../common/domain/country';
 import { JwtPayload } from '../common/interfaces/jwt-payload.interface';
-import { AWAITING_GRADE, isResourceUnlocked, waitedTooLong } from './progression';
+import { AWAITING_GRADE, isResourceUnlocked, unlockedResources, waitedTooLong, type PathModule } from './progression';
 import { SYLLABUS_ORDER } from './syllabus-order';
 
 /** Lo que ve un alumno dado de baja al intentar trabajar en el curso. */
@@ -157,6 +157,27 @@ export class CourseAccessService {
     userGuid: string,
     db: Prisma.TransactionClient = this.prisma,
   ): Promise<void> {
+    const path = await this.strictPath(courseGuid, userGuid, db);
+    if (path && !isResourceUnlocked(path.modules, resourceGuid, path.completed)) {
+      throw new BadRequestException('Este recurso aún está bloqueado: completa primero los anteriores del curso.');
+    }
+  }
+
+  /**
+   * Los recursos cuyo contenido ya puede ver el alumno, o `null` si el curso no impone orden y
+   * por tanto están todos abiertos.
+   */
+  async unlockedResources(courseGuid: string, userGuid: string): Promise<ReadonlySet<string> | null> {
+    const path = await this.strictPath(courseGuid, userGuid);
+    return path && unlockedResources(path.modules, path.completed);
+  }
+
+  /** El temario de un curso con orden estricto y lo que el alumno lleva completado; `null` si no lo impone. */
+  private async strictPath(
+    courseGuid: string,
+    userGuid: string,
+    db: Prisma.TransactionClient = this.prisma,
+  ): Promise<{ modules: PathModule[]; completed: ReadonlySet<string> } | null> {
     const course = await db.course.findUnique({
       where: { guid: courseGuid },
       select: {
@@ -167,7 +188,7 @@ export class CourseAccessService {
         },
       },
     });
-    if (!course?.strictOrder) return;
+    if (!course?.strictOrder) return null;
 
     const guids = course.modules.flatMap((module) => module.resources.map((resource) => resource.guid));
     const [progress, pending] = await Promise.all([
@@ -185,9 +206,7 @@ export class CourseAccessService {
       ...progress.map((row) => row.resourceGuid),
       ...pending.flatMap((row) => (row.assignmentGuid && waitedTooLong(row.submittedAt) ? [row.assignmentGuid] : [])),
     ]);
-    if (!isResourceUnlocked(course.modules, resourceGuid, completed)) {
-      throw new BadRequestException('Este recurso aún está bloqueado: completa primero los anteriores del curso.');
-    }
+    return { modules: course.modules, completed };
   }
 
   /**

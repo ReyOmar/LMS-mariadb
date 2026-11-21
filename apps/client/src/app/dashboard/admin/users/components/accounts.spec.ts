@@ -3,6 +3,7 @@ import {
   coursesHeading,
   deleteAccountWarning,
   emptyCoursesLink,
+  missingAccountFields,
   roleChangeProblem,
   type AssignedCourse,
 } from './accounts';
@@ -79,5 +80,23 @@ describe('deleteAccountWarning', () => {
       expect(warning).toContain('su firma');
       expect(warning).toContain('Los certificados ya emitidos se conservan');
     }
+  });
+});
+
+describe('missingAccountFields', () => {
+  const blank = { firstName: '', lastName: '', email: '' };
+
+  it('al crear, pide nombre, apellido y correo en el orden del formulario', () => {
+    expect(missingAccountFields(blank, true)).toEqual(['firstName', 'lastName', 'email']);
+  });
+
+  it('al editar el correo no se pide: no se puede cambiar', () => {
+    expect(missingAccountFields(blank, false)).toEqual(['firstName', 'lastName']);
+  });
+
+  it('sólo con espacios, el campo sigue vacío', () => {
+    expect(missingAccountFields({ firstName: '  ', lastName: 'Pérez', email: 'ana@pesv.test' }, true)).toEqual([
+      'firstName',
+    ]);
   });
 });

@@ -1,23 +1,20 @@
 'use client';
 
-import { useState, type FormEvent } from 'react';
+import type { FormEvent } from 'react';
 import Link from 'next/link';
 import { CheckCircle2, Mail, Send } from 'lucide-react';
-import api from '@/lib/api';
 import type { Country } from '@/lib/country';
 import { PRIVACY_REFERENCE } from '@/lib/legal';
 import { formatCountdown } from '@/lib/submission-gate';
 import type { UserRole } from '@/types/models';
-import { useCountdown } from '@/hooks/useCountdown';
 import type { RateLimitedForm } from '@/hooks/useRateLimitedForm';
 import { Field, IconInput, INPUT_CLASS, NameFields, SecondaryButton } from '@/components/ui/FormFields';
 import { FormError } from '@/components/ui/FormError';
 import { SubmitButton } from '@/components/ui/SubmitButton';
 import { PrivacyNoticeSummary } from '@/components/legal/PrivacyNoticeSummary';
+import { useAccessRequest, type AccessRequestDetails, type AccessRequestStep } from './useAccessRequest';
 
-type Step = 'email' | 'code' | 'details';
-
-const STEPS: { id: Step; label: string }[] = [
+const STEPS: { id: AccessRequestStep; label: string }[] = [
   { id: 'email', label: 'Verificar correo' },
   { id: 'code', label: 'Introducir código' },
   { id: 'details', label: 'Completar solicitud' },
@@ -40,63 +37,16 @@ interface Props {
   onSubmitted: () => void;
 }
 
+/** Cada paso es un formulario: Intro lo envía igual que el botón principal. */
+const submitting = (action: () => unknown) => (event: FormEvent) => {
+  event.preventDefault();
+  void action();
+};
+
 /** El correo se verifica primero para que nadie llene la bandeja del administrador con correos ajenos. */
 export function AccessRequestForm({ form, country, onEmailVerified, onCancel, onSubmitted }: Props) {
-  const [step, setStep] = useState<Step>('email');
-  const [email, setEmail] = useState('');
-  const [code, setCode] = useState('');
-  const [firstName, setFirstName] = useState('');
-  const [lastName, setLastName] = useState('');
-  const [role, setRole] = useState<UserRole>('STUDENT');
-  const [acceptsDataPolicy, setAcceptsDataPolicy] = useState(false);
-  /** Hasta que el servidor admita otro código para este correo. */
-  const resend = useCountdown();
-
-  const sendCode = () => {
-    if (!email.includes('@')) {
-      form.showError('Escribe un correo electrónico válido.');
-      return;
-    }
-    void form.submit(async () => {
-      // Si ya se le envió uno hace poco, el servidor no manda otro: dice cuánto falta para
-      // poder pedirlo y se sigue con el que ya está en su bandeja.
-      const { data } = await api.post<{ resendInSeconds: number }>('/auth/verify-email', { email, country });
-      setStep('code');
-      resend.start(data.resendInSeconds);
-    }, 'No se pudo enviar el código.');
-  };
-
-  const confirmCode = () =>
-    form.submit(async () => {
-      await api.post('/auth/confirm-email', { email, code });
-      setStep('details');
-      onEmailVerified();
-    }, 'El código no es correcto.');
-
-  const submitRequest = () =>
-    form.submit(async () => {
-      await api.post('/auth/access-requests', {
-        email,
-        firstName,
-        lastName,
-        requestedRole: role,
-        country,
-        acceptsDataPolicy,
-      });
-      onSubmitted();
-    }, 'No se pudo enviar la solicitud.');
-
-  const changeEmail = () => {
-    setStep('email');
-    setCode('');
-    form.clearError();
-  };
-
-  /** Cada paso es un formulario: Intro lo envía igual que el botón principal. */
-  const onSubmitStep = (action: () => unknown) => (event: FormEvent) => {
-    event.preventDefault();
-    void action();
-  };
+  const request = useAccessRequest({ form, country, onEmailVerified, onSubmitted });
+  const { step } = request;
 
   return (
     <div className="space-y-5">
@@ -104,157 +54,246 @@ export function AccessRequestForm({ form, country, onEmailVerified, onCancel, on
       <FormError message={form.error} />
 
       {step === 'email' && (
-        // Sin validación del navegador: el aviso de correo no válido es el de arriba.
-        <form onSubmit={onSubmitStep(sendCode)} noValidate className="space-y-4">
-          <Field label="Correo electrónico" htmlFor="request-email">
-            <IconInput
-              icon={Mail}
-              id="request-email"
-              type="email"
-              value={email}
-              onChange={(event) => setEmail(event.target.value)}
-              placeholder="nombre@empresa.com"
-              autoComplete="email"
-            />
-          </Field>
-          <div className="flex gap-2">
-            <SecondaryButton onClick={onCancel}>Volver</SecondaryButton>
-            <SubmitButton form={form} idle="Enviar código" busy="Enviando…" icon={Send} className="h-12 flex-1" />
-          </div>
-        </form>
+        <EmailStep
+          form={form}
+          email={request.email}
+          onEmail={request.setEmail}
+          onSubmit={request.sendCode}
+          onCancel={onCancel}
+        />
       )}
 
       {step === 'code' && (
-        <form onSubmit={onSubmitStep(confirmCode)} className="space-y-4">
-          <p className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 px-4 py-3 text-xs text-emerald-700 dark:text-emerald-400">
-            Revisa <strong>{email}</strong>: te enviamos un código de {CODE_LENGTH} dígitos o, si ese correo ya tiene
-            cuenta o una solicitud en revisión, cómo seguir. Mira también la carpeta de spam.
-          </p>
-          <Field label="Código de verificación" htmlFor="request-code">
-            <input
-              id="request-code"
-              type="text"
-              inputMode="numeric"
-              value={code}
-              onChange={(event) => setCode(event.target.value.replace(/\D/g, '').slice(0, CODE_LENGTH))}
-              placeholder="000000"
-              maxLength={CODE_LENGTH}
-              autoComplete="one-time-code"
-              className={`${INPUT_CLASS} text-center text-2xl font-mono font-bold tracking-[0.5em]`}
-            />
-          </Field>
-          <div className="flex gap-2">
-            <SecondaryButton onClick={changeEmail}>Cambiar correo</SecondaryButton>
-            <SubmitButton
-              form={form}
-              idle="Confirmar"
-              busy="Comprobando…"
-              icon={CheckCircle2}
-              disabled={code.length !== CODE_LENGTH}
-              className="h-12 flex-1"
-            />
-          </div>
-          <p className="text-center text-xs text-muted-foreground">
-            {resend.waiting ? (
-              `Podrás pedir otro código en ${formatCountdown(resend.secondsLeft)}`
-            ) : (
-              <button
-                type="button"
-                onClick={sendCode}
-                disabled={form.blocked}
-                className="font-bold text-primary hover:underline disabled:opacity-60"
-              >
-                Reenviar código
-              </button>
-            )}
-          </p>
-        </form>
+        <CodeStep
+          form={form}
+          email={request.email}
+          code={request.code}
+          onCode={request.setCode}
+          resend={request.resend}
+          onSubmit={request.confirmCode}
+          onResend={request.sendCode}
+          onChangeEmail={request.changeEmail}
+        />
       )}
 
       {step === 'details' && (
-        <form onSubmit={onSubmitStep(submitRequest)} className="space-y-4">
-          <p className="flex items-center gap-2 rounded-xl border border-emerald-500/20 bg-emerald-500/5 px-4 py-3 text-xs text-emerald-700 dark:text-emerald-400">
-            <CheckCircle2 className="h-4 w-4 shrink-0" />
-            <span>
-              <strong>{email}</strong> verificado correctamente
-            </span>
-          </p>
-
-          <NameFields
-            idPrefix="request"
-            firstName={firstName}
-            lastName={lastName}
-            onFirstNameChange={setFirstName}
-            onLastNameChange={setLastName}
-            required
-          />
-
-          <Field
-            label="¿Con qué función participas?"
-            htmlFor="request-role"
-            hint="Un administrador revisará la solicitud y confirmará tu función antes de darte acceso."
-          >
-            <select
-              id="request-role"
-              value={role}
-              onChange={(event) => setRole(event.target.value as UserRole)}
-              className={INPUT_CLASS}
-            >
-              {ROLES.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </Field>
-
-          {/* El aviso va antes de la casilla: la autorización sólo es informada si se ve al darla. */}
-          <PrivacyNoticeSummary country={country} />
-
-          <label
-            htmlFor="request-data-policy"
-            className="flex items-start gap-2.5 text-xs text-muted-foreground leading-relaxed"
-          >
-            <input
-              id="request-data-policy"
-              type="checkbox"
-              checked={acceptsDataPolicy}
-              onChange={(event) => setAcceptsDataPolicy(event.target.checked)}
-              required
-              className="mt-0.5 h-4 w-4 shrink-0 accent-[hsl(var(--primary))]"
-            />
-            <span>
-              {country === 'COLOMBIA'
-                ? 'Autorizo de forma previa, expresa e informada el tratamiento de mis datos personales conforme a '
-                : 'He leído '}
-              <Link href="/legal#privacy" target="_blank" className="font-semibold text-primary hover:underline">
-                {PRIVACY_REFERENCE[country]}
-              </Link>{' '}
-              y acepto los{' '}
-              <Link href="/legal#terms" target="_blank" className="font-semibold text-primary hover:underline">
-                términos de uso
-              </Link>
-              .
-            </span>
-          </label>
-
-          <div className="flex gap-2 pt-2">
-            <SecondaryButton onClick={onCancel}>Cancelar</SecondaryButton>
-            <SubmitButton
-              form={form}
-              idle="Enviar solicitud"
-              busy="Enviando…"
-              disabled={!firstName.trim() || !lastName.trim() || !acceptsDataPolicy}
-              className="h-12 flex-1"
-            />
-          </div>
-        </form>
+        <DetailsStep
+          form={form}
+          country={country}
+          email={request.email}
+          details={request.details}
+          onDetails={request.updateDetails}
+          onSubmit={request.submitRequest}
+          onCancel={onCancel}
+        />
       )}
     </div>
   );
 }
 
-function StepProgress({ current }: { current: Step }) {
+function EmailStep({
+  form,
+  email,
+  onEmail,
+  onSubmit,
+  onCancel,
+}: {
+  form: RateLimitedForm;
+  email: string;
+  onEmail: (email: string) => void;
+  onSubmit: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    // Sin validación del navegador: el aviso de correo no válido es el de arriba.
+    <form onSubmit={submitting(onSubmit)} noValidate className="space-y-4">
+      <Field label="Correo electrónico" htmlFor="request-email">
+        <IconInput
+          icon={Mail}
+          id="request-email"
+          type="email"
+          value={email}
+          onChange={(event) => onEmail(event.target.value)}
+          placeholder="nombre@empresa.com"
+          autoComplete="email"
+        />
+      </Field>
+      <div className="flex gap-2">
+        <SecondaryButton onClick={onCancel}>Volver</SecondaryButton>
+        <SubmitButton form={form} idle="Enviar código" busy="Enviando…" icon={Send} className="h-12 flex-1" />
+      </div>
+    </form>
+  );
+}
+
+function CodeStep({
+  form,
+  email,
+  code,
+  onCode,
+  resend,
+  onSubmit,
+  onResend,
+  onChangeEmail,
+}: {
+  form: RateLimitedForm;
+  email: string;
+  code: string;
+  onCode: (code: string) => void;
+  resend: { waiting: boolean; secondsLeft: number };
+  onSubmit: () => unknown;
+  onResend: () => void;
+  onChangeEmail: () => void;
+}) {
+  return (
+    <form onSubmit={submitting(onSubmit)} className="space-y-4">
+      <p className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 px-4 py-3 text-xs text-emerald-700 dark:text-emerald-400">
+        Revisa <strong>{email}</strong>: te enviamos un código de {CODE_LENGTH} dígitos o, si ese correo ya tiene cuenta
+        o una solicitud en revisión, cómo seguir. Mira también la carpeta de spam.
+      </p>
+      <Field label="Código de verificación" htmlFor="request-code">
+        <input
+          id="request-code"
+          type="text"
+          inputMode="numeric"
+          value={code}
+          onChange={(event) => onCode(event.target.value.replace(/\D/g, '').slice(0, CODE_LENGTH))}
+          placeholder="000000"
+          maxLength={CODE_LENGTH}
+          autoComplete="one-time-code"
+          className={`${INPUT_CLASS} text-center text-2xl font-mono font-bold tracking-[0.5em]`}
+        />
+      </Field>
+      <div className="flex gap-2">
+        <SecondaryButton onClick={onChangeEmail}>Cambiar correo</SecondaryButton>
+        <SubmitButton
+          form={form}
+          idle="Confirmar"
+          busy="Comprobando…"
+          icon={CheckCircle2}
+          disabled={code.length !== CODE_LENGTH}
+          className="h-12 flex-1"
+        />
+      </div>
+      <p className="text-center text-xs text-muted-foreground">
+        {resend.waiting ? (
+          `Podrás pedir otro código en ${formatCountdown(resend.secondsLeft)}`
+        ) : (
+          <button
+            type="button"
+            onClick={onResend}
+            disabled={form.blocked}
+            className="font-bold text-primary hover:underline disabled:opacity-60"
+          >
+            Reenviar código
+          </button>
+        )}
+      </p>
+    </form>
+  );
+}
+
+function DetailsStep({
+  form,
+  country,
+  email,
+  details,
+  onDetails,
+  onSubmit,
+  onCancel,
+}: {
+  form: RateLimitedForm;
+  country: Country;
+  email: string;
+  details: AccessRequestDetails;
+  onDetails: (changes: Partial<AccessRequestDetails>) => void;
+  onSubmit: () => unknown;
+  onCancel: () => void;
+}) {
+  const { firstName, lastName, role, acceptsDataPolicy } = details;
+
+  return (
+    <form onSubmit={submitting(onSubmit)} className="space-y-4">
+      <p className="flex items-center gap-2 rounded-xl border border-emerald-500/20 bg-emerald-500/5 px-4 py-3 text-xs text-emerald-700 dark:text-emerald-400">
+        <CheckCircle2 className="h-4 w-4 shrink-0" />
+        <span>
+          <strong>{email}</strong> verificado correctamente
+        </span>
+      </p>
+
+      <NameFields
+        idPrefix="request"
+        firstName={firstName}
+        lastName={lastName}
+        onFirstNameChange={(value) => onDetails({ firstName: value })}
+        onLastNameChange={(value) => onDetails({ lastName: value })}
+        required
+      />
+
+      <Field
+        label="¿Con qué función participas?"
+        htmlFor="request-role"
+        hint="Un administrador revisará la solicitud y confirmará tu función antes de darte acceso."
+      >
+        <select
+          id="request-role"
+          value={role}
+          onChange={(event) => onDetails({ role: event.target.value as UserRole })}
+          className={INPUT_CLASS}
+        >
+          {ROLES.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+      </Field>
+
+      {/* El aviso va antes de la casilla: la autorización sólo es informada si se ve al darla. */}
+      <PrivacyNoticeSummary country={country} />
+
+      <label
+        htmlFor="request-data-policy"
+        className="flex items-start gap-2.5 text-xs text-muted-foreground leading-relaxed"
+      >
+        <input
+          id="request-data-policy"
+          type="checkbox"
+          checked={acceptsDataPolicy}
+          onChange={(event) => onDetails({ acceptsDataPolicy: event.target.checked })}
+          required
+          className="mt-0.5 h-4 w-4 shrink-0 accent-[hsl(var(--primary))]"
+        />
+        <span>
+          {country === 'COLOMBIA'
+            ? 'Autorizo de forma previa, expresa e informada el tratamiento de mis datos personales conforme a '
+            : 'He leído '}
+          <Link href="/legal#privacy" target="_blank" className="font-semibold text-primary hover:underline">
+            {PRIVACY_REFERENCE[country]}
+          </Link>{' '}
+          y acepto los{' '}
+          <Link href="/legal#terms" target="_blank" className="font-semibold text-primary hover:underline">
+            términos de uso
+          </Link>
+          .
+        </span>
+      </label>
+
+      <div className="flex gap-2 pt-2">
+        <SecondaryButton onClick={onCancel}>Cancelar</SecondaryButton>
+        <SubmitButton
+          form={form}
+          idle="Enviar solicitud"
+          busy="Enviando…"
+          disabled={!firstName.trim() || !lastName.trim() || !acceptsDataPolicy}
+          className="h-12 flex-1"
+        />
+      </div>
+    </form>
+  );
+}
+
+function StepProgress({ current }: { current: AccessRequestStep }) {
   const currentIndex = STEPS.findIndex((step) => step.id === current);
 
   return (

@@ -89,3 +89,14 @@ export function contactFromCandidate(candidate: ContactCandidate): Contact {
     canWrite: true,
   };
 }
+
+/**
+ * Lo que se dice cuando la lista de conversaciones sale vacía. La administración habla con toda
+ * su sede; el resto, con quienes comparten un curso.
+ */
+export function emptyContactsHint(searching: boolean, wholeSite: boolean): string {
+  if (searching) return 'Ninguna conversación coincide con la búsqueda.';
+  return wholeSite
+    ? 'Busca a una persona de tu sede para iniciar una conversación.'
+    : 'Busca un compañero o examinador de tu curso para iniciar una conversación.';
+}

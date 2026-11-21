@@ -1,7 +1,7 @@
 import { ChatService } from './chat.service';
 import { ChatAccess } from './chat-access';
 import { sessionFor } from '../common/testing/test-campus';
-import { chatCampus } from '../common/testing/chat-campus';
+import { chatCampus } from './testing/chat-campus';
 
 /**
  * Vaciar una conversación.

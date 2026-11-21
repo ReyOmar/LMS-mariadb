@@ -9,6 +9,7 @@ import { PrismaModule } from './prisma/prisma.module';
 import { RealtimeModule } from './realtime/realtime.module';
 import { SettingsModule } from './settings/settings.module';
 import { StorageModule } from './storage/storage.module';
+import { StorageApiModule } from './storage/storage-api.module';
 import { MailModule } from './mail/mail.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { AuthModule } from './auth/auth.module';
@@ -21,9 +22,9 @@ import { CertificatesModule } from './certificates/certificates.module';
 import { IntegrationsModule } from './integrations/integrations.module';
 import { MaintenanceModule } from './maintenance/maintenance.module';
 import { HealthModule } from './health/health.module';
-import { ListenersModule } from './common/listeners/listeners.module';
+import { ListenersModule } from './listeners/listeners.module';
 
-import { JwtGuard } from './common/guards/jwt.guard';
+import { JwtGuard } from './auth/guards/jwt.guard';
 import { RolesGuard } from './common/guards/roles.guard';
 import { RATE_LIMITS, RateLimitGuard } from './common/guards/rate-limit.guard';
 
@@ -61,6 +62,7 @@ const TOKEN_VALIDITY = '24h';
     PrismaModule,
     RealtimeModule,
     StorageModule,
+    StorageApiModule,
     SettingsModule,
     MailModule,
     NotificationsModule,

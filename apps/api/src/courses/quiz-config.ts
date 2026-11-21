@@ -248,15 +248,9 @@ function validateQuestion(question: unknown, index: number): QuizQuestion {
     throw new BadRequestException(`La pregunta ${questionNumber} no puede tener más de ${MAX_OPTIONS} opciones.`);
   }
 
-  const options: QuizOption[] = rawOptions.map((option, i) => {
-    if (!isObject(option) || typeof option.id !== 'string' || !option.id) {
-      throw new BadRequestException(`La opción ${i + 1} de la pregunta ${questionNumber} no tiene identificador.`);
-    }
-    if (typeof option.text !== 'string' || !option.text.trim()) {
-      throw new BadRequestException(`La opción ${i + 1} de la pregunta ${questionNumber} está vacía.`);
-    }
-    return { id: option.id, text: option.text, isCorrect: option.isCorrect === true };
-  });
+  const options = rawOptions.map((option, i) =>
+    validateOption(option, `La opción ${i + 1} de la pregunta ${questionNumber}`),
+  );
 
   // La respuesta del alumno es el identificador de la opción: repetido, no se sabría cuál eligió.
   if (firstRepeated(options.map((option) => option.id)) !== null) {
@@ -271,6 +265,17 @@ function validateQuestion(question: unknown, index: number): QuizQuestion {
   }
 
   return { id: question.id, prompt: question.prompt, options };
+}
+
+/** @param name Cómo se nombra la opción en los mensajes: «La opción 2 de la pregunta 3». */
+function validateOption(option: unknown, name: string): QuizOption {
+  if (!isObject(option) || typeof option.id !== 'string' || !option.id) {
+    throw new BadRequestException(`${name} no tiene identificador.`);
+  }
+  if (typeof option.text !== 'string' || !option.text.trim()) {
+    throw new BadRequestException(`${name} está vacía.`);
+  }
+  return { id: option.id, text: option.text, isCorrect: option.isCorrect === true };
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {

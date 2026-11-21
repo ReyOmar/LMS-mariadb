@@ -1,13 +1,12 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { ChevronUp, GraduationCap, LogOut, Menu, Settings, X } from 'lucide-react';
-import api, { fileUrlFor } from '@/lib/api';
-import { useSession } from '@/contexts/SessionContext';
+import { fileUrlFor } from '@/lib/api';
+import { useSession, type Role } from '@/contexts/SessionContext';
 import { useConfig } from '@/contexts/ConfigContext';
-import { useRealtimeEvent } from '@/contexts/RealtimeContext';
 import { ThemeToggle } from '@/components/ui/ThemeToggle';
 import { PhotoOrInitials } from '@/components/ui/UserAvatar';
 import { NotificationCenter } from '@/components/features/NotificationCenter';
@@ -15,71 +14,17 @@ import { AccountSettings } from '@/components/features/AccountSettings';
 import { CountryIndicator } from '@/components/features/CountryIndicator';
 import { useDialog } from '@/hooks/useDialog';
 import { NAVIGATION, ROLE_NAMES, type MenuLink } from './navigation';
+import { useSidebarCounters, type SidebarCounters } from './useSidebarCounters';
 
 export function Sidebar() {
   const { role, user, logout } = useSession();
   const { config } = useConfig();
   const pathname = usePathname() ?? '';
 
-  const [menuOpen, setMenuOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
-  const [pendingRequests, setPendingRequests] = useState(0);
-  const [unreadMessages, setUnreadMessages] = useState(0);
   const [unreadNotifications, setUnreadNotifications] = useState(0);
-
-  const menuContainer = useRef<HTMLDivElement>(null);
-
-  // ── Contadores ──
-
-  // Un contador que no carga no debe interrumpir la navegación: los fallos se ignoran.
-  const countRequests = useCallback(async () => {
-    if (role !== 'admin') return;
-    try {
-      // Basta el recuento; la lista completa de solicitudes no hace falta para un número.
-      const { data } = await api.get<{ count: number }>('/auth/access-requests/pending-count');
-      setPendingRequests(data.count);
-    } catch {
-      // Se deja el valor anterior.
-    }
-  }, [role]);
-
-  const countMessages = useCallback(async () => {
-    try {
-      const { data } = await api.get<{ unreadCount?: number }[]>('/notifications/messages/contacts');
-      setUnreadMessages(data.reduce((total, contact) => total + (contact.unreadCount ?? 0), 0));
-    } catch {
-      // Se deja el valor anterior.
-    }
-  }, []);
-
-  useEffect(() => {
-    void countRequests();
-  }, [countRequests]);
-
-  // Se cuenta al cargar y al entrar o salir de la bandeja, por si se perdió algún aviso.
-  const inInbox = pathname.startsWith('/dashboard/messages');
-  useEffect(() => {
-    void countMessages();
-  }, [inInbox, countMessages]);
-
-  useRealtimeEvent('request:new', countRequests);
-  useRealtimeEvent('request:resolved', countRequests);
-  // Cada mensaje nuevo suma uno; al leer una conversación —en esta pestaña o en otra— el
-  // servidor lo anuncia y se vuelve a contar.
-  useRealtimeEvent('message:new', () => setUnreadMessages((total) => total + 1));
-  useRealtimeEvent('message:read', countMessages);
-
-  // ── Interacción ──
-
-  useEffect(() => {
-    if (!menuOpen) return;
-    const onClickOutside = (event: MouseEvent) => {
-      if (!menuContainer.current?.contains(event.target as Node)) setMenuOpen(false);
-    };
-    document.addEventListener('mousedown', onClickOutside);
-    return () => document.removeEventListener('mousedown', onClickOutside);
-  }, [menuOpen]);
+  const counters = useSidebarCounters(role, pathname);
 
   // Navegar cierra el menú móvil; si no, quedaría tapando la pantalla de destino.
   useEffect(() => setMobileOpen(false), [pathname]);
@@ -91,43 +36,20 @@ export function Sidebar() {
     label: 'Menú principal',
   });
 
-  const counters = { requests: pendingRequests, messages: unreadMessages };
   // En el móvil la campana y los contadores quedan dentro del menú cerrado: el botón lo señala.
-  const somethingNew = unreadNotifications + unreadMessages + pendingRequests > 0;
+  const somethingNew = unreadNotifications + counters.messages + counters.requests > 0;
   const name = user ? `${user.firstName} ${user.lastName}`.trim() : 'Usuario';
   const logo = fileUrlFor(config?.logoUrl);
+  const platformName = config?.platformName ?? 'PESV Education';
 
   return (
     <>
-      {/* En el móvil, una barra con fondo: el contenido pasa por debajo de ella al desplazarse,
-          en lugar de quedar tapado por un botón suelto. */}
-      <header className="lg:hidden fixed inset-x-0 top-0 z-[110] border-b border-border/50 bg-card/95 backdrop-blur-sm pt-[env(safe-area-inset-top)]">
-        <div className="h-14 flex items-center gap-2 px-2">
-          <button
-            type="button"
-            onClick={() => setMobileOpen(true)}
-            className="relative h-11 w-11 shrink-0 inline-flex items-center justify-center rounded-xl text-foreground hover:bg-muted transition-colors"
-            aria-label={somethingNew ? 'Abrir menú (hay novedades)' : 'Abrir menú'}
-          >
-            <Menu className="h-5 w-5" />
-            {somethingNew && (
-              <span className="absolute top-2 right-2 h-2.5 w-2.5 rounded-full bg-red-600 ring-2 ring-card" />
-            )}
-          </button>
-          <div className="flex items-center gap-2 min-w-0">
-            {logo ? (
-              <img src={logo} alt="" className="max-h-8 max-w-[32px] object-contain shrink-0" />
-            ) : (
-              <span className="h-8 w-8 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
-                <GraduationCap className="h-4 w-4 text-primary" />
-              </span>
-            )}
-            <span className="truncate text-sm font-semibold text-foreground">
-              {config?.platformName ?? 'PESV Education'}
-            </span>
-          </div>
-        </div>
-      </header>
+      <MobileTopBar
+        logo={logo}
+        platformName={platformName}
+        somethingNew={somethingNew}
+        onOpen={() => setMobileOpen(true)}
+      />
 
       {mobileOpen && (
         <div
@@ -154,7 +76,7 @@ export function Sidebar() {
                 <GraduationCap className="h-4.5 w-4.5 text-primary" />
               </div>
             )}
-            <span className="truncate font-semibold text-foreground">{config?.platformName ?? 'PESV Education'}</span>
+            <span className="truncate font-semibold text-foreground">{platformName}</span>
           </div>
 
           <div className="shrink-0 flex items-center gap-1">
@@ -177,74 +99,159 @@ export function Sidebar() {
           <CountryIndicator readOnly />
         </div>
 
-        {/* Navegación */}
-        <nav className="py-5 px-3 flex-1 overflow-y-auto">
-          {NAVIGATION[role].map((section) => (
-            <div key={section.title} className="space-y-0.5 mb-6">
-              <p className="sidebar-section-label">{section.title}</p>
-              {section.links.map((link) => (
-                <SidebarLink
-                  key={link.href + link.label}
-                  link={link}
-                  active={isActiveRoute(pathname, link.href)}
-                  counter={link.counter ? counters[link.counter] : 0}
-                />
-              ))}
-            </div>
-          ))}
-        </nav>
+        <SidebarNav role={role} pathname={pathname} counters={counters} />
 
-        {/* Pie con la cuenta */}
-        <div className="p-3 border-t border-border/30 shrink-0 relative" ref={menuContainer}>
-          {menuOpen && (
-            <div className="absolute bottom-full left-3 right-3 mb-2 bg-card border border-border/50 rounded-xl shadow-2xl overflow-hidden z-20">
-              <button
-                type="button"
-                onClick={() => {
-                  setMenuOpen(false);
-                  setSettingsOpen(true);
-                }}
-                className="w-full flex items-center gap-3 px-4 py-3 text-sm font-medium hover:bg-muted/50 transition-colors"
-              >
-                <Settings className="h-4 w-4 text-muted-foreground" /> Mi cuenta
-              </button>
-
-              <div className="border-t border-border/50" />
-              <button
-                type="button"
-                onClick={logout}
-                className="w-full flex items-center gap-3 px-4 py-3 text-sm font-medium text-destructive dark:text-red-400 hover:bg-destructive/5 transition-colors"
-              >
-                <LogOut className="h-4 w-4" /> Cerrar sesión
-              </button>
-            </div>
-          )}
-
-          <div className="flex items-center justify-between">
-            <button
-              type="button"
-              onClick={() => setMenuOpen((open) => !open)}
-              className="flex items-center gap-3 overflow-hidden flex-1 rounded-xl px-2 py-2 hover:bg-muted/50 transition-colors"
-              aria-expanded={menuOpen}
-            >
-              <span className="h-9 w-9 shrink-0 rounded-xl overflow-hidden shadow-sm bg-primary text-primary-foreground flex items-center justify-center font-bold text-sm">
-                <PhotoOrInitials person={user ?? {}} />
-              </span>
-              <span className="truncate flex-1 text-left">
-                <span className="block text-sm font-semibold leading-none truncate">{name}</span>
-                <span className="block text-[11px] text-muted-foreground mt-1 truncate">{ROLE_NAMES[role]}</span>
-              </span>
-              <ChevronUp
-                className={`h-4 w-4 text-muted-foreground shrink-0 transition-transform ${menuOpen ? '' : 'rotate-180'}`}
-              />
-            </button>
-            <ThemeToggle />
-          </div>
-        </div>
+        <AccountMenu
+          name={name}
+          roleName={ROLE_NAMES[role]}
+          person={user ?? {}}
+          onOpenSettings={() => setSettingsOpen(true)}
+          onLogout={logout}
+        />
       </aside>
 
       <AccountSettings open={settingsOpen} onClose={() => setSettingsOpen(false)} />
     </>
+  );
+}
+
+/**
+ * En el móvil, una barra con fondo: el contenido pasa por debajo de ella al desplazarse, en lugar
+ * de quedar tapado por un botón suelto.
+ */
+function MobileTopBar({
+  logo,
+  platformName,
+  somethingNew,
+  onOpen,
+}: {
+  logo: string | null | undefined;
+  platformName: string;
+  somethingNew: boolean;
+  onOpen: () => void;
+}) {
+  return (
+    <header className="lg:hidden fixed inset-x-0 top-0 z-[110] border-b border-border/50 bg-card/95 backdrop-blur-sm pt-[env(safe-area-inset-top)]">
+      <div className="h-14 flex items-center gap-2 px-2">
+        <button
+          type="button"
+          onClick={onOpen}
+          className="relative h-11 w-11 shrink-0 inline-flex items-center justify-center rounded-xl text-foreground hover:bg-muted transition-colors"
+          aria-label={somethingNew ? 'Abrir menú (hay novedades)' : 'Abrir menú'}
+        >
+          <Menu className="h-5 w-5" />
+          {somethingNew && (
+            <span className="absolute top-2 right-2 h-2.5 w-2.5 rounded-full bg-red-600 ring-2 ring-card" />
+          )}
+        </button>
+        <div className="flex items-center gap-2 min-w-0">
+          {logo ? (
+            <img src={logo} alt="" className="max-h-8 max-w-[32px] object-contain shrink-0" />
+          ) : (
+            <span className="h-8 w-8 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
+              <GraduationCap className="h-4 w-4 text-primary" />
+            </span>
+          )}
+          <span className="truncate text-sm font-semibold text-foreground">{platformName}</span>
+        </div>
+      </div>
+    </header>
+  );
+}
+
+function SidebarNav({ role, pathname, counters }: { role: Role; pathname: string; counters: SidebarCounters }) {
+  return (
+    <nav className="py-5 px-3 flex-1 overflow-y-auto">
+      {NAVIGATION[role].map((section) => (
+        <div key={section.title} className="space-y-0.5 mb-6">
+          <p className="sidebar-section-label">{section.title}</p>
+          {section.links.map((link) => (
+            <SidebarLink
+              key={link.href + link.label}
+              link={link}
+              active={isActiveRoute(pathname, link.href)}
+              counter={link.counter ? counters[link.counter] : 0}
+            />
+          ))}
+        </div>
+      ))}
+    </nav>
+  );
+}
+
+/** El pie del menú: quién ha entrado, con «Mi cuenta» y «Cerrar sesión» en un menú desplegable. */
+function AccountMenu({
+  name,
+  roleName,
+  person,
+  onOpenSettings,
+  onLogout,
+}: {
+  name: string;
+  roleName: string;
+  person: Parameters<typeof PhotoOrInitials>[0]['person'];
+  onOpenSettings: () => void;
+  onLogout: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const container = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onClickOutside = (event: MouseEvent) => {
+      if (!container.current?.contains(event.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', onClickOutside);
+    return () => document.removeEventListener('mousedown', onClickOutside);
+  }, [open]);
+
+  return (
+    <div className="p-3 border-t border-border/30 shrink-0 relative" ref={container}>
+      {open && (
+        <div className="absolute bottom-full left-3 right-3 mb-2 bg-card border border-border/50 rounded-xl shadow-2xl overflow-hidden z-20">
+          <button
+            type="button"
+            onClick={() => {
+              setOpen(false);
+              onOpenSettings();
+            }}
+            className="w-full flex items-center gap-3 px-4 py-3 text-sm font-medium hover:bg-muted/50 transition-colors"
+          >
+            <Settings className="h-4 w-4 text-muted-foreground" /> Mi cuenta
+          </button>
+
+          <div className="border-t border-border/50" />
+          <button
+            type="button"
+            onClick={onLogout}
+            className="w-full flex items-center gap-3 px-4 py-3 text-sm font-medium text-destructive dark:text-red-400 hover:bg-destructive/5 transition-colors"
+          >
+            <LogOut className="h-4 w-4" /> Cerrar sesión
+          </button>
+        </div>
+      )}
+
+      <div className="flex items-center justify-between">
+        <button
+          type="button"
+          onClick={() => setOpen((current) => !current)}
+          className="flex items-center gap-3 overflow-hidden flex-1 rounded-xl px-2 py-2 hover:bg-muted/50 transition-colors"
+          aria-expanded={open}
+        >
+          <span className="h-9 w-9 shrink-0 rounded-xl overflow-hidden shadow-sm bg-primary text-primary-foreground flex items-center justify-center font-bold text-sm">
+            <PhotoOrInitials person={person} />
+          </span>
+          <span className="truncate flex-1 text-left">
+            <span className="block text-sm font-semibold leading-none truncate">{name}</span>
+            <span className="block text-[11px] text-muted-foreground mt-1 truncate">{roleName}</span>
+          </span>
+          <ChevronUp
+            className={`h-4 w-4 text-muted-foreground shrink-0 transition-transform ${open ? '' : 'rotate-180'}`}
+          />
+        </button>
+        <ThemeToggle />
+      </div>
+    </div>
   );
 }
 

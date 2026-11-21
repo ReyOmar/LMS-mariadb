@@ -1,13 +1,12 @@
 'use client';
 
-import { FormEvent, useState } from 'react';
 import { Key, Loader2, Mail, Pencil, UserPlus, X } from 'lucide-react';
-import api, { errorMessage } from '@/lib/api';
-import { useAlerts } from '@/contexts/AlertContext';
+import type { LucideIcon } from 'lucide-react';
 import { useDialog } from '@/hooks/useDialog';
 import { USER_ROLE_LABEL } from '@/lib/labels';
 import type { User, UserRole } from '@/types/models';
 import { ROLE_OPTIONS, roleChangeProblem } from './accounts';
+import { FIELD_IDS, useAccountForm } from './useAccountForm';
 
 interface Props {
   /** Cuenta que se edita; sin ella, el formulario da de alta una nueva. */
@@ -20,13 +19,10 @@ interface Props {
   onSaved: (user: User) => void;
 }
 
-const FIELDS = [
-  { key: 'firstName', id: 'account-first-name', label: 'Nombre', example: 'Juan' },
-  { key: 'lastName', id: 'account-last-name', label: 'Apellido', example: 'Pérez' },
+const NAME_FIELDS = [
+  { key: 'firstName', label: 'Nombre', example: 'Juan' },
+  { key: 'lastName', label: 'Apellido', example: 'Pérez' },
 ] as const;
-
-/** Dónde está cada campo obligatorio, para llevar el foco al primero que falte. */
-const FIELD_IDS = { firstName: 'account-first-name', lastName: 'account-last-name', email: 'account-email' } as const;
 
 const LABEL_CLASS = 'block text-xs font-bold text-muted-foreground uppercase tracking-wider mb-1.5';
 const INPUT_CLASS =
@@ -34,80 +30,9 @@ const INPUT_CLASS =
 
 /** El correo no se edita: identifica la cuenta al recuperar la contraseña. */
 export function AccountForm({ account, initialRole = 'STUDENT', isSelf = false, onClose, onSaved }: Props) {
-  const { showAlert, showConfirmation, notify } = useAlerts();
-  const [form, setForm] = useState({
-    firstName: account?.firstName ?? '',
-    lastName: account?.lastName ?? '',
-    email: account?.email ?? '',
-    role: account?.role ?? initialRole,
-  });
-  const [saving, setSaving] = useState(false);
-  // Campos obligatorios que estaban vacíos al intentar guardar: se marcan hasta que se escriben.
-  const [missing, setMissing] = useState<ReadonlySet<string>>(new Set());
-  const edit = (key: 'firstName' | 'lastName' | 'email', value: string) => {
-    setForm((current) => ({ ...current, [key]: value }));
-    if (missing.has(key)) setMissing((current) => new Set([...current].filter((field) => field !== key)));
-  };
+  const { form, editing, saving, missing, unchanged, roleChanges, roleRestriction, edit, setRole, save } =
+    useAccountForm({ account, initialRole, isSelf, onClose, onSaved });
   const { dialogProps, titleId } = useDialog<HTMLFormElement>({ onClose });
-
-  const editing = Boolean(account);
-  const firstName = form.firstName.trim();
-  const lastName = form.lastName.trim();
-  const roleChanges = editing && form.role !== account?.role;
-  const unchanged = editing && firstName === account?.firstName && lastName === account?.lastName && !roleChanges;
-  const roleRestriction = account
-    ? ROLE_OPTIONS.map((role) => roleChangeProblem(account, role, isSelf)).find(Boolean)
-    : null;
-
-  const save = async (event: FormEvent) => {
-    event.preventDefault();
-    if (saving || unchanged) return;
-
-    const email = form.email.trim();
-    const empty = [!firstName && 'firstName', !lastName && 'lastName', !editing && !email && 'email'].filter(
-      (field): field is string => Boolean(field),
-    );
-    if (empty.length > 0) {
-      setMissing(new Set(empty));
-      document.getElementById(FIELD_IDS[empty[0] as keyof typeof FIELD_IDS])?.focus();
-      notify.warning('Completa los campos marcados.');
-      return;
-    }
-
-    if (account && roleChanges) {
-      const confirmed = await showConfirmation(
-        `¿Pasar a ${account.firstName} ${account.lastName} a ${USER_ROLE_LABEL[form.role].toLowerCase()}?`,
-        'Se cerrará su sesión y tendrá que volver a entrar para ver las opciones de su nuevo rol.',
-        'Cambiar rol',
-        'warning',
-      );
-      if (!confirmed) return;
-    }
-
-    setSaving(true);
-    try {
-      const { data } = account
-        ? await api.patch<{ message: string; user: User }>(`/auth/users/${encodeURIComponent(account.guid)}`, {
-            firstName,
-            lastName,
-            ...(roleChanges ? { role: form.role } : {}),
-          })
-        : await api.post<{ message: string; user: User }>('/auth/users', {
-            firstName,
-            lastName,
-            email,
-            role: form.role,
-          });
-      notify.success(data.message);
-      onSaved(data.user);
-      onClose();
-    } catch (error) {
-      showAlert.error(account ? 'No se pudo guardar' : 'No se pudo crear la cuenta', errorMessage(error));
-    } finally {
-      setSaving(false);
-    }
-  };
-
   const Icon = editing ? Pencil : UserPlus;
 
   return (
@@ -121,114 +46,43 @@ export function AccountForm({ account, initialRole = 'STUDENT', isSelf = false, 
         className="bg-card border border-border/50 rounded-2xl shadow-2xl w-full max-w-md max-h-[90dvh] overflow-y-auto animate-in zoom-in-95 slide-in-from-bottom-4 duration-300"
         onClick={(event) => event.stopPropagation()}
       >
-        <div className="flex items-center justify-between p-6 border-b border-border/50">
-          <div className="flex items-center gap-3">
-            <div className="p-2.5 bg-primary/10 rounded-xl">
-              <Icon className="h-5 w-5 text-primary" />
-            </div>
-            <div>
-              <h2 id={titleId} className="text-lg font-bold">
-                {editing ? 'Editar cuenta' : 'Nuevo usuario'}
-              </h2>
-              <p className="text-xs text-muted-foreground">
-                {editing ? account?.email : 'Cuenta de esta sede, con acceso según su rol'}
-              </p>
-            </div>
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="p-2 hover:bg-muted rounded-xl transition-colors"
-            aria-label="Cerrar"
-          >
-            <X className="h-5 w-5 text-muted-foreground" />
-          </button>
-        </div>
+        <FormHeader
+          icon={Icon}
+          titleId={titleId}
+          title={editing ? 'Editar cuenta' : 'Nuevo usuario'}
+          subtitle={editing ? account?.email : 'Cuenta de esta sede, con acceso según su rol'}
+          onClose={onClose}
+        />
 
         <div className="p-6 space-y-4">
           <div className="grid grid-cols-2 gap-3">
-            {FIELDS.map(({ key, id, label, example }) => (
-              <div key={key}>
-                <label htmlFor={id} className={LABEL_CLASS}>
-                  {label}
-                </label>
-                <input
-                  id={id}
-                  type="text"
-                  value={form[key]}
-                  onChange={(event) => edit(key, event.target.value)}
-                  className={INPUT_CLASS}
-                  placeholder={example}
-                  aria-invalid={missing.has(key)}
-                  aria-describedby={missing.has(key) ? `${id}-error` : undefined}
-                />
-                {missing.has(key) && <RequiredNote id={`${id}-error`} />}
-              </div>
+            {NAME_FIELDS.map(({ key, label, example }) => (
+              <NameInput
+                key={key}
+                id={FIELD_IDS[key]}
+                label={label}
+                example={example}
+                value={form[key]}
+                missing={missing.has(key)}
+                onChange={(value) => edit(key, value)}
+              />
             ))}
           </div>
 
           {!editing && (
-            <div>
-              <label htmlFor="account-email" className={LABEL_CLASS}>
-                Correo electrónico
-              </label>
-              <div className="relative">
-                <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                <input
-                  id="account-email"
-                  type="email"
-                  value={form.email}
-                  onChange={(event) => edit('email', event.target.value)}
-                  className={`${INPUT_CLASS} pl-10 pr-4`}
-                  placeholder="correo@ejemplo.com"
-                  aria-invalid={missing.has('email')}
-                  aria-describedby={missing.has('email') ? 'account-email-error' : undefined}
-                />
-              </div>
-              {missing.has('email') && <RequiredNote id="account-email-error" />}
-            </div>
+            <EmailInput value={form.email} missing={missing.has('email')} onChange={(value) => edit('email', value)} />
           )}
 
-          <div>
-            <label htmlFor="account-role" className={LABEL_CLASS}>
-              Rol
-            </label>
-            <select
-              id="account-role"
-              value={form.role}
-              onChange={(event) => setForm((current) => ({ ...current, role: event.target.value as UserRole }))}
-              className={INPUT_CLASS}
-            >
-              {ROLE_OPTIONS.map((role) => (
-                <option
-                  key={role}
-                  value={role}
-                  disabled={account ? roleChangeProblem(account, role, isSelf) !== null : false}
-                >
-                  {USER_ROLE_LABEL[role]}
-                </option>
-              ))}
-            </select>
-            {roleRestriction && <p className="text-xs text-muted-foreground mt-1.5">{roleRestriction}</p>}
-            {roleChanges && (
-              <p className="text-xs text-amber-800 dark:text-amber-400 mt-1.5">
-                Cambiar el rol cierra su sesión: tendrá que volver a entrar.
-              </p>
-            )}
-          </div>
+          <RoleSelect
+            account={account}
+            isSelf={isSelf}
+            value={form.role}
+            restriction={roleRestriction}
+            changes={roleChanges}
+            onChange={setRole}
+          />
 
-          {!editing && (
-            <div className="bg-amber-500/5 border border-amber-500/20 rounded-xl p-3 flex items-start gap-2.5">
-              <Key className="h-4 w-4 text-amber-500 shrink-0 mt-0.5" />
-              <div>
-                <p className="text-xs font-bold text-amber-800 dark:text-amber-400">Contraseña temporal</p>
-                <p className="text-[10px] text-muted-foreground mt-0.5">
-                  La genera el sistema y le llega por correo a la persona, que deberá cambiarla la primera vez que
-                  entre.
-                </p>
-              </div>
-            </div>
-          )}
+          {!editing && <TemporaryPasswordNote />}
         </div>
 
         <div className="flex items-center justify-end gap-3 p-6 border-t border-border/50">
@@ -249,6 +103,165 @@ export function AccountForm({ account, initialRole = 'STUDENT', isSelf = false, 
           </button>
         </div>
       </form>
+    </div>
+  );
+}
+
+function FormHeader({
+  icon: Icon,
+  titleId,
+  title,
+  subtitle,
+  onClose,
+}: {
+  icon: LucideIcon;
+  titleId: string;
+  title: string;
+  subtitle?: string;
+  onClose: () => void;
+}) {
+  return (
+    <div className="flex items-center justify-between p-6 border-b border-border/50">
+      <div className="flex items-center gap-3">
+        <div className="p-2.5 bg-primary/10 rounded-xl">
+          <Icon className="h-5 w-5 text-primary" />
+        </div>
+        <div>
+          <h2 id={titleId} className="text-lg font-bold">
+            {title}
+          </h2>
+          <p className="text-xs text-muted-foreground">{subtitle}</p>
+        </div>
+      </div>
+      <button
+        type="button"
+        onClick={onClose}
+        className="p-2 hover:bg-muted rounded-xl transition-colors"
+        aria-label="Cerrar"
+      >
+        <X className="h-5 w-5 text-muted-foreground" />
+      </button>
+    </div>
+  );
+}
+
+interface InputProps {
+  value: string;
+  /** Se intentó guardar con el campo vacío: se marca hasta que se escribe. */
+  missing: boolean;
+  onChange: (value: string) => void;
+}
+
+function NameInput({
+  id,
+  label,
+  example,
+  value,
+  missing,
+  onChange,
+}: InputProps & { id: string; label: string; example: string }) {
+  return (
+    <div>
+      <label htmlFor={id} className={LABEL_CLASS}>
+        {label}
+      </label>
+      <input
+        id={id}
+        type="text"
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        className={INPUT_CLASS}
+        placeholder={example}
+        aria-invalid={missing}
+        aria-describedby={missing ? `${id}-error` : undefined}
+      />
+      {missing && <RequiredNote id={`${id}-error`} />}
+    </div>
+  );
+}
+
+function EmailInput({ value, missing, onChange }: InputProps) {
+  const id = FIELD_IDS.email;
+  return (
+    <div>
+      <label htmlFor={id} className={LABEL_CLASS}>
+        Correo electrónico
+      </label>
+      <div className="relative">
+        <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+        <input
+          id={id}
+          type="email"
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          className={`${INPUT_CLASS} pl-10 pr-4`}
+          placeholder="correo@ejemplo.com"
+          aria-invalid={missing}
+          aria-describedby={missing ? `${id}-error` : undefined}
+        />
+      </div>
+      {missing && <RequiredNote id={`${id}-error`} />}
+    </div>
+  );
+}
+
+/** Los roles a los que no se puede pasar la cuenta salen desactivados, con el motivo debajo. */
+function RoleSelect({
+  account,
+  isSelf,
+  value,
+  restriction,
+  changes,
+  onChange,
+}: {
+  account?: User;
+  isSelf: boolean;
+  value: UserRole;
+  restriction: string | null | undefined;
+  changes: boolean;
+  onChange: (role: UserRole) => void;
+}) {
+  return (
+    <div>
+      <label htmlFor="account-role" className={LABEL_CLASS}>
+        Rol
+      </label>
+      <select
+        id="account-role"
+        value={value}
+        onChange={(event) => onChange(event.target.value as UserRole)}
+        className={INPUT_CLASS}
+      >
+        {ROLE_OPTIONS.map((role) => (
+          <option
+            key={role}
+            value={role}
+            disabled={account ? roleChangeProblem(account, role, isSelf) !== null : false}
+          >
+            {USER_ROLE_LABEL[role]}
+          </option>
+        ))}
+      </select>
+      {restriction && <p className="text-xs text-muted-foreground mt-1.5">{restriction}</p>}
+      {changes && (
+        <p className="text-xs text-amber-800 dark:text-amber-400 mt-1.5">
+          Cambiar el rol cierra su sesión: tendrá que volver a entrar.
+        </p>
+      )}
+    </div>
+  );
+}
+
+function TemporaryPasswordNote() {
+  return (
+    <div className="bg-amber-500/5 border border-amber-500/20 rounded-xl p-3 flex items-start gap-2.5">
+      <Key className="h-4 w-4 text-amber-500 shrink-0 mt-0.5" />
+      <div>
+        <p className="text-xs font-bold text-amber-800 dark:text-amber-400">Contraseña temporal</p>
+        <p className="text-[10px] text-muted-foreground mt-0.5">
+          La genera el sistema y le llega por correo a la persona, que deberá cambiarla la primera vez que entre.
+        </p>
+      </div>
     </div>
   );
 }

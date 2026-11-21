@@ -1,25 +1,16 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
 import { AlertCircle, Camera, CheckCircle, Loader2, Lock, Save, Trash2, User, X } from 'lucide-react';
-import api, { errorMessage, uploadFile } from '@/lib/api';
 import { useSession, type SessionUser } from '@/contexts/SessionContext';
-import { useAlerts } from '@/contexts/AlertContext';
 import { COUNTRY_INFO } from '@/lib/country';
-import { PASSWORD_HINT, passwordProblem } from '@/lib/password';
-import { uploadLimit } from '@/lib/upload-limits';
+import { PASSWORD_HINT } from '@/lib/password';
 import { CountryFlag } from '@/components/ui/CountryFlag';
 import { Field, NameFields, PasswordInput } from '@/components/ui/FormFields';
 import { PhotoOrInitials } from '@/components/ui/UserAvatar';
 import { useDialog } from '@/hooks/useDialog';
-
-/** Imágenes admitidas para la foto de perfil. */
-const IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
-
-interface Feedback {
-  type: 'success' | 'error';
-  text: string;
-}
+import { PHOTO_TYPES, type SettingsForm } from './account-settings/settings';
+import { useAccountSettings, type Feedback } from './account-settings/useAccountSettings';
 
 /**
  * Datos de la cuenta: nombre, foto y contraseña.
@@ -36,110 +27,12 @@ export function AccountSettings({ open, onClose }: { open: boolean; onClose: () 
   return <AccountSettingsDialog user={user} onClose={onClose} />;
 }
 
+type Update = (field: keyof SettingsForm) => (value: string) => void;
+
 function AccountSettingsDialog({ user, onClose }: { user: SessionUser; onClose: () => void }) {
-  const { refreshUser } = useSession();
-  const { notify } = useAlerts();
   const { dialogProps, titleId } = useDialog({ onClose });
-
-  const [firstName, setFirstName] = useState(user.firstName);
-  const [lastName, setLastName] = useState(user.lastName);
-  const [currentPassword, setCurrentPassword] = useState('');
-  const [newPassword, setNewPassword] = useState('');
-  const [confirmation, setConfirmation] = useState('');
-
-  const [saving, setSaving] = useState(false);
-  const [uploadingPhoto, setUploadingPhoto] = useState(false);
-  const [feedback, setFeedback] = useState<Feedback | null>(null);
-
-  const photoInput = useRef<HTMLInputElement>(null);
-  const feedbackBox = useRef<HTMLParagraphElement>(null);
-
-  // El aviso sale arriba: quien guarda desde el final del formulario no lo vería sin llevarlo a la vista.
-  useEffect(() => {
-    feedbackBox.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-  }, [feedback]);
-
-  const changesPassword = newPassword.length > 0;
-
-  const validate = (): string | null => {
-    if (!firstName.trim() || !lastName.trim()) return 'El nombre y el apellido son obligatorios.';
-    if (!changesPassword) return null;
-    if (!currentPassword) return 'Escribe tu contraseña actual para poder cambiarla.';
-    const problem = passwordProblem(newPassword);
-    if (problem) return problem;
-    if (newPassword !== confirmation) return 'La nueva contraseña y su confirmación no coinciden.';
-    return null;
-  };
-
-  const save = async () => {
-    const problem = validate();
-    if (problem) {
-      setFeedback({ type: 'error', text: problem });
-      return;
-    }
-
-    setSaving(true);
-    try {
-      await api.patch('/auth/me', {
-        firstName: firstName.trim(),
-        lastName: lastName.trim(),
-        ...(changesPassword ? { currentPassword, newPassword } : {}),
-      });
-
-      // Cambiar la contraseña cierra la sesión: el servidor revoca el token y la siguiente
-      // petición devolverá al login. La ventana se queda abierta con el aviso, porque hay
-      // que leerlo: cerrarla dejaría al usuario mirando una pantalla que va a expulsarlo.
-      if (changesPassword) {
-        setFeedback({ type: 'success', text: 'Contraseña actualizada. Vuelve a iniciar sesión con la nueva.' });
-        return;
-      }
-
-      await refreshUser();
-      // Guardado sin novedad: se confirma con un aviso pasajero y la ventana se cierra.
-      notify.success('Tus datos se han actualizado.');
-      onClose();
-    } catch (error) {
-      setFeedback({ type: 'error', text: errorMessage(error, 'No se pudieron guardar los cambios.') });
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const uploadPhoto = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    // Se vacía para que volver a elegir el mismo archivo, ya corregido, dispare el cambio otra vez.
-    event.target.value = '';
-    if (!file) return;
-
-    if (!IMAGE_TYPES.includes(file.type)) {
-      setFeedback({ type: 'error', text: 'La foto debe ser una imagen JPG, PNG, WebP o GIF.' });
-      return;
-    }
-
-    setUploadingPhoto(true);
-    try {
-      await uploadFile('/auth/me/photo', file, { limit: uploadLimit('avatars') });
-      await refreshUser();
-      setFeedback({ type: 'success', text: 'Foto de perfil actualizada.' });
-    } catch (error) {
-      setFeedback({ type: 'error', text: errorMessage(error, 'No se pudo subir la foto.') });
-    } finally {
-      setUploadingPhoto(false);
-    }
-  };
-
-  const deletePhoto = async () => {
-    setUploadingPhoto(true);
-    try {
-      await api.delete('/auth/me/photo');
-      await refreshUser();
-      setFeedback({ type: 'success', text: 'Foto de perfil eliminada.' });
-    } catch (error) {
-      setFeedback({ type: 'error', text: errorMessage(error, 'No se pudo eliminar la foto.') });
-    } finally {
-      setUploadingPhoto(false);
-    }
-  };
+  const settings = useAccountSettings(user, onClose);
+  const { form, update, feedback } = settings;
 
   return (
     <div
@@ -162,78 +55,14 @@ function AccountSettingsDialog({ user, onClose }: { user: SessionUser; onClose: 
         </div>
 
         <div className="flex-1 overflow-y-auto p-6 space-y-6">
-          {feedback && (
-            <p
-              ref={feedbackBox}
-              role={feedback.type === 'error' ? 'alert' : 'status'}
-              className={`flex items-start gap-2 rounded-xl border px-4 py-3 text-sm font-medium ${
-                feedback.type === 'success'
-                  ? 'border-emerald-500/20 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400'
-                  : 'border-destructive/20 bg-destructive/10 text-destructive dark:text-red-400'
-              }`}
-            >
-              {feedback.type === 'success' ? (
-                <CheckCircle className="h-4 w-4 mt-0.5 shrink-0" />
-              ) : (
-                <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" />
-              )}
-              {feedback.text}
-            </p>
-          )}
+          {feedback && <FeedbackMessage feedback={feedback} />}
 
-          {/* Identidad */}
-          <section className="flex items-center gap-4">
-            <div className="relative">
-              <div className="h-20 w-20 rounded-2xl overflow-hidden bg-primary text-primary-foreground flex items-center justify-center text-2xl font-bold">
-                <PhotoOrInitials person={user} />
-              </div>
-              {uploadingPhoto && (
-                <div className="absolute inset-0 rounded-2xl bg-black/50 flex items-center justify-center">
-                  <Loader2 className="h-5 w-5 animate-spin text-white" />
-                </div>
-              )}
-            </div>
-
-            <div className="min-w-0 flex-1">
-              <p className="font-bold truncate">
-                {user.firstName} {user.lastName}
-              </p>
-              <p className="text-sm text-muted-foreground truncate">{user.email}</p>
-              <p className="text-xs text-muted-foreground mt-1 inline-flex items-center gap-1.5">
-                Sede <CountryFlag country={user.country} size="sm" /> {COUNTRY_INFO[user.country].name}
-              </p>
-
-              <div className="mt-3 flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  onClick={() => photoInput.current?.click()}
-                  disabled={uploadingPhoto}
-                  className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-bold hover:bg-muted transition-colors disabled:opacity-60"
-                >
-                  <Camera className="h-3.5 w-3.5" /> Cambiar foto
-                </button>
-                {user.photoUrl && (
-                  <button
-                    type="button"
-                    onClick={deletePhoto}
-                    disabled={uploadingPhoto}
-                    className="inline-flex items-center gap-1.5 rounded-lg border border-destructive/30 px-3 py-1.5 text-xs font-bold text-destructive dark:text-red-400 hover:bg-destructive/5 transition-colors disabled:opacity-60"
-                  >
-                    <Trash2 className="h-3.5 w-3.5" /> Quitar
-                  </button>
-                )}
-              </div>
-
-              <input
-                ref={photoInput}
-                type="file"
-                accept={IMAGE_TYPES.join(',')}
-                onChange={uploadPhoto}
-                className="hidden"
-                aria-label="Foto de perfil"
-              />
-            </div>
-          </section>
+          <IdentitySection
+            user={user}
+            uploading={settings.uploadingPhoto}
+            onUpload={settings.uploadPhoto}
+            onDelete={settings.deletePhoto}
+          />
 
           {/* Datos personales */}
           <section className="space-y-4">
@@ -243,10 +72,10 @@ function AccountSettingsDialog({ user, onClose }: { user: SessionUser; onClose: 
 
             <NameFields
               idPrefix="settings"
-              firstName={firstName}
-              lastName={lastName}
-              onFirstNameChange={setFirstName}
-              onLastNameChange={setLastName}
+              firstName={form.firstName}
+              lastName={form.lastName}
+              onFirstNameChange={update('firstName')}
+              onLastNameChange={update('lastName')}
             />
 
             <p className="text-xs text-muted-foreground">
@@ -255,43 +84,7 @@ function AccountSettingsDialog({ user, onClose }: { user: SessionUser; onClose: 
             </p>
           </section>
 
-          {/* Contraseña */}
-          <section className="space-y-4">
-            <h3 className="flex items-center gap-2 text-sm font-bold">
-              <Lock className="h-4 w-4 text-muted-foreground" /> Cambiar contraseña
-            </h3>
-
-            <Field label="Contraseña actual" htmlFor="settings-current-password">
-              <PasswordInput
-                id="settings-current-password"
-                value={currentPassword}
-                onChange={(event) => setCurrentPassword(event.target.value)}
-                autoComplete="current-password"
-              />
-            </Field>
-            <Field label="Nueva contraseña" htmlFor="settings-new-password" hint={PASSWORD_HINT}>
-              <PasswordInput
-                id="settings-new-password"
-                value={newPassword}
-                onChange={(event) => setNewPassword(event.target.value)}
-                autoComplete="new-password"
-              />
-            </Field>
-            <Field label="Repite la nueva contraseña" htmlFor="settings-confirm-password">
-              <PasswordInput
-                id="settings-confirm-password"
-                value={confirmation}
-                onChange={(event) => setConfirmation(event.target.value)}
-                autoComplete="new-password"
-              />
-            </Field>
-
-            {changesPassword && (
-              <p className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-xs text-amber-800 dark:text-amber-400">
-                Al cambiar la contraseña se cerrará tu sesión y tendrás que entrar de nuevo.
-              </p>
-            )}
-          </section>
+          <PasswordSection form={form} update={update} changesPassword={settings.changesPassword} />
         </div>
 
         <div className="flex shrink-0 justify-end gap-2 border-t border-border bg-card px-6 py-4">
@@ -304,15 +97,167 @@ function AccountSettingsDialog({ user, onClose }: { user: SessionUser; onClose: 
           </button>
           <button
             type="button"
-            onClick={save}
-            disabled={saving}
+            onClick={settings.save}
+            disabled={settings.saving}
             className="inline-flex h-10 items-center gap-2 rounded-xl bg-primary px-5 text-sm font-bold text-primary-foreground hover:bg-primary/90 disabled:opacity-60 transition-colors"
           >
-            {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+            {settings.saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
             Guardar cambios
           </button>
         </div>
       </div>
     </div>
+  );
+}
+
+/** El resultado de la última acción. Sale arriba y se lleva a la vista: quien guarda desde el final no lo vería. */
+function FeedbackMessage({ feedback }: { feedback: Feedback }) {
+  const box = useRef<HTMLParagraphElement>(null);
+
+  useEffect(() => {
+    box.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }, [feedback]);
+
+  return (
+    <p
+      ref={box}
+      role={feedback.type === 'error' ? 'alert' : 'status'}
+      className={`flex items-start gap-2 rounded-xl border px-4 py-3 text-sm font-medium ${
+        feedback.type === 'success'
+          ? 'border-emerald-500/20 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400'
+          : 'border-destructive/20 bg-destructive/10 text-destructive dark:text-red-400'
+      }`}
+    >
+      {feedback.type === 'success' ? (
+        <CheckCircle className="h-4 w-4 mt-0.5 shrink-0" />
+      ) : (
+        <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" />
+      )}
+      {feedback.text}
+    </p>
+  );
+}
+
+/** Foto, nombre, correo y sede, con los botones para cambiar o quitar la foto. */
+function IdentitySection({
+  user,
+  uploading,
+  onUpload,
+  onDelete,
+}: {
+  user: SessionUser;
+  uploading: boolean;
+  onUpload: (file: File) => void;
+  onDelete: () => void;
+}) {
+  const photoInput = useRef<HTMLInputElement>(null);
+
+  return (
+    <section className="flex items-center gap-4">
+      <div className="relative">
+        <div className="h-20 w-20 rounded-2xl overflow-hidden bg-primary text-primary-foreground flex items-center justify-center text-2xl font-bold">
+          <PhotoOrInitials person={user} />
+        </div>
+        {uploading && (
+          <div className="absolute inset-0 rounded-2xl bg-black/50 flex items-center justify-center">
+            <Loader2 className="h-5 w-5 animate-spin text-white" />
+          </div>
+        )}
+      </div>
+
+      <div className="min-w-0 flex-1">
+        <p className="font-bold truncate">
+          {user.firstName} {user.lastName}
+        </p>
+        <p className="text-sm text-muted-foreground truncate">{user.email}</p>
+        <p className="text-xs text-muted-foreground mt-1 inline-flex items-center gap-1.5">
+          Sede <CountryFlag country={user.country} size="sm" /> {COUNTRY_INFO[user.country].name}
+        </p>
+
+        <div className="mt-3 flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={() => photoInput.current?.click()}
+            disabled={uploading}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-bold hover:bg-muted transition-colors disabled:opacity-60"
+          >
+            <Camera className="h-3.5 w-3.5" /> Cambiar foto
+          </button>
+          {user.photoUrl && (
+            <button
+              type="button"
+              onClick={onDelete}
+              disabled={uploading}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-destructive/30 px-3 py-1.5 text-xs font-bold text-destructive dark:text-red-400 hover:bg-destructive/5 transition-colors disabled:opacity-60"
+            >
+              <Trash2 className="h-3.5 w-3.5" /> Quitar
+            </button>
+          )}
+        </div>
+
+        <input
+          ref={photoInput}
+          type="file"
+          accept={PHOTO_TYPES.join(',')}
+          onChange={(event) => {
+            const file = event.target.files?.[0];
+            // Se vacía para que volver a elegir el mismo archivo, ya corregido, dispare el cambio otra vez.
+            event.target.value = '';
+            if (file) onUpload(file);
+          }}
+          className="hidden"
+          aria-label="Foto de perfil"
+        />
+      </div>
+    </section>
+  );
+}
+
+function PasswordSection({
+  form,
+  update,
+  changesPassword,
+}: {
+  form: SettingsForm;
+  update: Update;
+  changesPassword: boolean;
+}) {
+  return (
+    <section className="space-y-4">
+      <h3 className="flex items-center gap-2 text-sm font-bold">
+        <Lock className="h-4 w-4 text-muted-foreground" /> Cambiar contraseña
+      </h3>
+
+      <Field label="Contraseña actual" htmlFor="settings-current-password">
+        <PasswordInput
+          id="settings-current-password"
+          value={form.currentPassword}
+          onChange={(event) => update('currentPassword')(event.target.value)}
+          autoComplete="current-password"
+        />
+      </Field>
+      <Field label="Nueva contraseña" htmlFor="settings-new-password" hint={PASSWORD_HINT}>
+        <PasswordInput
+          id="settings-new-password"
+          value={form.newPassword}
+          onChange={(event) => update('newPassword')(event.target.value)}
+          autoComplete="new-password"
+        />
+      </Field>
+      <Field label="Repite la nueva contraseña" htmlFor="settings-confirm-password">
+        <PasswordInput
+          id="settings-confirm-password"
+          value={form.confirmation}
+          onChange={(event) => update('confirmation')(event.target.value)}
+          autoComplete="new-password"
+        />
+      </Field>
+
+      {changesPassword && (
+        <p className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-xs text-amber-800 dark:text-amber-400">
+          Al cambiar la contraseña se cerrará tu sesión y tendrás que entrar de nuevo.
+        </p>
+      )}
+    </section>
   );
 }

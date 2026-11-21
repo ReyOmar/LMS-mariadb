@@ -1,4 +1,4 @@
-import { AUTO_UNLOCK_HOURS, isResourceUnlocked, waitedTooLong } from './progression';
+import { AUTO_UNLOCK_HOURS, isResourceUnlocked, unlockedResources, waitedTooLong } from './progression';
 
 /**
  * Orden estricto del curso en el servidor.
@@ -13,6 +13,27 @@ const COURSE = [{ resources: [{ guid: 'r1' }, { guid: 'r2' }] }, { resources: [{
 const done = (...guids: string[]) => new Set(guids);
 
 describe('progresión del curso', () => {
+  describe('unlockedResources', () => {
+    const guids = COURSE.flatMap((module) => module.resources.map((resource) => resource.guid));
+
+    it('abre hasta el primero sin completar, él incluido', () => {
+      expect([...unlockedResources(COURSE, done())]).toEqual(['r1']);
+      expect([...unlockedResources(COURSE, done('r1', 'r2'))]).toEqual(['r1', 'r2', 'r3']);
+    });
+
+    it('con todo completado está abierto el curso entero', () => {
+      expect([...unlockedResources(COURSE, done(...guids))]).toEqual(guids);
+    });
+
+    it('dice lo mismo que la comprobación recurso a recurso', () => {
+      for (const completed of [done(), done('r1'), done('r4'), done('r1', 'r3'), done('r1', 'r2', 'r3')]) {
+        const open = unlockedResources(COURSE, completed);
+
+        for (const guid of guids) expect(open.has(guid)).toBe(isResourceUnlocked(COURSE, guid, completed));
+      }
+    });
+  });
+
   describe('isResourceUnlocked', () => {
     it('el primero siempre está abierto', () => {
       expect(isResourceUnlocked(COURSE, 'r1', done())).toBe(true);

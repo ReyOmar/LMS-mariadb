@@ -1,5 +1,5 @@
 import { ProfileService } from './profile.service';
-import { fileOwnershipDouble } from '../common/testing/file-ownership-double';
+import { fileOwnershipDouble } from '../storage/testing/file-ownership-double';
 
 /** Versión vigente de la política de datos en todas las pruebas. */
 const settings = { legalVersion: async () => '2026-09-25' };

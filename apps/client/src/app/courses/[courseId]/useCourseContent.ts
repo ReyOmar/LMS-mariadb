@@ -160,6 +160,7 @@ export function useCourseContent(courseId: string) {
       setLoadError(null);
       loadAll();
     },
+    reload: loadAll,
     refreshProgress: loadProgress,
     handleAccessError,
     markCompleted,

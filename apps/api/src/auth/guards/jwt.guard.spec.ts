@@ -1,7 +1,7 @@
 import { ExecutionContext, ForbiddenException, UnauthorizedException } from '@nestjs/common';
 import { JwtGuard } from './jwt.guard';
-import { IS_PUBLIC } from '../decorators/public.decorator';
-import { BEFORE_CONSENT } from '../decorators/before-consent.decorator';
+import { IS_PUBLIC } from '../../common/decorators/public.decorator';
+import { BEFORE_CONSENT } from '../../common/decorators/before-consent.decorator';
 
 /**
  * Por qué se queda alguien fuera.

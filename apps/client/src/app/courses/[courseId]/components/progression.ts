@@ -4,7 +4,7 @@
 import type { CourseProgress } from '@/types/models';
 
 interface PathModule {
-  resources?: { guid: string }[];
+  resources?: { guid: string; locked?: boolean }[];
 }
 
 type ResourceOf<M extends PathModule> = NonNullable<M['resources']>[number];
@@ -97,6 +97,14 @@ export function moduleStart<M extends PathModule>(
 ): ResourceOf<M> | null {
   const owner = syllabus.find((item) => item.entries.some((entry) => entry.resource.guid === resourceGuid));
   return owner?.entries[0]?.resource ?? null;
+}
+
+/**
+ * Hay algo abierto cuyo contenido no ha llegado: la API lo entregó vacío porque entonces aún no
+ * tocaba, y el avance lo ha abierto después.
+ */
+export function hasContentToLoad<M extends PathModule>(syllabus: SyllabusModule<M>[]): boolean {
+  return allEntries(syllabus).some((entry) => entry.open && entry.resource.locked === true);
 }
 
 /** Todo está completado y el curso tiene contenido: el servidor pudo cerrar ya la vuelta. */

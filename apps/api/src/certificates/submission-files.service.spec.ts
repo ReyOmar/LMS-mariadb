@@ -1,5 +1,5 @@
 import { SubmissionFilesService, Round } from './submission-files.service';
-import { fileOwnershipDouble } from '../common/testing/file-ownership-double';
+import { fileOwnershipDouble } from '../storage/testing/file-ownership-double';
 
 /**
  * Las vueltas que se certificaron antes de que la emisión retirara los archivos entregados.

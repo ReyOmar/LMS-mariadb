@@ -1,5 +1,5 @@
 import { ContentRemovalService, ContentTarget } from './content-removal.service';
-import { fileOwnershipDouble } from '../common/testing/file-ownership-double';
+import { fileOwnershipDouble } from '../storage/testing/file-ownership-double';
 
 /**
  * Borrar una tarea, un módulo o un curso.

@@ -32,6 +32,18 @@ function managesCourses(role: UserRole): boolean {
   return role === 'TEACHER' || role === 'ADMIN';
 }
 
+/** Los datos de una cuenta que se escriben en el formulario. */
+export type AccountField = 'firstName' | 'lastName' | 'email';
+
+/**
+ * Los campos obligatorios que quedan vacíos, en el orden del formulario: el primero recibe el
+ * foco. El correo sólo se pide al crear la cuenta; después no se edita.
+ */
+export function missingAccountFields(values: Record<AccountField, string>, creating: boolean): AccountField[] {
+  const required: AccountField[] = creating ? ['firstName', 'lastName', 'email'] : ['firstName', 'lastName'];
+  return required.filter((field) => !values[field].trim());
+}
+
 /** Roles en el orden en que se ofrecen al crear o editar una cuenta. */
 export const ROLE_OPTIONS: UserRole[] = ['STUDENT', 'TEACHER', 'ADMIN'];
 
