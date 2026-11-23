@@ -30,6 +30,12 @@ interface RealtimeContextType {
    * estuvo dormida— y devuelve la función para darse de baja.
    */
   onReconnect: (listener: () => void) => () => void;
+  /**
+   * Reparte en esta pestaña un cambio que acaba de hacer ella misma, sin esperar al siguiente
+   * sondeo: así el resto de la pantalla (los contadores de la barra, por ejemplo) se pone al día
+   * en el acto. El servidor lo anunciará también, y volver a cargar es inocuo.
+   */
+  publish: (event: RealtimeEvent, data?: unknown) => void;
   onlineUsers: ReadonlySet<string>;
   coursesBeingEdited: Record<string, CourseEditor>;
 }
@@ -37,6 +43,7 @@ interface RealtimeContextType {
 const RealtimeContext = createContext<RealtimeContextType>({
   subscribe: () => () => undefined,
   onReconnect: () => () => undefined,
+  publish: () => undefined,
   onlineUsers: new Set(),
   coursesBeingEdited: {},
 });
@@ -202,8 +209,8 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const value = useMemo(
-    () => ({ subscribe, onReconnect, onlineUsers, coursesBeingEdited }),
-    [subscribe, onReconnect, onlineUsers, coursesBeingEdited],
+    () => ({ subscribe, onReconnect, publish: dispatch, onlineUsers, coursesBeingEdited }),
+    [subscribe, onReconnect, dispatch, onlineUsers, coursesBeingEdited],
   );
 
   return <RealtimeContext.Provider value={value}>{children}</RealtimeContext.Provider>;

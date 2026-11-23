@@ -2,13 +2,11 @@
 
 import { Suspense, useEffect, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { Award, Clock, GraduationCap, Star } from 'lucide-react';
-import { MAX_SCORE, averageScore } from '@/lib/grading';
+import { Award, Clock, Info } from 'lucide-react';
 import { PageLoader } from '@/components/ui/PageLoader';
+import { PageHeading } from '@/components/ui/PageHeading';
 import { LoadFailed } from '@/components/ui/LoadFailed';
 import { EmptyState } from '@/components/ui/EmptyState';
-import { HighlightedStat } from '@/components/ui/HighlightedStat';
-import type { Certificate } from '@/types/models';
 import { useCertificates, type CourseAwaitingGrading } from './useCertificates';
 import { CertificateCard } from './components/CertificateCard';
 import { CertificateDetails } from './components/CertificateDetails';
@@ -42,33 +40,30 @@ function StudentCertificates() {
   if (loading) return <PageLoader message="Cargando tus certificados…" />;
 
   return (
-    <div className="animate-in slide-in-from-bottom-4 duration-700">
-      <header className="mb-6 sm:mb-8">
-        <h1 className="text-xl sm:text-3xl font-bold tracking-tight text-foreground flex items-center gap-3">
-          <Award className="h-6 w-6 sm:h-8 sm:w-8 text-primary" />
-          Mis certificados
-        </h1>
-        <p className="text-muted-foreground mt-2">
-          Tus certificados de finalización de cursos. Descárgalos en formato PDF.
-        </p>
-      </header>
+    <>
+      <PageHeading
+        eyebrow="Área de aprendizaje"
+        title="Mis certificados"
+        lead="Se emiten al aprobar un curso. Cualquiera puede comprobar que son auténticos con su código."
+      />
 
       {error ? (
-        <LoadFailed message={error} onRetry={retry} />
+        <div className="mt-8">
+          <LoadFailed message={error} onRetry={retry} />
+        </div>
       ) : (
         <>
-          {certificates.length > 0 && <Summary certificates={certificates} />}
           {awaitingGrading.length > 0 && <AwaitingGrading courses={awaitingGrading} />}
 
           {certificates.length === 0 ? (
             <EmptyState
-              className="bg-card border border-border/50 rounded-2xl"
+              className="mt-8 rounded-3xl border border-border/60 bg-card"
               icon={<Award className="h-10 w-10" />}
               title="Aún no tienes certificados"
-              description="Los certificados se generan automáticamente cuando completas todos los módulos de un curso. ¡Sigue avanzando en tus cursos activos!"
+              description="Se generan solos cuando completas un curso con la nota mínima. ¡Sigue avanzando en tus cursos!"
             />
           ) : (
-            <ul className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            <ul className="mt-6 grid grid-cols-1 gap-5 lg:grid-cols-2">
               {certificates.map((certificate) => (
                 <li key={certificate.guid}>
                   <CertificateCard
@@ -81,6 +76,14 @@ function StudentCertificates() {
               ))}
             </ul>
           )}
+
+          <p className="mt-6 flex gap-3 rounded-2xl bg-primary/10 px-4 py-3.5 text-[13px] leading-relaxed text-primary">
+            <Info className="mt-0.5 h-4 w-4 shrink-0" />
+            <span>
+              ¿Te falta un certificado? Se emite al aprobar todos los recursos del curso con la nota mínima. Si crees
+              que hay un error, escríbele a tu examinador.
+            </span>
+          </p>
         </>
       )}
 
@@ -94,64 +97,29 @@ function StudentCertificates() {
           }}
         />
       )}
-    </div>
-  );
-}
-
-function Summary({ certificates }: { certificates: Certificate[] }) {
-  const hours = Math.round(certificates.reduce((sum, certificate) => sum + certificate.hours, 0));
-  const average = averageScore(certificates.map((certificate) => certificate.averageScore));
-
-  return (
-    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-8">
-      <HighlightedStat
-        label="Certificados obtenidos"
-        value={certificates.length}
-        icon={<GraduationCap className="h-5 w-5" />}
-        color="success"
-      />
-      <HighlightedStat
-        label="Horas certificadas"
-        value={hours}
-        suffix="h"
-        icon={<Clock className="h-5 w-5" />}
-        color="info"
-      />
-      {average !== null && (
-        <HighlightedStat
-          label="Promedio general"
-          value={Math.round(average * 10) / 10}
-          suffix={` / ${MAX_SCORE}`}
-          icon={<Star className="h-5 w-5" />}
-          color="warning"
-        />
-      )}
-    </div>
+    </>
   );
 }
 
 function AwaitingGrading({ courses }: { courses: CourseAwaitingGrading[] }) {
   return (
-    <ul className="mb-8 space-y-3">
+    <ul className="mt-8 space-y-3">
       {courses.map((course) => (
         <li
           key={course.courseGuid}
-          className="bg-amber-500/5 border border-amber-500/20 rounded-2xl p-5 flex items-start gap-3"
+          className="flex gap-3 rounded-2xl bg-amber-500/12 px-4 py-3.5 text-[13px] leading-relaxed text-amber-900 dark:text-amber-300"
         >
-          <span className="w-10 h-10 bg-amber-500/10 rounded-xl flex items-center justify-center shrink-0">
-            <Clock className="h-5 w-5 text-amber-500" />
-          </span>
-          <div className="flex-1 min-w-0">
-            <h2 className="font-bold text-sm text-foreground mb-1">{course.courseTitle}: esperando calificación</h2>
-            <p className="text-xs text-muted-foreground mb-2 leading-relaxed">
-              Has completado todos los recursos de este curso. Tu certificado se generará automáticamente cuando el
-              examinador califique estas tareas:
+          <Clock className="mt-0.5 h-4 w-4 shrink-0" />
+          <div className="min-w-0">
+            <p>
+              <b className="font-bold">{course.courseTitle}: esperando calificación.</b> Completaste todos los recursos;
+              el certificado se emite solo cuando el examinador califique estas tareas:
             </p>
-            <ul className="flex flex-wrap gap-2">
+            <ul className="mt-2 flex flex-wrap gap-2">
               {course.pendingAssignments.map((assignment, index) => (
                 <li
                   key={`${assignment.title}-${index}`}
-                  className="inline-flex items-center gap-1 bg-amber-500/10 text-amber-800 dark:text-amber-400 text-xs font-medium px-2.5 py-1 rounded-lg"
+                  className="inline-flex items-center gap-1 rounded-lg bg-card/70 px-2.5 py-1 text-xs font-medium"
                 >
                   <Clock className="h-3 w-3" /> {assignment.title}
                 </li>

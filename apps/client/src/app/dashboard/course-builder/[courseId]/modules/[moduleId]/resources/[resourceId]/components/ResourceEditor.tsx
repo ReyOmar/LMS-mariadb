@@ -36,7 +36,7 @@ export function ResourceEditor({ course, moduleGuid, target }: Props) {
   };
 
   return (
-    <div className="animate-in slide-in-from-bottom-4 duration-700 max-w-4xl mx-auto h-[calc(100vh-6rem)] flex flex-col py-6">
+    <div className="animate-in slide-in-from-bottom-4 duration-700 max-w-4xl mx-auto h-[calc(var(--shell-content-h)-2rem)] flex flex-col py-6">
       <EditorHeader
         kind={target.kind}
         isNew={!target.resource}

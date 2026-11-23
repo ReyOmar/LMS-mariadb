@@ -7,6 +7,7 @@ import { PageLoader } from '@/components/ui/PageLoader';
 import { CourseCatalogView } from './components/CourseCatalogView';
 import { CourseWorkspace } from './components/CourseWorkspace';
 import { selectionFromAddress } from './components/selection';
+import { ASSIGNMENTS_PATH } from './components/paths';
 
 /** Constructor de cursos: el catálogo o, con `?course=` en la dirección, el curso abierto. */
 export default function CourseBuilderPage() {
@@ -23,14 +24,14 @@ function CourseBuilder() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const courseGuid = searchParams?.get('course');
-  // El examinador no tiene catálogo: llega siempre desde su tablero con el curso en la dirección.
-  const sendToDashboard = role === 'teacher' && !courseGuid;
+  // El examinador no ve el catálogo de la sede: llega desde «Mis asignaciones» con el curso en la dirección.
+  const sendToAssignments = role === 'teacher' && !courseGuid;
 
   useEffect(() => {
-    if (sendToDashboard) router.replace('/dashboard');
-  }, [sendToDashboard, router]);
+    if (sendToAssignments) router.replace(ASSIGNMENTS_PATH);
+  }, [sendToAssignments, router]);
 
-  if (sendToDashboard) return <PageLoader message="Volviendo a tus asignaciones..." />;
+  if (sendToAssignments) return <PageLoader message="Volviendo a tus asignaciones..." />;
   if (!courseGuid) return <CourseCatalogView />;
 
   return (

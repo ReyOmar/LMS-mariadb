@@ -69,3 +69,16 @@ export function scoreColor(score: unknown, threshold: number = DEFAULT_PASSING_S
   if (num >= threshold * 0.75) return 'text-amber-800 dark:text-amber-400';
   return 'text-red-700 dark:text-red-400';
 }
+
+/**
+ * Horas que una entrega puede esperar nota antes de que el alumno siga avanzando sin ella. Es la
+ * misma regla que aplica la API (`AUTO_UNLOCK_HOURS` en `apps/api/src/courses/progression.ts`).
+ */
+export const AUTO_UNLOCK_HOURS = 48;
+
+/** Si una entrega ya esperó tanto que el alumno sigue sin su nota. */
+export function waitedTooLong(submittedAt: string | null | undefined, now: number = Date.now()): boolean {
+  if (!submittedAt) return false;
+  const sent = Date.parse(submittedAt);
+  return Number.isFinite(sent) && sent <= now - AUTO_UNLOCK_HOURS * 60 * 60 * 1000;
+}

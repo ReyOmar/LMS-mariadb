@@ -7,6 +7,11 @@ import {
   timeAgo,
   setTimeZone,
   calendarDay,
+  todayHeading,
+  greetingAt,
+  waitLabel,
+  dayMonth,
+  studyTime,
 } from './dates';
 
 /**
@@ -140,5 +145,45 @@ describe('timeAgo', () => {
 
   it('una fecha corrupta no imprime «Invalid Date» en pantalla', () => {
     expect(timeAgo('no es una fecha', now)).toBeNull();
+  });
+});
+
+describe('tableros «Hoy»', () => {
+  afterEach(() => setTimeZone(undefined));
+
+  it('el día y el mes, sin punto de abreviatura', () => {
+    setTimeZone('America/Bogota');
+    expect(dayMonth('2026-11-20T15:00:00Z')).toBe('20 nov');
+    expect(dayMonth(null)).toBe('Sin fecha');
+  });
+
+  it('el encabezado es el día de la sede', () => {
+    setTimeZone('America/Bogota');
+    expect(todayHeading(new Date('2026-11-22T03:00:00Z'))).toBe('sábado, 21 de noviembre');
+  });
+
+  it('el saludo sigue la hora de la sede', () => {
+    setTimeZone('America/Bogota');
+    expect(greetingAt(new Date('2026-11-21T13:00:00Z'))).toBe('Buenos días');
+    expect(greetingAt(new Date('2026-11-21T20:00:00Z'))).toBe('Buenas tardes');
+    expect(greetingAt(new Date('2026-11-22T01:00:00Z'))).toBe('Buenas noches');
+  });
+
+  it('la espera se dice en su orden de magnitud', () => {
+    const now = Date.parse('2026-11-21T12:00:00Z');
+    expect(waitLabel('2026-11-21T11:40:00Z', now)).toBe('20 min');
+    expect(waitLabel('2026-11-21T07:00:00Z', now)).toBe('5 h');
+    expect(waitLabel('2026-11-20T10:00:00Z', now)).toBe('1 día');
+    expect(waitLabel('2026-11-18T12:00:00Z', now)).toBe('3 días');
+    expect(waitLabel(null, now)).toBe('');
+  });
+
+  it('el tiempo de estudio en horas y minutos, sin decimales', () => {
+    expect(studyTime(0)).toBe('0 min');
+    expect(studyTime(45)).toBe('45 min');
+    expect(studyTime(60)).toBe('1 h');
+    expect(studyTime(80)).toBe('1 h 20 min');
+    expect(studyTime(125.4)).toBe('2 h 5 min');
+    expect(studyTime(-3)).toBe('0 min');
   });
 });

@@ -91,7 +91,7 @@ export default function ThemePage() {
         <Field
           label="Nombre de la plataforma"
           htmlFor="theme-platform-name"
-          hint="Aparece en la barra lateral, en el título del navegador y en los correos."
+          hint="Aparece en la barra superior del campus, en el título del navegador y en los correos."
         >
           <input
             id="theme-platform-name"
@@ -106,7 +106,7 @@ export default function ThemePage() {
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
           <ImageDropZone
             label="Logotipo"
-            hint={`Se muestra en la barra lateral, la portada, los correos y los certificados. ${LOGO_FORMAT}.`}
+            hint={`Se muestra en la barra superior del campus, la portada, los correos y los certificados. ${LOGO_FORMAT}.`}
             height="h-32"
             {...imageProps('logoUrl')}
           />

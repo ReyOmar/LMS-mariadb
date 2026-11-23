@@ -314,45 +314,26 @@ html {
 }
 
 /* ═══════════════════════════════════════════════════════════
-   BARRA LATERAL — sigue el modo claro u oscuro
+   MARCO DEL CAMPUS — barra superior y, en el teléfono, inferior
    ═══════════════════════════════════════════════════════════ */
-.sidebar-nav {
-  background: hsl(var(--card));
-  color: hsl(var(--foreground));
-  border-color: hsl(var(--border));
+:root {
+  --shell-header: 4rem;
+  --shell-pad-top: 2rem;
+  --shell-pad-bottom: 2rem;
+  /* Alto útil de una pantalla del campus: lo que queda entre las barras y los márgenes. Lo usan
+     las pantallas que ocupan todo el alto (mensajes, constructor, plantillas, matrículas). */
+  --shell-content-h: calc(
+    100dvh - var(--shell-header) - env(safe-area-inset-top) - var(--shell-pad-top) - var(--shell-pad-bottom)
+  );
 }
 
-.sidebar-nav .sidebar-link {
-  color: hsl(var(--muted-foreground));
-  transition: all 0.2s ease;
-  border-radius: 0.625rem;
-  padding: 0.5rem 0.75rem;
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  font-weight: 500;
-  font-size: 0.875rem;
-}
-
-.sidebar-nav .sidebar-link:hover {
-  background: hsl(var(--muted));
-  color: hsl(var(--foreground));
-}
-
-.sidebar-nav .sidebar-link-active {
-  background: hsl(var(--primary) / 0.1);
-  color: hsl(var(--primary));
-  font-weight: 600;
-}
-
-.sidebar-nav .sidebar-section-label {
-  color: hsl(var(--muted-foreground));
-  font-size: 0.7rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  padding: 0 0.5rem;
-  margin-bottom: 0.5rem;
+@media (max-width: 1023.98px) {
+  :root {
+    --shell-header: 3.5rem;
+    --shell-pad-top: 1.25rem;
+    /* La barra inferior mide 4.25rem más el borde seguro del teléfono; se deja aire por encima. */
+    --shell-pad-bottom: calc(5.5rem + env(safe-area-inset-bottom));
+  }
 }
 
 /* ═══════════════════════════════════════════════════════════
@@ -449,14 +430,6 @@ input[type='password']::-ms-clear {
 /* ═══════════════════════════════════════════════════════════
    MÓVIL Y PANTALLAS TÁCTILES
    ═══════════════════════════════════════════════════════════ */
-
-/* Tamaño mínimo de los enlaces de la barra lateral para pulsarlos con el dedo */
-@media (max-width: 1023px) {
-  .sidebar-nav .sidebar-link {
-    min-height: 44px;
-    padding: 0.625rem 0.75rem;
-  }
-}
 
 /* Campos a 16 px como mínimo en el móvil: con menos, Safari en el iPhone acerca la página al
    tocarlos. Fuera de las capas de Tailwind, así que manda sobre sus `text-sm` y `text-xs`; los

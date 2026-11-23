@@ -35,16 +35,3 @@ export function summarizeCourses(courses: Course[]): CourseSummary {
     },
   };
 }
-
-/** Lo que explica la cifra de cursos activos cuando es cero o hay alguno parado. */
-export function activeCoursesDetail(
-  summary: CourseSummary,
-  assigned: number,
-): { text: string; tone?: 'success' | 'warning' } | undefined {
-  if (summary.underMaintenance.length > 0) {
-    return { text: `${summary.underMaintenance.length} en mantenimiento`, tone: 'warning' };
-  }
-  if (summary.allCompleted) return { text: 'Todos completados', tone: 'success' };
-  if (assigned === 0) return { text: 'Sin cursos asignados' };
-  return undefined;
-}

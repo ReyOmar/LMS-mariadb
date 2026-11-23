@@ -63,6 +63,13 @@ export class AssessmentsController {
     return this.panels.getQuizAttempts(user, filter);
   }
 
+  /** Alumnos que agotaron los intentos de un cuestionario sin superarlo y esperan otro. */
+  @Roles('ADMIN', 'TEACHER')
+  @Get('/examiner/quizzes/blocked')
+  listBlockedStudents(@CurrentUser() user: JwtPayload) {
+    return this.panels.listBlockedStudents(user);
+  }
+
   /** Cifras de los cuestionarios por curso, calculadas sobre la mejor nota de cada alumno. */
   @Roles('ADMIN', 'TEACHER')
   @Get('/examiner/quizzes/summary')

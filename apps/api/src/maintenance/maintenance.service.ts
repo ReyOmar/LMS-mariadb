@@ -12,9 +12,7 @@ import { AFTER_LOCK, lockEnrollment } from '../enrollments/enrollment-lock';
 import { Country } from '../common/domain/country';
 import { countRejected, settleWithConcurrency } from '../common/domain/concurrency';
 import { plural } from '../common/domain/text';
-
-/** Días sin entrar tras los cuales se envía un recordatorio. */
-const INACTIVITY_DAYS = 3;
+import { INACTIVITY_DAYS } from '../common/domain/inactivity';
 
 /** Filas que se leen de una vez al recorrer una tabla entera. */
 const BATCH_SIZE = 500;

@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import api, { errorMessage } from '@/lib/api';
 import { useAlerts } from '@/contexts/AlertContext';
-import { useRealtimeEvent, useRealtimeReconnect } from '@/contexts/RealtimeContext';
+import { useRealtime, useRealtimeEvent, useRealtimeReconnect } from '@/contexts/RealtimeContext';
 import { useInFlight } from '@/hooks/useInFlight';
 import { USER_ROLE_LABEL } from '@/lib/labels';
 import type { AccessRequest } from '@/types/models';
@@ -17,6 +17,7 @@ const DECISION_NOTICE: Record<Decision, [title: string, message: string]> = {
 
 export function useAccessRequests() {
   const { showAlert, showConfirmation } = useAlerts();
+  const { publish } = useRealtime();
   const [requests, setRequests] = useState<AccessRequest[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -47,6 +48,8 @@ export function useAccessRequests() {
       try {
         await api.post(`/auth/access-requests/${request.id}/${decision}`, reason ? { reason } : {});
         setRequests((pending) => pending.filter((item) => item.id !== request.id));
+        // El contador de la barra se pone al día ya, sin esperar al aviso del servidor.
+        publish('request:resolved', { id: request.id });
         showAlert.success(...DECISION_NOTICE[decision]);
       } catch (failure) {
         showAlert.error('No se pudo procesar', errorMessage(failure));

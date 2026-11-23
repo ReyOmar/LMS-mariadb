@@ -6,10 +6,15 @@ import { useAlerts } from '@/contexts/AlertContext';
 /**
  * Curso abierto de una pantalla con directorio de cursos. Si deja de estar entre los del
  * examinador (se lo desasignaron o se borró), se vuelve al directorio avisando.
+ *
+ * @param initialGuid Curso con el que se abre la pantalla, cuando se llega desde un enlace (`?course=`).
  */
-export function useChosenCourse<T extends { courseGuid: string }>(courses: T[] | null) {
+export function useChosenCourse<T extends { courseGuid: string }>(
+  courses: T[] | null,
+  initialGuid: string | null = null,
+) {
   const { notify } = useAlerts();
-  const [courseGuid, setCourseGuid] = useState<string | null>(null);
+  const [courseGuid, setCourseGuid] = useState<string | null>(initialGuid);
 
   const course = courseGuid ? courses?.find((candidate) => candidate.courseGuid === courseGuid) : undefined;
   const vanished = Boolean(courses && courseGuid && !course);

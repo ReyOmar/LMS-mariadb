@@ -4,7 +4,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { StorageService } from '../storage/storage.service';
 import { CourseAccessService } from '../courses/course-access.service';
 import { AWAITING_GRADE } from '../courses/progression';
-import { allowedAttemptsOf } from '../courses/quiz-config';
+import { allowedAttemptsOf, quizDisplayTitle } from '../courses/quiz-config';
 import { toScore, passingThreshold } from '../common/domain/grading';
 import { JwtPayload } from '../common/interfaces/jwt-payload.interface';
 import { encodeCursor, rowsPerPage, decodeCursor, Cursor } from '../common/domain/pagination';
@@ -83,6 +83,24 @@ interface AttemptsByCourseRow extends CourseRow {
   assessed: CountValue;
   average: CountValue;
 }
+
+/** Quien agotó los intentos de un cuestionario sin superarlo, tal como sale de la base. */
+interface BlockedRow {
+  studentGuid: string;
+  firstName: string;
+  lastName: string;
+  resourceGuid: string;
+  quizTitle: string;
+  quizConfig: string | null;
+  courseGuid: string;
+  courseTitle: string;
+  used: CountValue;
+  lastAttemptAt: Date | null;
+  lastScore: Prisma.Decimal | number | string | null;
+}
+
+/** Lo más que devuelve la lista de bloqueados: es un aviso para «Hoy», no un listado completo. */
+const BLOCKED_LIMIT = 50;
 
 /** Qué entra en la cola. Un borrador es un intento a medias, no trabajo por corregir. */
 function queueStatusFilter(status?: QueueStatus): Prisma.SubmissionWhereInput['status'] {
@@ -426,6 +444,54 @@ export class ExaminerPanelsService {
         scores: rangesOf(row),
       };
     });
+  }
+
+  /**
+   * Quienes no pueden seguir: agotaron los intentos de un cuestionario sin superarlo y su vuelta
+   * sigue abierta. Son exactamente los casos que acepta «Habilitar otro intento»
+   * (`GradingService.enableNewAttempt`), así que cada uno se resuelve desde «Hoy». Primero quien
+   * lleva más tiempo bloqueado.
+   *
+   * Superar el cuestionario deja su recurso completado, así que «sin superarlo» es no tener ese
+   * progreso. Los intentos permitidos viven en la configuración del cuestionario y se comparan
+   * aquí, con la misma lectura que usa la API al abrir un intento.
+   */
+  async listBlockedStudents(user: JwtPayload) {
+    const rows = await this.prisma.$queryRaw<BlockedRow[]>`
+      SELECT e.usuario_guid AS studentGuid, u.nombre AS firstName, u.apellido AS lastName,
+             r.guid AS resourceGuid, r.titulo AS quizTitle, r.quiz_config AS quizConfig,
+             c.guid AS courseGuid, c.titulo AS courseTitle,
+             COUNT(*) AS used, MAX(e.fecha_entrega) AS lastAttemptAt,
+             (SELECT e2.calificacion FROM lms_entregas e2
+               WHERE e2.tarea_guid = r.guid AND e2.usuario_guid = e.usuario_guid AND e2.estado = 'CALIFICADA'
+               ORDER BY e2.intento_numero DESC, e2.fecha_entrega DESC LIMIT 1) AS lastScore
+      FROM lms_entregas e
+      JOIN lms_recursos r ON r.guid = e.tarea_guid AND r.quiz_config IS NOT NULL
+      JOIN lms_modulos mo ON mo.guid = r.modulo_guid
+      JOIN lms_cursos c ON c.guid = mo.curso_guid AND c.pais = ${user.country} ${this.ownOnly(user)}
+      JOIN lms_matriculas m ON m.usuario_guid = e.usuario_guid AND m.curso_guid = c.guid
+        AND m.activa = 1 AND m.fecha_finalizacion IS NULL
+      JOIN usuarios u ON u.guid = e.usuario_guid
+      LEFT JOIN lms_progreso_recurso p ON p.usuario_guid = e.usuario_guid AND p.recurso_guid = r.guid
+      WHERE e.estado <> 'BORRADOR' AND p.id IS NULL
+      GROUP BY e.usuario_guid, u.nombre, u.apellido, r.guid, r.titulo, r.quiz_config, c.guid, c.titulo
+      ORDER BY lastAttemptAt ASC`;
+
+    return rows
+      .map((row) => ({ row, allowed: allowedAttemptsOf(row.quizConfig) ?? 0 }))
+      .filter(({ row, allowed }) => allowed > 0 && Number(row.used) >= allowed)
+      .slice(0, BLOCKED_LIMIT)
+      .map(({ row, allowed }) => ({
+        student: { guid: row.studentGuid, firstName: row.firstName, lastName: row.lastName },
+        resourceGuid: row.resourceGuid,
+        quizTitle: quizDisplayTitle(row.quizTitle),
+        courseGuid: row.courseGuid,
+        courseTitle: row.courseTitle,
+        attempts: Number(row.used),
+        allowedAttempts: allowed,
+        lastAttemptAt: row.lastAttemptAt,
+        lastScore: toScore(row.lastScore),
+      }));
   }
 
   /**

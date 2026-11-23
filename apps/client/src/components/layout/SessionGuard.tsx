@@ -8,7 +8,6 @@ import { isCountry } from '@/lib/country';
 import { loginUrl } from '@/lib/api';
 import { FullScreenLoader, PageLoader } from '@/components/ui/PageLoader';
 import { DashboardShell } from '@/components/layout/DashboardShell';
-import { Sidebar } from '@/components/layout/Sidebar';
 
 /**
  * Qué rol puede entrar en cada zona del panel.
@@ -18,6 +17,8 @@ const PERMISSIONS: Record<string, Role[]> = {
   '/dashboard/admin': ['admin'],
   '/dashboard/course-builder': ['admin', 'teacher'],
   '/dashboard/examiner': ['admin', 'teacher'],
+  // Las asignaciones son del examinador; la administración gestiona los cursos en el constructor.
+  '/dashboard/examiner/courses': ['teacher'],
   '/dashboard/student': ['student'],
 };
 
@@ -28,7 +29,7 @@ const PERMISSIONS: Record<string, Role[]> = {
  * servidor va a rechazar de todas formas. La autorización real la aplica la API en cada
  * petición, así que saltarse esto no da acceso a ningún dato.
  *
- * Con una sesión guardada, el menú aparece en el acto y sólo el contenido espera a que el
+ * Con una sesión guardada, la navegación aparece en el acto y sólo el contenido espera a que el
  * servidor la confirme. Sin sesión no se pinta nada del panel: se lleva al acceso.
  */
 export function SessionGuard({ children }: { children: ReactNode }) {
@@ -62,7 +63,7 @@ export function SessionGuard({ children }: { children: ReactNode }) {
   if (!authenticated) return <FullScreenLoader message="Comprobando tu sesión…" />;
 
   return (
-    <DashboardShell sidebar={<Sidebar />}>
+    <DashboardShell>
       {ready && allowed ? children : <PageLoader message={ready ? 'Redirigiendo…' : 'Comprobando tu sesión…'} />}
     </DashboardShell>
   );

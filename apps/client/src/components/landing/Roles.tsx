@@ -16,7 +16,7 @@ const ROLES = [
   {
     icon: GraduationCap,
     title: 'Conductor',
-    text: 'Ve en su tablero el curso que sigue y su calendario, avanza módulo a módulo, presenta los cuestionarios y descarga sus certificados.',
+    text: 'Ve en «Hoy» lo que le toca para avanzar y su semana de estudio, avanza módulo a módulo, presenta los cuestionarios y descarga sus certificados.',
   },
 ] as const;
 

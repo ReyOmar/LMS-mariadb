@@ -27,7 +27,7 @@ export default function EmailTemplatesPage() {
 
   if (editing) {
     return (
-      <div className="h-[calc(100dvh-8rem)]">
+      <div className="h-[calc(var(--shell-content-h)-4rem)]">
         <TemplateEditor
           event={editing.event}
           template={editing.template}

@@ -270,6 +270,19 @@ export interface DailyActivity {
   day: string;
   submissions: number;
   resources: number;
+  /** Cuentas creadas ese día, de cualquier rol. */
+  users: number;
+}
+
+/**
+ * Algo que pasó en la sede durante la semana, para «Actividad reciente». `subject` es el curso o
+ * la tarea; en una cuenta nueva, su rol.
+ */
+export interface RecentEvent {
+  type: 'certificate' | 'enrollment' | 'submission' | 'account';
+  at: string;
+  person: string;
+  subject: string;
 }
 
 /** Cuántos alumnos tiene cada curso publicado. */
@@ -281,15 +294,20 @@ export interface CourseBreakdown {
 
 /** Resumen de la sede que alimenta el panel del administrador. */
 export interface CountrySummary {
-  users: { total: number; students: number; teachers: number; admins: number };
+  /** `newThisMonth`: cuentas creadas desde el día 1 del mes de la sede. */
+  users: { total: number; students: number; teachers: number; admins: number; newThisMonth: number };
   courses: { published: number; draft: number; total: number };
   /** Solicitudes de acceso por revisar. */
   pendingRequests: number;
   totalEnrollments: number;
+  /** Matrículas vigentes abiertas en los últimos siete días. */
+  newEnrollments: number;
   /** Media de las notas calificadas, en la escala 0-100. `null` si aun no hay ninguna. */
   overallAverage: number | null;
   weeklyActivity: DailyActivity[];
   courseBreakdown: CourseBreakdown[];
+  /** Lo último que pasó en la sede durante la semana, de lo más reciente a lo más antiguo. */
+  recentEvents: RecentEvent[];
 }
 
 /** Avance de un alumno en un módulo. Se pide al desplegar un curso en el monitoreo. */
@@ -335,6 +353,10 @@ export interface MonitoringSummary {
   ranges: number[];
   /** Alumnos por día de la semana de su último acceso, de domingo a sábado. */
   loginsPerDay: number[];
+  /** Alumnos con formación en curso que llevan más de `inactiveDays` días sin entrar. */
+  inactive: number;
+  /** Umbral de inactividad que aplica el campus (el del recordatorio automático). */
+  inactiveDays: number;
 }
 
 /** Avance acumulado del alumno en todos sus cursos. */

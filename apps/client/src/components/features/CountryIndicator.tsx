@@ -1,10 +1,11 @@
 'use client';
 
 import { Check, ChevronDown } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { COUNTRIES, Country, COUNTRY_INFO } from '@/lib/country';
 import { useCountry } from '@/contexts/CountryContext';
 import { CountryFlag } from '@/components/ui/CountryFlag';
+import { useDismiss } from '@/hooks/useDismiss';
 
 /**
  * Sede activa y, en las pantallas públicas, el sitio desde el que se cambia.
@@ -20,24 +21,11 @@ export function CountryIndicator({ compact = false, readOnly = false }: { compac
   const { country, selectCountry } = useCountry();
   const [open, setOpen] = useState(false);
   const container = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-
-    const onClickOutside = (event: MouseEvent) => {
-      if (!container.current?.contains(event.target as Node)) setOpen(false);
-    };
-    const onEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setOpen(false);
-    };
-
-    document.addEventListener('mousedown', onClickOutside);
-    document.addEventListener('keydown', onEscape);
-    return () => {
-      document.removeEventListener('mousedown', onClickOutside);
-      document.removeEventListener('keydown', onEscape);
-    };
-  }, [open]);
+  useDismiss(
+    container,
+    open,
+    useCallback(() => setOpen(false), []),
+  );
 
   const label = (
     <>

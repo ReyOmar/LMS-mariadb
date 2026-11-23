@@ -13,7 +13,7 @@ interface LeaveGuard {
  * Avisa antes de abandonar una pantalla con algo pendiente al cerrar o recargar la pestaña o
  * irse a otro sitio, donde sólo cabe el aviso del navegador, y al pulsar un enlace del campus,
  * que se detiene y se entrega a `onLeave`. Los enlaces se interceptan en captura porque los
- * del menú lateral son de Next y no pasan por la pantalla.
+ * de la barra de navegación son de Next y no pasan por la pantalla.
  *
  * No cubre los botones Atrás y Adelante del navegador mientras se mueven dentro del campus, que
  * cambian de pantalla sin recargar ni pulsar ningún enlace, ni lo que navega por código con

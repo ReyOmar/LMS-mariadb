@@ -1,5 +1,7 @@
 'use client';
 
+import { Suspense } from 'react';
+import { useSearchParams } from 'next/navigation';
 import api from '@/lib/api';
 import { PageLoader } from '@/components/ui/PageLoader';
 import { LoadFailed } from '@/components/ui/LoadFailed';
@@ -17,10 +19,23 @@ async function fetchSummary(): Promise<CourseSummary[]> {
   return data;
 }
 
-/** Calificación manual de entregas. Los cuestionarios se corrigen solos y tienen su propio panel. */
-export default function ManualGrading() {
+/**
+ * Calificación manual de entregas. Los cuestionarios se corrigen solos y tienen su propio panel.
+ * Con `?course=` (desde «Hoy») se abre directamente ese curso.
+ */
+export default function ManualGradingPage() {
+  // `useSearchParams` exige un límite de Suspense para que Next pueda prerenderizar la página.
+  return (
+    <Suspense fallback={<PageLoader message="Cargando entregas para calificar..." />}>
+      <ManualGrading />
+    </Suspense>
+  );
+}
+
+function ManualGrading() {
+  const requestedCourse = useSearchParams().get('course');
   const summary = useLiveData(fetchSummary, 'No se pudieron cargar las entregas.', SUMMARY_EVENTS);
-  const { course, open, close } = useChosenCourse(summary.data);
+  const { course, open, close } = useChosenCourse(summary.data, requestedCourse);
 
   if (!summary.data) {
     return summary.error ? (

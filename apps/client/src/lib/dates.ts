@@ -161,3 +161,48 @@ export function timeAgo(date: string | null | undefined, now: number = Date.now(
 
   return shortDateTime(instant);
 }
+
+/** «20 nov»: el día y el mes, para listas donde el año se sobreentiende. */
+export function dayMonth(value: string | Date | null | undefined): string {
+  const date = asDate(value);
+  return date
+    ? date.toLocaleDateString(LOCALE, { day: 'numeric', month: 'short', timeZone }).replace('.', '')
+    : NO_DATE;
+}
+
+/** «sábado, 21 de noviembre»: el día de hoy en la sede, para el encabezado de los tableros. */
+export function todayHeading(now: Date = new Date()): string {
+  return now.toLocaleDateString(LOCALE, { weekday: 'long', day: 'numeric', month: 'long', timeZone });
+}
+
+/** Saludo según la hora de la sede: «Buenos días» hasta el mediodía, «Buenas tardes» hasta las 19. */
+export function greetingAt(now: Date = new Date()): string {
+  const hour = Number(
+    new Intl.DateTimeFormat(LOCALE, { hour: 'numeric', hourCycle: 'h23', timeZone })
+      .formatToParts(now)
+      .find((part) => part.type === 'hour')?.value,
+  );
+  if (hour < 12) return 'Buenos días';
+  if (hour < 19) return 'Buenas tardes';
+  return 'Buenas noches';
+}
+
+/** Duración corta de una espera: «3 h», «2 días». Para colas, donde importa el orden de magnitud. */
+export function waitLabel(since: string | Date | null | undefined, now: number = Date.now()): string {
+  const date = asDate(since);
+  if (!date) return '';
+  const elapsed = Math.max(0, now - date.getTime());
+  if (elapsed < HOUR) return `${Math.max(1, Math.floor(elapsed / MINUTE))} min`;
+  if (elapsed < DAY) return `${Math.floor(elapsed / HOUR)} h`;
+  const days = Math.floor(elapsed / DAY);
+  return days === 1 ? '1 día' : `${days} días`;
+}
+
+/** Tiempo de estudio: «45 min», «1 h», «1 h 20 min». Menos de un minuto cuenta como cero. */
+export function studyTime(minutes: number): string {
+  const total = Math.max(0, Math.round(minutes));
+  const hours = Math.floor(total / 60);
+  const rest = total % 60;
+  if (hours === 0) return `${rest} min`;
+  return rest === 0 ? `${hours} h` : `${hours} h ${rest} min`;
+}

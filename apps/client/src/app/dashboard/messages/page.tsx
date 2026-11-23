@@ -21,7 +21,7 @@ export default function MessagesPage() {
   if (inbox.error) return <LoadFailed message={inbox.error} onRetry={inbox.retry} />;
 
   return (
-    <div className="animate-in fade-in duration-500 h-[calc(100dvh-5rem)] lg:h-[calc(100dvh-4rem)] flex flex-col">
+    <div className="animate-in fade-in duration-500 h-[var(--shell-content-h)] flex flex-col">
       <header className="mb-4 sm:mb-6 shrink-0">
         <h1 className="text-xl sm:text-3xl font-bold tracking-tight flex items-center gap-3">
           <MessageSquare className="h-6 w-6 sm:h-8 sm:w-8 text-primary" />

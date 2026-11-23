@@ -40,6 +40,7 @@ function serviceWith(answers: { [key: string]: unknown[] } = {}) {
     $queryRaw: jest.fn(async (parts: TemplateStringsArray) => {
       const sql = sqlOf(parts);
       if (sql.includes('DAYOFWEEK')) return answers.logins ?? [];
+      if (sql.includes('AS inactive')) return answers.inactive ?? [{ inactive: 0n }];
       if (sql.includes('COUNT(DISTINCT e.usuario_guid)')) return [{ withSubmissions: 0n, total: 0n }];
       if (sql.includes('SELECT m.usuario_guid AS userGuid, m.curso_guid')) return answers.enrollments ?? [];
       if (sql.includes('AS submissions')) return answers.submissions ?? [];
@@ -98,6 +99,25 @@ describe('MonitoringService', () => {
     expect(summary.ranges).toEqual([3, 0, 0, 0]);
     expect(summary.students).toBe(3);
     expect(summary.loginsPerDay).toEqual([0, 2, 0, 0, 0, 0, 0]);
+  });
+
+  it('cuenta como inactivo a quien no entra desde hace más de 3 días, como el recordatorio', async () => {
+    const { service, prisma } = serviceWith({ inactive: [{ inactive: 4n }] });
+    const before = Date.now();
+
+    const summary = await service.getSummary(TEACHER, {});
+
+    expect(summary.inactive).toBe(4);
+    expect(summary.inactiveDays).toBe(3);
+    const call = prisma.$queryRaw.mock.calls.find(([parts]) => sqlOf(parts).includes('AS inactive'));
+    const sql = sqlOf(call![0]);
+    // Sólo matrículas en curso de cursos publicados, y nunca haber entrado también cuenta.
+    expect(sql).toContain("c.estado = 'PUBLICADO'");
+    expect(sql).toContain('u.ultimo_acceso IS NULL OR u.ultimo_acceso <');
+    // Los valores de la plantilla llegan detrás del texto: el doble sólo declara el primero.
+    const cutoff = (call as unknown[]).find((value) => value instanceof Date) as Date;
+    expect(before - cutoff.getTime()).toBeGreaterThanOrEqual(3 * 24 * 60 * 60 * 1000 - 1000);
+    expect(before - cutoff.getTime()).toBeLessThan(3 * 24 * 60 * 60 * 1000 + 1000);
   });
 
   it('con un curso elegido el tramo es el avance en ese curso', async () => {

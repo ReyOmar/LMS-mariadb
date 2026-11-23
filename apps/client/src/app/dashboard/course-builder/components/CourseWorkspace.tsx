@@ -16,7 +16,7 @@ import { CourseSettings } from './CourseSettings';
 import { ModuleSettings } from './ModuleSettings';
 import { CourseOutline } from './CourseOutline';
 import { ResourcePreview } from './ResourcePreview';
-import { BUILDER_PATH, newResourceEditorUrl, resourceEditorUrl } from './paths';
+import { ASSIGNMENTS_PATH, BUILDER_PATH, newResourceEditorUrl, resourceEditorUrl } from './paths';
 import { resolveSelection, toggleSelection, type Selection } from './selection';
 
 interface Props {
@@ -30,7 +30,7 @@ export function CourseWorkspace({ courseGuid, initialSelection }: Props) {
   const { role } = useSession();
   const isTeacher = role === 'teacher';
   const leave = useCallback(
-    (destination?: string) => router.push(destination ?? (isTeacher ? '/dashboard' : BUILDER_PATH)),
+    (destination?: string) => router.push(destination ?? (isTeacher ? ASSIGNMENTS_PATH : BUILDER_PATH)),
     [router, isTeacher],
   );
   const workspace = useCourseWorkspace(courseGuid, leave);
@@ -95,7 +95,7 @@ function OpenCourse({ course, workspace, initialSelection, canDelete, leave }: O
   };
 
   return (
-    <div className="animate-in slide-in-from-bottom-4 duration-700 h-[calc(100vh-6rem)] flex flex-col overflow-hidden bg-background">
+    <div className="animate-in slide-in-from-bottom-4 duration-700 h-[calc(var(--shell-content-h)-2rem)] flex flex-col overflow-hidden bg-background">
       <CourseHeader
         course={course}
         canDelete={canDelete}

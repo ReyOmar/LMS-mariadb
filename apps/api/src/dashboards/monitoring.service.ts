@@ -6,6 +6,7 @@ import { CourseAccessService } from '../courses/course-access.service';
 import { roundedMean, percent, progressRange } from '../common/domain/progress';
 import { encodeCursor, rowsPerPage, decodeCursor } from '../common/domain/pagination';
 import { timeZoneOffset } from '../common/domain/time-zone';
+import { INACTIVITY_DAYS } from '../common/domain/inactivity';
 import { JwtPayload } from '../common/interfaces/jwt-payload.interface';
 import { MonitoringFilterDto } from './dto/monitoring-filter.dto';
 import { SYLLABUS_ORDER } from '../courses/syllabus-order';
@@ -29,6 +30,8 @@ interface PageRow {
 
 /** Matrícula en curso: activa y sin terminar. `m` es el alias de `lms_matriculas`. */
 const IN_PROGRESS = Prisma.sql`m.activa = 1 AND m.fecha_finalizacion IS NULL`;
+
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 /**
  * Monitoreo de alumnos del examinador: el seguimiento de la formación **en curso**.
@@ -61,6 +64,10 @@ export class MonitoringService {
       totalSubmissions: 0,
       ranges: [0, 0, 0, 0],
       loginsPerDay: [0, 0, 0, 0, 0, 0, 0],
+      /** Alumnos con formación en curso que llevan más de `inactiveDays` días sin entrar. */
+      inactive: 0,
+      /** El umbral que se aplicó: el del recordatorio automático, para que la pantalla lo nombre. */
+      inactiveDays: INACTIVITY_DAYS,
     };
     if (scope.guids.length === 0) return summary;
 
@@ -87,6 +94,18 @@ export class MonitoringService {
       JOIN lms_recursos r ON r.modulo_guid = mo.guid
       JOIN lms_entregas e ON e.tarea_guid = r.guid AND e.usuario_guid = m.usuario_guid AND e.estado <> 'BORRADOR'
       WHERE ${IN_PROGRESS} AND m.curso_guid IN (${courses}) AND ${students}`;
+    // Inactivos: la misma regla que el recordatorio automático (`MaintenanceService`). Sólo
+    // cuenta un curso publicado: en mantenimiento no hay nada que estudiar.
+    const cutoff = new Date(Date.now() - INACTIVITY_DAYS * DAY_MS);
+    const inactive = await this.prisma.$queryRaw<{ inactive: bigint }[]>`
+      SELECT COUNT(*) AS inactive
+      FROM usuarios u
+      WHERE ${students} AND (u.ultimo_acceso IS NULL OR u.ultimo_acceso < ${cutoff})
+        AND EXISTS (
+          SELECT 1 FROM lms_matriculas m
+          JOIN lms_cursos c ON c.guid = m.curso_guid AND c.estado = 'PUBLICADO'
+          WHERE m.usuario_guid = u.guid AND ${IN_PROGRESS} AND m.curso_guid IN (${courses})
+        )`;
 
     // DAYOFWEEK va de 1 (domingo) a 7; la gráfica, como getDay(), de 0 a 6.
     for (const row of logins) {
@@ -96,6 +115,7 @@ export class MonitoringService {
     summary.ranges = ranges;
     summary.withSubmissions = Number(submissions[0]?.withSubmissions ?? 0);
     summary.totalSubmissions = Number(submissions[0]?.total ?? 0);
+    summary.inactive = Number(inactive[0]?.inactive ?? 0);
     return summary;
   }
 

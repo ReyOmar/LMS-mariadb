@@ -185,7 +185,7 @@ export class AuthController {
 
   // ── Solicitudes de acceso ────────────────────────────────────────────────
 
-  /** Solicitudes por revisar, para el aviso del menú lateral. */
+  /** Solicitudes por revisar, para el aviso de la barra de navegación. */
   @Roles('ADMIN')
   @Get('access-requests/pending-count')
   countPendingRequests(@CurrentUser() user: JwtPayload) {

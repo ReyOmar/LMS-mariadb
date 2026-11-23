@@ -125,7 +125,7 @@ export class AccessRequestsService {
     });
   }
 
-  /** Solicitudes de la sede que esperan revisión, para el aviso del menú lateral. */
+  /** Solicitudes de la sede que esperan revisión, para el aviso de la barra de navegación. */
   async countPending(country: Country) {
     const count = await this.prisma.accessRequest.count({ where: { status: 'PENDING', country } });
     return { count };

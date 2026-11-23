@@ -7,6 +7,7 @@ import {
   formatPoints,
   DEFAULT_PASSING_SCORE,
   averageScore,
+  waitedTooLong,
 } from './grading';
 
 /**
@@ -131,5 +132,19 @@ describe('averageScore', () => {
   it('sin ninguna nota no hay media', () => {
     expect(averageScore([])).toBeNull();
     expect(averageScore([null, null])).toBeNull();
+  });
+});
+
+describe('waitedTooLong', () => {
+  const now = Date.parse('2026-11-21T12:00:00Z');
+
+  it('a las 48 horas el alumno ya sigue sin la nota', () => {
+    expect(waitedTooLong('2026-11-19T12:00:00Z', now)).toBe(true);
+    expect(waitedTooLong('2026-11-19T12:00:01Z', now)).toBe(false);
+  });
+
+  it('sin fecha de entrega no hay espera', () => {
+    expect(waitedTooLong(null, now)).toBe(false);
+    expect(waitedTooLong('no es una fecha', now)).toBe(false);
   });
 });

@@ -153,18 +153,24 @@ describe('StudentsService · tiempo de estudio', () => {
  * alumno tienen que ser los de su sede.
  */
 describe('StudentsService · días con actividad', () => {
-  function activityAt(instants: Date[]) {
+  /** Recursos completados en `instants` y sesiones de estudio del visor en `sessions`. */
+  function activityAt(instants: Date[], sessions: { startedAt: Date; durationSeconds: number }[] = []) {
     const ranges: { gte: Date; lt: Date }[] = [];
+    const inRange = (instant: Date, range: { gte: Date; lt: Date }) => instant >= range.gte && instant < range.lt;
     const prisma = {
       resourceProgress: {
         findMany: async ({ where }: { where: { completedAt: { gte: Date; lt: Date } } }) => {
           ranges.push(where.completedAt);
           return instants
-            .filter((instant) => instant >= where.completedAt.gte && instant < where.completedAt.lt)
+            .filter((instant) => inRange(instant, where.completedAt))
             .map((completedAt) => ({ completedAt }));
         },
       },
       submission: { findMany: async () => [] },
+      studySession: {
+        findMany: async ({ where }: { where: { startedAt: { gte: Date; lt: Date } } }) =>
+          sessions.filter((session) => inRange(session.startedAt, where.startedAt)),
+      },
     };
     return { prisma, ranges };
   }
@@ -185,6 +191,42 @@ describe('StudentsService · días con actividad', () => {
 
     expect(ranges[0].gte.toISOString()).toBe('2026-12-01T06:00:00.000Z');
     expect(ranges[0].lt.toISOString()).toBe('2027-01-01T06:00:00.000Z');
+  });
+
+  it('suma los minutos de estudio de cada día de la sede', async () => {
+    const { prisma } = activityAt(
+      [],
+      [
+        // 3 de marzo: 20 min por la mañana y 25 por la noche (ya día 4 en UTC).
+        { startedAt: new Date('2026-03-03T14:00:00Z'), durationSeconds: 20 * 60 },
+        { startedAt: new Date('2026-03-04T03:10:00Z'), durationSeconds: 25 * 60 },
+        // 5 de marzo: hora y media.
+        { startedAt: new Date('2026-03-05T15:00:00Z'), durationSeconds: 90 * 60 },
+      ],
+    );
+
+    const { minutes } = await createService(prisma).getActiveDays(STUDENT, 2026, 2);
+
+    expect(minutes).toEqual({ 3: 45, 5: 90 });
+  });
+
+  it('un día con estudio cuenta como activo aunque no se completara nada', async () => {
+    const { prisma } = activityAt(
+      [new Date('2026-03-10T15:00:00Z')],
+      [{ startedAt: new Date('2026-03-12T15:00:00Z'), durationSeconds: 15 * 60 }],
+    );
+
+    const { days } = await createService(prisma).getActiveDays(STUDENT, 2026, 2);
+
+    expect(days).toEqual([10, 12]);
+  });
+
+  it('abrir el curso menos de un minuto no es un día de estudio', async () => {
+    const { prisma } = activityAt([], [{ startedAt: new Date('2026-03-12T15:00:00Z'), durationSeconds: 40 }]);
+
+    const result = await createService(prisma).getActiveDays(STUDENT, 2026, 2);
+
+    expect(result).toEqual({ days: [], minutes: {} });
   });
 });
 

@@ -1,19 +1,19 @@
 'use client';
 
 import { useSession } from '@/contexts/SessionContext';
-import { AdminDashboard } from '@/components/features/dashboards/AdminDashboard';
-import { ExaminerDashboard } from '@/components/features/dashboards/ExaminerDashboard';
-import { StudentDashboard } from '@/components/features/dashboards/StudentDashboard';
+import { AdminToday } from '@/components/features/dashboards/admin/AdminToday';
+import { ExaminerToday } from '@/components/features/dashboards/examiner/ExaminerToday';
+import { StudentToday } from '@/components/features/dashboards/student/StudentToday';
 
-/** El panel de inicio es distinto para cada rol. */
+/** «Hoy»: el inicio de cada rol, con lo que le toca hacer y cómo va lo suyo. */
 export default function DashboardPage() {
   const { role } = useSession();
 
   return (
     <>
-      {role === 'admin' && <AdminDashboard />}
-      {role === 'teacher' && <ExaminerDashboard />}
-      {role === 'student' && <StudentDashboard />}
+      {role === 'admin' && <AdminToday />}
+      {role === 'teacher' && <ExaminerToday />}
+      {role === 'student' && <StudentToday />}
     </>
   );
 }

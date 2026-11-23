@@ -603,6 +603,8 @@ model Certificate {
   // Comprobar si un archivo sigue en uso antes de borrarlo (`FileOwnershipService`): los
   // certificados crecen con los años, como las entregas.
   @@index([pdfKey])
+  // «Actividad reciente» del panel de la sede: los últimos emitidos, sin recorrer los de años.
+  @@index([country, createdAt])
   @@map("lms_certificados")
 }
 

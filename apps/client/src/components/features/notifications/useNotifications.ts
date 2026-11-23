@@ -9,11 +9,8 @@ import type { Notification } from '@/types/models';
 /** Cuántos avisos se piden y se conservan en el panel. */
 const MAX_NOTIFICATIONS = 25;
 
-/**
- * Los avisos de la persona y cuántos le quedan por leer, al día con lo que llega en tiempo real.
- * `onUnreadChange` recibe el recuento para señalarlo donde la campana no se ve.
- */
-export function useNotifications(onUnreadChange: (unread: number) => void) {
+/** Los avisos de la persona y cuántos le quedan por leer, al día con lo que llega en tiempo real. */
+export function useNotifications() {
   const { user } = useSession();
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [unread, setUnread] = useState(0);
@@ -40,8 +37,6 @@ export function useNotifications(onUnreadChange: (unread: number) => void) {
   useEffect(() => {
     void loadNotifications();
   }, [loadNotifications]);
-
-  useEffect(() => onUnreadChange(unread), [unread, onUnreadChange]);
 
   // Un aviso nuevo se añade en el momento, sin volver a pedir la lista entera.
   useRealtimeEvent('notification:new', (data) => {

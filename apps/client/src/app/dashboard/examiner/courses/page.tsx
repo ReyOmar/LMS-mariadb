@@ -12,7 +12,8 @@ import { CourseCatalog } from '@/components/features/CourseCatalog';
 import api, { errorMessage } from '@/lib/api';
 import type { Course } from '@/types/models';
 
-export function ExaminerDashboard() {
+/** Mis asignaciones: los cursos que el examinador supervisa; cada uno se abre en el constructor. */
+export default function ExaminerCoursesPage() {
   const { notify } = useAlerts();
   const { user } = useSession();
   const router = useRouter();

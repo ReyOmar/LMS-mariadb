@@ -17,9 +17,10 @@ import type { CourseOption } from './components/Infractions';
 const INFRACTION_EVENTS: readonly RealtimeEvent[] = ['integration:changed', 'course:updated', 'course:deleted'];
 const COURSE_EVENTS: readonly RealtimeEvent[] = ['course:created', 'course:updated', 'course:deleted'];
 /** Los sistemas conectados cambian aquí, al usarlos y cuando sus avisos empiezan o dejan de fallar. */
-const CLIENT_EVENTS: readonly RealtimeEvent[] = ['integration:changed'];
+export const INTEGRATION_CLIENT_EVENTS: readonly RealtimeEvent[] = ['integration:changed'];
 
-async function fetchClients(): Promise<IntegrationClient[]> {
+/** Los sistemas conectados a la sede. También los usa el tablero «Hoy» de la administración. */
+export async function fetchIntegrationClients(): Promise<IntegrationClient[]> {
   return (await api.get<IntegrationClient[]>('/integration/clients')).data;
 }
 
@@ -41,7 +42,11 @@ async function fetchCourses(): Promise<CourseOption[]> {
  */
 export function useIntegrations() {
   const { showAlert, showConfirmation, notify } = useAlerts();
-  const clients = useLiveData(fetchClients, 'No se pudieron cargar los sistemas conectados.', CLIENT_EVENTS);
+  const clients = useLiveData(
+    fetchIntegrationClients,
+    'No se pudieron cargar los sistemas conectados.',
+    INTEGRATION_CLIENT_EVENTS,
+  );
   const infractions = useLiveData(fetchInfractions, 'No se pudieron cargar las infracciones.', INFRACTION_EVENTS);
   const courses = useLiveData(fetchCourses, 'No se pudieron cargar los cursos de la sede.', COURSE_EVENTS);
   const busy = useInFlight<string>();

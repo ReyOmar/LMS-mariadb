@@ -32,6 +32,19 @@ export function dayInTimeZone(instant: Date, timeZone: string): string {
   }
 }
 
+/** Primer instante del mes indicado (0–11; 12 es enero del año siguiente) en la zona de la sede. */
+export function monthStart(year: number, month: number, timeZone: string): Date {
+  const firstDay = new Date(Date.UTC(year, month, 1));
+  const date = firstDay.toISOString().slice(0, 10);
+  return new Date(`${date}T00:00:00${timeZoneOffset(timeZone, firstDay)}`);
+}
+
+/** Primer instante del mes en curso de la sede: el 1 a medianoche, en su hora. */
+export function currentMonthStart(timeZone: string, now = new Date()): Date {
+  const [year, month] = dayInTimeZone(now, timeZone).split('-').map(Number);
+  return monthStart(year, month - 1, timeZone);
+}
+
 function serverOffset(instant: Date): string {
   const minutes = -instant.getTimezoneOffset();
   const sign = minutes < 0 ? '-' : '+';

@@ -8,8 +8,3 @@ export function averageLabel(average: number | null): string {
     ? `Por encima del umbral de ${DEFAULT_PASSING_SCORE} puntos`
     : `Por debajo del umbral de ${DEFAULT_PASSING_SCORE} puntos`;
 }
-
-export function averageTone(average: number | null): 'neutral' | 'success' | 'warning' {
-  if (average === null) return 'neutral';
-  return average >= DEFAULT_PASSING_SCORE ? 'success' : 'warning';
-}

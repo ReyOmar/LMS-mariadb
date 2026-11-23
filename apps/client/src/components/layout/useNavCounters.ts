@@ -6,11 +6,11 @@ import { useRealtimeEvent } from '@/contexts/RealtimeContext';
 import type { Role } from '@/contexts/SessionContext';
 
 /**
- * Los contadores del menú: las solicitudes de acceso por revisar, que sólo ve la administración,
+ * Los contadores de la navegación: las solicitudes de acceso por revisar, que sólo ve la administración,
  * y los mensajes sin leer. Un contador que no carga no debe interrumpir la navegación: los fallos
  * se ignoran y se deja el valor anterior.
  */
-export function useSidebarCounters(role: Role, pathname: string) {
+export function useNavCounters(role: Role, pathname: string) {
   const [pendingRequests, setPendingRequests] = useState(0);
   const [unreadMessages, setUnreadMessages] = useState(0);
 
@@ -54,4 +54,4 @@ export function useSidebarCounters(role: Role, pathname: string) {
   return { requests: pendingRequests, messages: unreadMessages };
 }
 
-export type SidebarCounters = ReturnType<typeof useSidebarCounters>;
+export type NavCounters = ReturnType<typeof useNavCounters>;

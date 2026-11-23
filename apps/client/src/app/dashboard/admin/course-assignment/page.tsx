@@ -53,7 +53,7 @@ export default function CourseAssignmentPage() {
         </p>
       </header>
 
-      <div className="flex flex-col lg:flex-row gap-6 min-h-[calc(100vh-14rem)] lg:h-[calc(100vh-14rem)]">
+      <div className="flex flex-col lg:flex-row gap-6 min-h-[calc(var(--shell-content-h)-10rem)] lg:h-[calc(var(--shell-content-h)-10rem)]">
         <CourseDirectory
           courses={directory.courses}
           selectedGuid={selectedGuid}

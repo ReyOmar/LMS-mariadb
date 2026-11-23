@@ -55,19 +55,19 @@ const COLOR_BY_TYPE: Partial<Record<NotificationType, string>> = {
   ENROLLMENT_WAITING: 'text-amber-500 bg-amber-500/10',
 };
 
-/** `onUnreadChange` avisa del recuento para señalarlo donde la campana no se ve, como el menú del móvil. */
-export function NotificationCenter({ onUnreadChange }: { onUnreadChange: (unread: number) => void }) {
+export function NotificationCenter() {
   const { notify } = useAlerts();
   const router = useRouter();
-  const { notifications, unread, loading, markAllRead, clearAll: deleteAll } = useNotifications(onUnreadChange);
+  const { notifications, unread, loading, markAllRead, clearAll: deleteAll } = useNotifications();
   const [open, setOpen] = useState(false);
   /**
    * Avisos que estaban sin leer al abrir el panel. Abrirlo los marca leídos, pero siguen
    * resaltados hasta cerrarlo: si no, el resaltado desaparecería antes de poder verlo.
    */
   const [highlighted, setHighlighted] = useState<ReadonlySet<number>>(() => new Set());
-  // Dónde está la campana al abrir: en pantallas anchas el panel se despliega bajo ella.
-  const [anchor, setAnchor] = useState({ top: 0, left: 0 });
+  // Dónde está la campana al abrir: en pantallas anchas el panel se despliega bajo ella, alineado
+  // a su borde derecho (la campana va al final de la barra superior).
+  const [anchor, setAnchor] = useState({ top: 0, right: 0 });
   const panelContainer = useRef<HTMLDivElement>(null);
   const { dialogProps, titleId } = useDialog({ open, onClose: () => setOpen(false) });
   const panel = dialogProps.ref;
@@ -95,7 +95,7 @@ export function NotificationCenter({ onUnreadChange }: { onUnreadChange: (unread
     if (closeTimer.current) clearTimeout(closeTimer.current);
     const opening = !open;
     const bell = panelContainer.current?.getBoundingClientRect();
-    if (opening && bell) setAnchor({ top: bell.top, left: bell.left });
+    if (opening && bell) setAnchor({ top: bell.bottom, right: document.documentElement.clientWidth - bell.right });
     if (opening) setHighlighted(new Set(notifications.filter((item) => !item.read).map((item) => item.id)));
     setOpen(opening);
     if (opening && unread > 0) markAllRead();
@@ -129,22 +129,25 @@ export function NotificationCenter({ onUnreadChange }: { onUnreadChange: (unread
       <button
         type="button"
         onClick={togglePanel}
-        className="relative tap-target inline-flex items-center justify-center p-2.5 rounded-xl bg-card border border-border hover:bg-muted transition-all shadow-sm group"
-        aria-label={unread > 0 ? `Notificaciones (${unread} sin leer)` : 'Notificaciones'}
+        className="relative tap-target inline-flex items-center justify-center p-2 rounded-full border border-border/40 shadow-sm hover:bg-muted/30 transition-colors group"
+        aria-label={unread > 0 ? `Notificaciones: ${unread} sin leer` : 'Notificaciones'}
         aria-expanded={open}
       >
         <Bell
-          className={`h-5 w-5 transition-colors ${open ? 'text-primary' : 'text-muted-foreground group-hover:text-foreground'}`}
+          className={`h-4 w-4 transition-colors ${open ? 'text-primary' : 'text-muted-foreground group-hover:text-foreground'}`}
         />
         {unread > 0 && (
-          <span className="absolute -top-1.5 -right-1.5 h-5 min-w-[20px] px-1 bg-red-600 text-white text-[10px] font-bold rounded-full flex items-center justify-center ring-2 ring-background animate-in zoom-in-50 duration-200">
+          <span
+            aria-hidden="true"
+            className="absolute -top-1.5 -right-1.5 h-5 min-w-[20px] px-1 bg-red-600 text-white text-[10px] font-bold rounded-full flex items-center justify-center ring-2 ring-background animate-in zoom-in-50 duration-200"
+          >
             {unread > 99 ? '99+' : unread}
           </span>
         )}
       </button>
 
-      {/* Panel de avisos. Va directamente en el `body`: dentro del menú lateral, que se desplaza
-          con `transform`, el `fixed` quedaría encerrado en él y no cubriría la pantalla del móvil. */}
+      {/* Panel de avisos. Va directamente en el `body`: dentro de la barra superior, que usa
+          `backdrop-filter`, el `fixed` quedaría encerrado en ella y no cubriría la pantalla del móvil. */}
       {open &&
         createPortal(
           <NotificationPanel
@@ -179,7 +182,7 @@ function NotificationPanel({
 }: {
   dialogProps: DialogProps;
   titleId: string;
-  anchor: { top: number; left: number };
+  anchor: { top: number; right: number };
   notifications: Notification[];
   loading: boolean;
   newCount: number;
@@ -191,8 +194,8 @@ function NotificationPanel({
   return (
     <div
       {...dialogProps}
-      style={{ '--panel-top': `${anchor.top}px`, '--panel-left': `${anchor.left}px` } as CSSProperties}
-      className="fixed inset-x-0 top-0 bottom-0 sm:inset-auto sm:top-[calc(var(--panel-top)_+_3.5rem)] sm:left-[var(--panel-left)] sm:w-[380px] sm:max-h-[520px] sm:rounded-2xl bg-card border border-border sm:shadow-[0_10px_40px_-10px_rgba(0,0,0,0.3)] z-[99999] overflow-hidden animate-in slide-in-from-top-2 fade-in duration-200 flex flex-col"
+      style={{ '--panel-top': `${anchor.top}px`, '--panel-right': `${anchor.right}px` } as CSSProperties}
+      className="fixed inset-x-0 top-0 bottom-0 sm:inset-auto sm:top-[calc(var(--panel-top)_+_0.75rem)] sm:right-[var(--panel-right)] sm:w-[380px] sm:max-h-[520px] sm:rounded-2xl bg-card border border-border sm:shadow-[0_10px_40px_-10px_rgba(0,0,0,0.3)] z-[99999] overflow-hidden animate-in slide-in-from-top-2 fade-in duration-200 flex flex-col"
     >
       {/* Cabecera */}
       <div className="flex items-center justify-between p-4 border-b border-border bg-gradient-to-r from-card to-muted/30">

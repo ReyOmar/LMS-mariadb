@@ -1,5 +1,5 @@
-import { Fragment, type CSSProperties, type ReactNode } from 'react';
-import { GraduationCap, type LucideIcon } from 'lucide-react';
+import type { CSSProperties, ReactNode } from 'react';
+import { Bell, ChevronDown, GraduationCap } from 'lucide-react';
 
 /**
  * Piezas comunes de la vitrina: dibujos de la interfaz del campus con datos de ejemplo. Su
@@ -42,54 +42,115 @@ export function Phone({
   );
 }
 
-/** Menú lateral del campus, con la sede y los apartados de cada papel. */
-export function AppSidebar({
+/**
+ * Barra superior del campus: la marca, las pestañas del papel —la abierta, en píldora oscura— y, a la
+ * derecha, la sede, los avisos y la cuenta. Es la misma barra que lleva el campus.
+ */
+export function AppTopBar({
   platformName,
   site,
-  groups,
-  user,
+  tabs,
+  more = false,
+  initials,
 }: {
   platformName: string;
   /** La sede, con su bandera. */
   site: ReactNode;
-  groups: { title: string; links: { icon: LucideIcon; label: string; current?: boolean; count?: number }[] }[];
-  user?: { initials: string; name: string; role: string };
+  tabs: { label: string; current?: boolean; count?: number }[];
+  /** Si el papel tiene el menú «Más» con el resto de secciones. */
+  more?: boolean;
+  initials: string;
 }) {
   return (
-    <aside className="app-side">
+    <div className="app-top">
       <p className="app-brand">
         <span className="tile">
           <GraduationCap className="i" />
         </span>
         <span>{platformName}</span>
       </p>
-      <div className="app-sede">
-        <span className="app-label">Sede</span>
-        <span className="app-pill">{site}</span>
-      </div>
-      {groups.map((group) => (
-        <Fragment key={group.title}>
-          <p className="app-label">{group.title}</p>
-          <div className="app-nav">
-            {group.links.map((link) => (
-              <span key={link.label} className={link.current ? 'on' : undefined}>
-                <link.icon className="i" />
-                {link.label}
-                {link.count !== undefined && <em className="count">{link.count}</em>}
-              </span>
-            ))}
-          </div>
-        </Fragment>
+      <p className="app-tabs">
+        {tabs.map((tab) => (
+          <span key={tab.label} className={tab.current ? 'on' : undefined}>
+            {tab.label}
+            {tab.count !== undefined && <em className="count">{tab.count}</em>}
+          </span>
+        ))}
+        {more && (
+          <span>
+            Más
+            <ChevronDown className="i" />
+          </span>
+        )}
+      </p>
+      <span className="app-pill">{site}</span>
+      <span className="app-icon">
+        <Bell className="i" />
+      </span>
+      <span className="avatar">{initials}</span>
+    </div>
+  );
+}
+
+/** Encabezado de «Hoy»: la fecha (o la sede), el saludo y una frase con lo importante. */
+export function TodayHello({ eyebrow, title, lead }: { eyebrow: string; title: string; lead: ReactNode }) {
+  return (
+    <div className="today-hello">
+      <small>{eyebrow}</small>
+      <b>{title}</b>
+      <p>{lead}</p>
+    </div>
+  );
+}
+
+/** Título de una sección de la agenda, con su dato a la derecha. */
+export function AgendaHead({ title, aside }: { title: string; aside: string }) {
+  return (
+    <p className="ag-head">
+      <b>{title}</b>
+      <small>{aside}</small>
+    </p>
+  );
+}
+
+/** Un paso de la agenda: lo que lo sitúa, el punto de su estado, el qué y lo que se puede hacer. */
+export function AgendaRow({
+  marker,
+  state = 'idle',
+  title,
+  detail,
+  action,
+}: {
+  marker: string;
+  state?: 'now' | 'idle' | 'locked';
+  title: string;
+  detail: ReactNode;
+  action?: ReactNode;
+}) {
+  return (
+    <li className={`ag-row ${state}`}>
+      <span className="ag-when">{marker}</span>
+      <span className="ag-dot" />
+      <span className="ag-what">
+        <b>{title}</b>
+        <small>{detail}</small>
+      </span>
+      {action ?? <span />}
+    </li>
+  );
+}
+
+/** Intensidad de cada día de «Tu semana» (0 sin estudio, 3 el que más) y cuál es hoy. */
+export function StudyWeek({ levels, today }: { levels: number[]; today: number }) {
+  const days = ['Lu', 'Ma', 'Mi', 'Ju', 'Vi', 'Sá', 'Do'];
+  return (
+    <ol className="week7">
+      {days.map((day, index) => (
+        <li key={day} className={`l${levels[index] ?? 0}${index === today ? ' is-today' : ''}`}>
+          <i />
+          {day}
+        </li>
       ))}
-      {user && (
-        <div className="app-user">
-          <span className="avatar">{user.initials}</span>
-          <div>
-            <b>{user.name}</b>
-            <small>{user.role}</small>
-          </div>
-        </div>
-      )}
-    </aside>
+    </ol>
   );
 }

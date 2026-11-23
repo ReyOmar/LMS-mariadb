@@ -1,39 +1,26 @@
 'use client';
 
-import api, { errorMessage } from '@/lib/api';
-import { formatNumber } from '@/lib/country';
-import { useAlerts } from '@/contexts/AlertContext';
-import { useCountry } from '@/contexts/CountryContext';
 import type { QuizAttempt } from '../../types';
+import { useReleaseAttempt } from '../../hooks/useReleaseAttempt';
 import { getAttemptScore, withoutAttempt, type StudentAttempts, type StudentWithAttempts } from './results';
 
 type UpdateItems = (change: (rows: StudentAttempts[]) => StudentAttempts[]) => void;
 
-/** «Habilitar otro intento»: el servidor libera uno retirando el último, y la confirmación dice qué nota se pierde. */
+/** «Habilitar otro intento» en la lista del curso: al liberarlo, el intento retirado sale de lo cargado. */
 export function useAttemptRelease(updateItems: UpdateItems, onReleased: () => void) {
-  const { notify, showAlert, showConfirmation } = useAlerts();
-  const { country } = useCountry();
+  const release = useReleaseAttempt();
 
   return async ({ student }: StudentWithAttempts, attempt: QuizAttempt) => {
     if (!attempt.assignmentGuid || !student) return;
 
-    const score = getAttemptScore(attempt);
-    const lostGrade = score !== null ? ` (nota ${formatNumber(score, country)})` : '';
-    const confirmed = await showConfirmation(
-      `¿Habilitar otro intento a ${student.firstName}?`,
-      `Para liberarle un intento se borra el último que hizo${lostGrade}. Recibirá un aviso para volver a presentarlo.`,
-      'Habilitar intento',
-      'warning',
-    );
-    if (!confirmed) return;
+    const released = await release({
+      resourceGuid: attempt.assignmentGuid,
+      student,
+      score: getAttemptScore(attempt),
+    });
+    if (!released) return;
 
-    try {
-      await api.post(`/assessments/quiz/${attempt.assignmentGuid}/students/${student.guid}/new-attempt`);
-      notify.success('Intento habilitado', `${student.firstName} ya puede volver a presentar el cuestionario.`);
-      updateItems((rows) => withoutAttempt(rows, attempt.guid));
-      onReleased();
-    } catch (error) {
-      showAlert.error('No se pudo habilitar el intento', errorMessage(error));
-    }
+    updateItems((rows) => withoutAttempt(rows, attempt.guid));
+    onReleased();
   };
 }

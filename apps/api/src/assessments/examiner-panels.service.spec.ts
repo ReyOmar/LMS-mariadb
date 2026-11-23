@@ -1,6 +1,7 @@
 import { encodeCursor, MAX_PER_PAGE } from '../common/domain/pagination';
 import { sessionFor } from '../common/testing/test-campus';
 import { ExaminerPanelsService } from './examiner-panels.service';
+import { serializeQuizConfig } from '../courses/quiz-config';
 
 /**
  * La cola de corrección del examinador.
@@ -557,5 +558,93 @@ describe('historial de intentos de cuestionario', () => {
     expect(failed.rawQueries[0].sql).toContain('MIN(q.best) <');
     expect(passed.rawQueries[0].sql).toContain('MIN(q.best) >=');
     expect(failed.rawQueries[0].values).toContain(80);
+  });
+});
+
+/**
+ * Alumnos bloqueados en un cuestionario, para «Hoy» del examinador.
+ *
+ * Tienen que ser exactamente los que acepta «Habilitar otro intento»: si la lista mostrara a
+ * alguien a quien la API luego no deja liberar, el botón fallaría delante del examinador.
+ */
+describe('alumnos bloqueados por intentos', () => {
+  /** Cuestionario guardado como en la base, con `allowed` intentos (0 = ilimitados). */
+  const quizWith = (allowed: number) =>
+    serializeQuizConfig({
+      allowedAttempts: allowed,
+      timeLimitMinutes: 0,
+      questions: [
+        {
+          id: 'p1',
+          prompt: '¿Sí?',
+          options: [
+            { id: 'a', text: 'Sí', isCorrect: true },
+            { id: 'b', text: 'No', isCorrect: false },
+          ],
+        },
+      ],
+    });
+
+  const row = (overrides: Record<string, unknown> = {}) => ({
+    studentGuid: 'alumna-1',
+    firstName: 'Ana',
+    lastName: 'Díaz',
+    resourceGuid: 'quiz-1',
+    quizTitle: 'Evaluación final',
+    quizConfig: quizWith(2),
+    courseGuid: COURSE,
+    courseTitle: 'Manejo defensivo',
+    used: 2n,
+    lastAttemptAt: new Date('2026-03-01T10:00:00Z'),
+    lastScore: '40.00',
+    ...overrides,
+  });
+
+  it('lista a quien gastó todos sus intentos, con el último resultado', async () => {
+    const { service } = recordingService(0, [row()]);
+
+    const [blocked] = await service.listBlockedStudents(EXAMINER);
+
+    expect(blocked).toEqual({
+      student: { guid: 'alumna-1', firstName: 'Ana', lastName: 'Díaz' },
+      resourceGuid: 'quiz-1',
+      quizTitle: 'Evaluación final',
+      courseGuid: COURSE,
+      courseTitle: 'Manejo defensivo',
+      attempts: 2,
+      allowedAttempts: 2,
+      lastAttemptAt: new Date('2026-03-01T10:00:00Z'),
+      lastScore: 40,
+    });
+  });
+
+  it('no lista a quien aún tiene intentos ni los cuestionarios de intentos ilimitados', async () => {
+    const { service } = recordingService(0, [
+      row({ studentGuid: 'con-intentos', used: 1n }),
+      row({ studentGuid: 'ilimitado', quizConfig: quizWith(0), used: 9n }),
+    ]);
+
+    expect(await service.listBlockedStudents(EXAMINER)).toEqual([]);
+  });
+
+  it('sólo cuenta vueltas abiertas, sin el cuestionario superado y sin borradores', async () => {
+    const { service, rawQueries } = recordingService(0, []);
+    await service.listBlockedStudents(EXAMINER);
+
+    const { sql } = rawQueries[0];
+    expect(sql).toContain('m.activa = 1 AND m.fecha_finalizacion IS NULL');
+    expect(sql).toContain('p.id IS NULL');
+    expect(sql).toContain("e.estado <> 'BORRADOR'");
+    // Primero quien lleva más tiempo esperando.
+    expect(sql).toContain('ORDER BY lastAttemptAt ASC');
+  });
+
+  it('un examinador sólo ve sus cursos y nunca los de otra sede', async () => {
+    const { service, rawQueries } = recordingService(0, []);
+    await service.listBlockedStudents(EXAMINER);
+
+    expect(rawQueries[0].values).toContain('COLOMBIA');
+    expect(rawQueries[0].values).toContain(EXAMINER.sub);
+    expect(rawQueries[0].sql).toContain('c.profesor_guid = ?');
   });
 });

@@ -8,7 +8,7 @@ import { AFTER_LOCK, ClosedRoundMessages, assertRoundOpen, lockEnrollment } from
 import { AWAITING_GRADE, waitedTooLong } from '../courses/progression';
 import { averageOfScores } from '../common/domain/grading';
 import { percent } from '../common/domain/progress';
-import { dayInTimeZone, timeZoneOffset } from '../common/domain/time-zone';
+import { dayInTimeZone, monthStart } from '../common/domain/time-zone';
 import { JwtPayload } from '../common/interfaces/jwt-payload.interface';
 import { emitEvent } from '../common/domain/domain-events';
 
@@ -27,13 +27,6 @@ const PROGRESS_CLOSED: ClosedRoundMessages = {
   unenrolled: UNENROLLED_MESSAGE,
   certified: 'Ya terminaste este curso: tu avance quedó cerrado con tu certificado.',
 };
-
-/** Primer instante del mes indicado (0–11; 12 es enero del año siguiente) en la zona de la sede. */
-function monthStart(year: number, month: number, timeZone: string): Date {
-  const firstDay = new Date(Date.UTC(year, month, 1));
-  const date = firstDay.toISOString().slice(0, 10);
-  return new Date(`${date}T00:00:00${timeZoneOffset(timeZone, firstDay)}`);
-}
 
 /**
  * Progreso, métricas y tiempo de estudio del alumno.
@@ -224,16 +217,22 @@ export class StudentsService {
   }
 
   /**
-   * Días del mes con actividad registrada, para el calendario del panel del alumno.
+   * Días del mes con actividad y minutos de estudio de cada día, para «Tu semana» del alumno.
    * El mes y los días son los de la sede, no los del servidor: una entrega a las 22:00 en
    * Bogotá es de ese día aunque en UTC ya sea el siguiente.
+   *
+   * Un día es activo si se completó un recurso, se entregó una tarea o se estudió al menos un
+   * minuto en el visor: quien lee sin terminar nada también estudió. Los minutos salen de las
+   * sesiones del visor (`recordHeartbeat`) y se apuntan al día en que empezó cada sesión.
+   *
+   * @returns `days`, los días activos en orden, y `minutes`, los minutos de cada día con estudio.
    */
   async getActiveDays(user: JwtPayload, year: number, month: number) {
     const { timeZone } = await this.settings.getSettings(user.country);
     const start = monthStart(year, month, timeZone);
     const end = monthStart(year, month + 1, timeZone);
 
-    const [progress, submissions] = await Promise.all([
+    const [progress, submissions, sessions] = await Promise.all([
       this.prisma.resourceProgress.findMany({
         where: { userGuid: user.sub, completedAt: { gte: start, lt: end } },
         select: { completedAt: true },
@@ -242,15 +241,32 @@ export class StudentsService {
         where: { userGuid: user.sub, submittedAt: { gte: start, lt: end } },
         select: { submittedAt: true },
       }),
+      this.prisma.studySession.findMany({
+        where: { userGuid: user.sub, startedAt: { gte: start, lt: end }, durationSeconds: { gt: 0 } },
+        select: { startedAt: true, durationSeconds: true },
+      }),
     ]);
+
+    const dayOf = (instant: Date) => Number(dayInTimeZone(instant, timeZone).slice(8, 10));
+
+    const secondsByDay = new Map<number, number>();
+    for (const session of sessions) {
+      const day = dayOf(session.startedAt);
+      secondsByDay.set(day, (secondsByDay.get(day) ?? 0) + session.durationSeconds);
+    }
+    // Menos de un minuto no es estudio: es abrir el curso y salir.
+    const minutes: Record<number, number> = {};
+    for (const [day, seconds] of secondsByDay) {
+      if (seconds >= 60) minutes[day] = Math.round(seconds / 60);
+    }
 
     const instants = [
       ...progress.map((row) => row.completedAt),
       ...submissions.flatMap((row) => (row.submittedAt ? [row.submittedAt] : [])),
     ];
-    const days = new Set(instants.map((instant) => Number(dayInTimeZone(instant, timeZone).slice(8, 10))));
+    const days = new Set([...instants.map(dayOf), ...Object.keys(minutes).map(Number)]);
 
-    return { days: [...days].sort((a, b) => a - b) };
+    return { days: [...days].sort((a, b) => a - b), minutes };
   }
 
   // ── Tiempo de estudio ────────────────────────────────────────────────────

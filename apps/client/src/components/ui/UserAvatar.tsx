@@ -18,12 +18,20 @@ interface Person {
   photoUrl?: string | null;
 }
 
-/** La foto de la persona o, si no tiene o no carga, sus iniciales. Ocupa todo su contenedor. */
-export function PhotoOrInitials({ person }: { person: Person }) {
+/**
+ * La foto de la persona o, si no tiene o no carga, sus iniciales. Ocupa todo su contenedor.
+ *
+ * Con `drawn`, las iniciales se pintan con CSS en lugar de ir como texto: dentro de un botón con
+ * nombre propio (la cuenta), así no pasan por rótulo visible que ese nombre debería repetir.
+ */
+export function PhotoOrInitials({ person, drawn = false }: { person: Person; drawn?: boolean }) {
   const photo = fileUrlFor(person.photoUrl);
   const [brokenPhoto, setBrokenPhoto] = useState<string | null>(null);
 
-  if (!photo || brokenPhoto === photo) return <>{initials(person.firstName, person.lastName)}</>;
+  if (!photo || brokenPhoto === photo) {
+    const text = initials(person.firstName, person.lastName);
+    return drawn ? <span data-initials={text} className="before:content-[attr(data-initials)]" /> : <>{text}</>;
+  }
   return <img src={photo} alt="" className="h-full w-full object-cover" onError={() => setBrokenPhoto(photo)} />;
 }
 
