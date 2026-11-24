@@ -190,7 +190,6 @@ export function Showcase({ progress, active, platformName, country, reached, foc
           <CertificateView platformName={platformName} siteName={siteName} city={story.city} />
         </div>
       </div>
-      <p className="stage-note">Vista de ejemplo</p>
     </div>
   );
 }

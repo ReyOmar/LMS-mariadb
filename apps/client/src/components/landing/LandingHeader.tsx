@@ -2,12 +2,20 @@
 
 import { useEffect, useState } from 'react';
 import { CountryIndicator } from '@/components/features/CountryIndicator';
+import { ThemeToggle } from '@/components/ui/ThemeToggle';
+import { useMediaQuery } from '@/hooks/useMediaQuery';
 import { BrandMark } from './BrandMark';
 import { SCREENS, type ScreenId } from './screens';
 import { WindowLink } from './WindowLink';
 
 /** Desplazamiento a partir del cual la cabecera deja de ser transparente. */
 const SOLID_AFTER_PX = 40;
+
+/**
+ * Teléfonos estrechos: con el nombre de la sede no caben también el tema y «Ingresar», así que
+ * la sede se queda en su bandera. Su nombre sigue en la etiqueta del botón y en la portada.
+ */
+const NARROW_HEADER = '(max-width: 369.98px)';
 
 function useScrolledPast(offset: number): boolean {
   const [scrolled, setScrolled] = useState(false);
@@ -23,7 +31,7 @@ function useScrolledPast(offset: number): boolean {
   return scrolled;
 }
 
-/** La cabecera fija: la marca, las pantallas (desde 1100 px), la sede y el acceso. */
+/** La cabecera fija: la marca, las pantallas (desde 1100 px), la sede, el tema y el acceso. */
 export function LandingHeader({
   logoUrl,
   platformName,
@@ -36,6 +44,7 @@ export function LandingHeader({
   onSignIn: () => void;
 }) {
   const solid = useScrolledPast(SOLID_AFTER_PX);
+  const narrow = useMediaQuery(NARROW_HEADER);
 
   return (
     <header className={`site-header ${solid ? 'is-solid' : ''}`}>
@@ -52,7 +61,8 @@ export function LandingHeader({
           ))}
         </nav>
         <div className="header-actions">
-          <CountryIndicator />
+          <CountryIndicator compact={narrow} />
+          <ThemeToggle />
           <WindowLink href="/login" onOpen={onSignIn} className="btn btn-primary btn-sm">
             Ingresar
           </WindowLink>

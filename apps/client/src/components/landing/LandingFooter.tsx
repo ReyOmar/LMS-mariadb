@@ -1,5 +1,4 @@
 import { Shield } from 'lucide-react';
-import { ThemeToggle } from '@/components/ui/ThemeToggle';
 import { PRIVACY_TITLE } from '@/lib/legal';
 import type { Country } from '@/lib/country';
 import type { LegalSectionId } from '@/components/legal/LegalDocument';
@@ -80,7 +79,6 @@ export function LandingFooter({
           <Shield className="i" />
           Comprometidos con la seguridad vial
         </span>
-        <ThemeToggle />
       </div>
     </footer>
   );
